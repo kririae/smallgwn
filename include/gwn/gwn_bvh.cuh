@@ -64,14 +64,19 @@ struct gwn_bvh_accessor {
     }
 
     if (root_kind == gwn_bvh_child_kind::k_internal) {
-      return !nodes.empty() && root_index >= 0 &&
+      return !nodes.empty() && gwn_span_has_storage(nodes) && root_index >= 0 &&
              static_cast<std::size_t>(root_index) < nodes.size();
     }
 
     if (root_kind == gwn_bvh_child_kind::k_leaf) {
-      return root_index >= 0 && root_count >= 0 &&
-             (static_cast<std::size_t>(root_index + root_count) <=
-              primitive_indices.size());
+      if (!gwn_span_has_storage(primitive_indices) || root_index < 0 ||
+          root_count < 0) {
+        return false;
+      }
+      const std::size_t begin = static_cast<std::size_t>(root_index);
+      const std::size_t count = static_cast<std::size_t>(root_count);
+      return begin <= primitive_indices.size() &&
+             count <= (primitive_indices.size() - begin);
     }
 
     return false;
@@ -84,7 +89,11 @@ template <class T>
 void gwn_release_bvh_span(cuda::std::span<const T>& span_view,
                           const cudaStream_t stream) noexcept {
   if (span_view.data() != nullptr) {
-    (void)gwn_cuda_free(const_cast<T*>(span_view.data()), stream);
+    const gwn_status status =
+        gwn_cuda_free(const_cast<T*>(span_view.data()), stream);
+    if (!status.is_ok()) {
+      GWN_HANDLE_STATUS_FAIL(status);
+    }
     span_view = {};
   }
 }

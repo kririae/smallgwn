@@ -8,6 +8,7 @@
 
 #include <Eigen/Core>
 
+#include <exception>
 #include <vector>
 
 namespace gwn {
@@ -20,7 +21,7 @@ gwn_status gwn_upload_from_eigen(
     gwn_geometry_object<Real, Index>& object,
     const Eigen::MatrixBase<DerivedV>& vertices,
     const Eigen::MatrixBase<DerivedF>& triangles,
-    const cudaStream_t stream = gwn_default_stream()) {
+    const cudaStream_t stream = gwn_default_stream()) noexcept try {
   if (vertices.cols() != 3 || triangles.cols() != 3) {
     return gwn_status::invalid_argument(
         "Eigen inputs must be Nx3 vertices and Mx3 triangles.");
@@ -58,6 +59,12 @@ gwn_status gwn_upload_from_eigen(
                        cuda::std::span<const Index>(i1.data(), i1.size()),
                        cuda::std::span<const Index>(i2.data(), i2.size()),
                        stream);
+} catch (const std::exception&) {
+  return gwn_status::internal_error(
+      "Unhandled std::exception in gwn_upload_from_eigen.");
+} catch (...) {
+  return gwn_status::internal_error(
+      "Unhandled unknown exception in gwn_upload_from_eigen.");
 }
 
 }  // namespace gwn

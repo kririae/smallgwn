@@ -35,7 +35,10 @@ struct gwn_geometry_accessor {
   __host__ __device__ constexpr bool is_valid() const noexcept {
     return vertex_x.size() == vertex_y.size() &&
            vertex_x.size() == vertex_z.size() &&
-           tri_i0.size() == tri_i1.size() && tri_i0.size() == tri_i2.size();
+           tri_i0.size() == tri_i1.size() && tri_i0.size() == tri_i2.size() &&
+           gwn_span_has_storage(vertex_x) && gwn_span_has_storage(vertex_y) &&
+           gwn_span_has_storage(vertex_z) && gwn_span_has_storage(tri_i0) &&
+           gwn_span_has_storage(tri_i1) && gwn_span_has_storage(tri_i2);
   }
 };
 
@@ -69,7 +72,6 @@ gwn_status gwn_upload_span(cuda::std::span<const T>& dst,
   GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
       cudaMemcpyAsync(device_ptr, src.data(), src.size_bytes(),
                       cudaMemcpyHostToDevice, stream)));
-  GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaStreamSynchronize(stream)));
 
   dst = cuda::std::span<const T>(static_cast<const T*>(device_ptr), src.size());
   cleanup_device_ptr.release();
@@ -114,7 +116,6 @@ gwn_status gwn_copy_device_to_span(cuda::std::span<const T>& dst,
   GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
       cudaMemcpyAsync(gwn_mutable_data(dst), src, count * sizeof(T),
                       cudaMemcpyDeviceToDevice, stream)));
-  GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaStreamSynchronize(stream)));
 
   cleanup_dst.release();
   return gwn_status::ok();
@@ -124,7 +125,11 @@ template <class T>
 void gwn_release_span(cuda::std::span<const T>& span_view,
                       const cudaStream_t stream) noexcept {
   if (span_view.data() != nullptr) {
-    (void)gwn_cuda_free(gwn_mutable_data(span_view), stream);
+    const gwn_status status =
+        gwn_cuda_free(gwn_mutable_data(span_view), stream);
+    if (!status.is_ok()) {
+      GWN_HANDLE_STATUS_FAIL(status);
+    }
     span_view = {};
   }
 }

@@ -17,6 +17,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <vector>
 
 namespace gwn {
@@ -254,7 +255,7 @@ template <class Real, class Index>
 gwn_status gwn_build_bvh4_lbvh(
     const gwn_geometry_accessor<Real, Index>& geometry,
     gwn_bvh_accessor<Real, Index>& bvh,
-    cudaStream_t stream = gwn_default_stream()) noexcept {
+    cudaStream_t stream = gwn_default_stream()) noexcept try {
   if (!geometry.is_valid()) {
     return gwn_status::invalid_argument(
         "Geometry accessor is invalid for BVH construction.");
@@ -456,12 +457,16 @@ gwn_status gwn_build_bvh4_lbvh(
         stream));
   }
 
-  GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaStreamSynchronize(stream)));
-
   staging_bvh.root_kind = gwn_bvh_child_kind::k_internal;
   staging_bvh.root_index = 0;
   staging_bvh.root_count = 0;
   return commit_staging_bvh();
+} catch (const std::exception&) {
+  return gwn_status::internal_error(
+      "Unhandled std::exception in gwn_build_bvh4_lbvh.");
+} catch (...) {
+  return gwn_status::internal_error(
+      "Unhandled unknown exception in gwn_build_bvh4_lbvh.");
 }
 
 }  // namespace gwn

@@ -21,6 +21,12 @@ These instructions apply to the `smallgwn/` project tree.
 - Use SoA layout for geometry (`x/y/z`, `i0/i1/i2`).
 - Prefer TBB for trivially parallel CPU-side batch work.
 
+## Error Handling Rules
+- Prefer internal C++ exceptions only inside implementation details; public APIs should return `gwn_status` error codes.
+- For executable boundaries, prefer a single top-level exception translation block:
+  - `int main() try { ... } catch (...) { ... }`
+- Use a dedicated `catch` block to translate exceptions to status/diagnostics, rather than scattered local catches.
+
 ## Validation
 - Configure/build: `cmake -S smallgwn -B smallgwn/build && cmake --build smallgwn/build -j`
 - Run tests: `ctest --test-dir smallgwn/build --output-on-failure`

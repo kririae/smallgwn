@@ -284,6 +284,11 @@ gwn_status gwn_compute_winding_number_batch(
     return gwn_status::invalid_argument(
         "Output span size must match query count.");
   }
+  if (!gwn_span_has_storage(query_x) || !gwn_span_has_storage(query_y) ||
+      !gwn_span_has_storage(query_z) || !gwn_span_has_storage(output)) {
+    return gwn_status::invalid_argument(
+        "Query/output spans must use non-null storage when non-empty.");
+  }
 
   if (output.empty()) {
     return gwn_status::ok();
@@ -320,6 +325,11 @@ gwn_status gwn_compute_winding_number_batch_bvh_exact(
   if (query_x.size() != output.size()) {
     return gwn_status::invalid_argument(
         "Output span size must match query count.");
+  }
+  if (!gwn_span_has_storage(query_x) || !gwn_span_has_storage(query_y) ||
+      !gwn_span_has_storage(query_z) || !gwn_span_has_storage(output)) {
+    return gwn_status::invalid_argument(
+        "Query/output spans must use non-null storage when non-empty.");
   }
   if (output.empty()) {
     return gwn_status::ok();
