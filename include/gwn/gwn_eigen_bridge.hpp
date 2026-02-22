@@ -9,7 +9,10 @@
 #include <Eigen/Core>
 
 #include <exception>
-#include <vector>
+#include <memory>
+
+#include <tbb/blocked_range.h>
+#include <tbb/parallel_for.h>
 
 namespace gwn {
 
@@ -34,30 +37,48 @@ gwn_status gwn_upload_from_eigen(
         "Eigen inputs cannot have negative sizes.");
   }
 
-  std::vector<Real> x(static_cast<std::size_t>(vertex_count));
-  std::vector<Real> y(static_cast<std::size_t>(vertex_count));
-  std::vector<Real> z(static_cast<std::size_t>(vertex_count));
-  for (Eigen::Index i = 0; i < vertex_count; ++i) {
-    x[static_cast<std::size_t>(i)] = static_cast<Real>(vertices(i, 0));
-    y[static_cast<std::size_t>(i)] = static_cast<Real>(vertices(i, 1));
-    z[static_cast<std::size_t>(i)] = static_cast<Real>(vertices(i, 2));
+  const std::size_t vertex_count_u = static_cast<std::size_t>(vertex_count);
+  const std::size_t triangle_count_u = static_cast<std::size_t>(triangle_count);
+
+  auto x = std::make_unique_for_overwrite<Real[]>(vertex_count_u);
+  auto y = std::make_unique_for_overwrite<Real[]>(vertex_count_u);
+  auto z = std::make_unique_for_overwrite<Real[]>(vertex_count_u);
+  if (vertex_count > 0) {
+    tbb::parallel_for(
+        tbb::blocked_range<Eigen::Index>(0, vertex_count),
+        [&](const tbb::blocked_range<Eigen::Index>& range) {
+          for (Eigen::Index i = range.begin(); i < range.end(); ++i) {
+            x[static_cast<std::size_t>(i)] = static_cast<Real>(vertices(i, 0));
+            y[static_cast<std::size_t>(i)] = static_cast<Real>(vertices(i, 1));
+            z[static_cast<std::size_t>(i)] = static_cast<Real>(vertices(i, 2));
+          }
+        });
   }
 
-  std::vector<Index> i0(static_cast<std::size_t>(triangle_count));
-  std::vector<Index> i1(static_cast<std::size_t>(triangle_count));
-  std::vector<Index> i2(static_cast<std::size_t>(triangle_count));
-  for (Eigen::Index i = 0; i < triangle_count; ++i) {
-    i0[static_cast<std::size_t>(i)] = static_cast<Index>(triangles(i, 0));
-    i1[static_cast<std::size_t>(i)] = static_cast<Index>(triangles(i, 1));
-    i2[static_cast<std::size_t>(i)] = static_cast<Index>(triangles(i, 2));
+  auto i0 = std::make_unique_for_overwrite<Index[]>(triangle_count_u);
+  auto i1 = std::make_unique_for_overwrite<Index[]>(triangle_count_u);
+  auto i2 = std::make_unique_for_overwrite<Index[]>(triangle_count_u);
+  if (triangle_count > 0) {
+    tbb::parallel_for(tbb::blocked_range<Eigen::Index>(0, triangle_count),
+                      [&](const tbb::blocked_range<Eigen::Index>& range) {
+                        for (Eigen::Index i = range.begin(); i < range.end();
+                             ++i) {
+                          i0[static_cast<std::size_t>(i)] =
+                              static_cast<Index>(triangles(i, 0));
+                          i1[static_cast<std::size_t>(i)] =
+                              static_cast<Index>(triangles(i, 1));
+                          i2[static_cast<std::size_t>(i)] =
+                              static_cast<Index>(triangles(i, 2));
+                        }
+                      });
   }
 
-  return object.upload(cuda::std::span<const Real>(x.data(), x.size()),
-                       cuda::std::span<const Real>(y.data(), y.size()),
-                       cuda::std::span<const Real>(z.data(), z.size()),
-                       cuda::std::span<const Index>(i0.data(), i0.size()),
-                       cuda::std::span<const Index>(i1.data(), i1.size()),
-                       cuda::std::span<const Index>(i2.data(), i2.size()),
+  return object.upload(cuda::std::span<const Real>(x.get(), vertex_count_u),
+                       cuda::std::span<const Real>(y.get(), vertex_count_u),
+                       cuda::std::span<const Real>(z.get(), vertex_count_u),
+                       cuda::std::span<const Index>(i0.get(), triangle_count_u),
+                       cuda::std::span<const Index>(i1.get(), triangle_count_u),
+                       cuda::std::span<const Index>(i2.get(), triangle_count_u),
                        stream);
 } catch (const std::exception&) {
   return gwn_status::internal_error(

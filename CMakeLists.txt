@@ -15,6 +15,7 @@ endif()
 
 find_package(CUDAToolkit REQUIRED)
 find_package(Eigen3 REQUIRED)
+find_package(TBB REQUIRED)
 
 add_library(smallgwn INTERFACE)
 add_library(gwn::smallgwn ALIAS smallgwn)
@@ -26,14 +27,13 @@ target_include_directories(smallgwn
 )
 
 target_compile_features(smallgwn INTERFACE cxx_std_20)
-target_link_libraries(smallgwn INTERFACE CUDA::cudart Eigen3::Eigen)
+target_link_libraries(smallgwn INTERFACE CUDA::cudart Eigen3::Eigen TBB::tbb)
 target_compile_options(smallgwn INTERFACE "$<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>")
 
 option(SMALLGWN_BUILD_TESTS "Build smallgwn tests" ON)
 if(SMALLGWN_BUILD_TESTS)
     include(CTest)
     enable_testing()
-    find_package(TBB REQUIRED)
 
     add_executable(smallgwn_smoke_compile tests/smoke_compile.cu)
     target_link_libraries(smallgwn_smoke_compile PRIVATE gwn::smallgwn)
@@ -52,6 +52,15 @@ if(SMALLGWN_BUILD_TESTS)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/reference_hdk"
         )
         add_test(NAME smallgwn_parity_scaffold COMMAND smallgwn_parity_scaffold)
+
+        add_executable(smallgwn_bvh_model_parity
+            tests/bvh_model_parity.cu
+        )
+        target_link_libraries(smallgwn_bvh_model_parity PRIVATE gwn::smallgwn GTest::gtest GTest::gtest_main TBB::tbb)
+        target_include_directories(smallgwn_bvh_model_parity PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests"
+        )
+        add_test(NAME smallgwn_bvh_model_parity COMMAND smallgwn_bvh_model_parity)
     else()
         message(STATUS "GTest not found; parity scaffold target is skipped.")
     endif()
