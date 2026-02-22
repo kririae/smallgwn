@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdint>
 #include <span>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -17,6 +18,14 @@ bool is_cuda_runtime_unavailable(const cudaError_t result) {
   return result == cudaErrorNoDevice || result == cudaErrorInsufficientDriver ||
          result == cudaErrorOperatingSystem ||
          result == cudaErrorSystemNotReady;
+}
+
+bool is_cuda_runtime_unavailable_message(const std::string_view message) {
+  return message.find("cudaErrorNoDevice") != std::string_view::npos ||
+         message.find("cudaErrorInsufficientDriver") !=
+             std::string_view::npos ||
+         message.find("cudaErrorOperatingSystem") != std::string_view::npos ||
+         message.find("cudaErrorSystemNotReady") != std::string_view::npos;
 }
 
 }  // namespace
@@ -117,7 +126,7 @@ TEST(smallgwn_parity_scaffold, bvh_exact_batch_matches_cpu_reference) {
       cuda::std::span<const std::int64_t>(tri_i2.data(), tri_i2.size()));
   if (!upload_status.is_ok() &&
       upload_status.error() == gwn::gwn_error::cuda_runtime_error &&
-      is_cuda_runtime_unavailable(upload_status.cuda_error())) {
+      is_cuda_runtime_unavailable_message(upload_status.message())) {
     GTEST_SKIP() << "CUDA runtime unavailable: " << upload_status.message();
   }
   ASSERT_TRUE(upload_status.is_ok()) << upload_status.message();

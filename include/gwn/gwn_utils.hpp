@@ -4,12 +4,10 @@
 #include <cuda/std/span>
 
 #include <cstddef>
-#include <cstdint>
+#include <format>
 #include <source_location>
-#include <sstream>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <type_traits>
 #include <utility>
 
@@ -50,85 +48,60 @@ enum class gwn_error {
 };
 
 /// \brief Error-code object used by public APIs.
-/// \remark Message storage is non-owning; pass stable-lifetime text.
-/// \remark `detail_code` is backend-agnostic; CUDA errors encode `cudaError_t`.
+/// \remark Message storage is owned by `std::string`.
 class gwn_status {
  public:
-  constexpr gwn_status() noexcept = default;
+  gwn_status() noexcept = default;
 
-  [[nodiscard]] static constexpr gwn_status ok() noexcept {
-    return gwn_status();
+  [[nodiscard]] static gwn_status ok() noexcept { return gwn_status(); }
+
+  [[nodiscard]] static gwn_status invalid_argument(
+      std::string message) noexcept {
+    return gwn_status(gwn_error::invalid_argument, std::move(message));
   }
 
-  [[nodiscard]] static constexpr gwn_status invalid_argument(
-      const std::string_view message) noexcept {
-    return gwn_status(gwn_error::invalid_argument, message);
+  [[nodiscard]] static gwn_status internal_error(
+      std::string message = "Internal error.") noexcept {
+    return gwn_status(gwn_error::internal_error, std::move(message));
   }
 
-  [[nodiscard]] static constexpr gwn_status internal_error(
-      const std::string_view message = "Internal error.") noexcept {
-    return gwn_status(gwn_error::internal_error, message);
-  }
-
-  [[nodiscard]] static constexpr gwn_status cuda_runtime_error(
+  [[nodiscard]] static gwn_status cuda_runtime_error(
       const cudaError_t cuda_result,
       const std::source_location loc = std::source_location::current(),
-      const std::string_view message = "CUDA API call failed.") noexcept {
-    return gwn_status(gwn_error::cuda_runtime_error, message,
-                      static_cast<std::int64_t>(static_cast<int>(cuda_result)),
-                      loc, true);
+      std::string message = "CUDA API call failed.") noexcept {
+    const char* const error_name = cudaGetErrorName(cuda_result);
+    const char* const error_message = cudaGetErrorString(cuda_result);
+    message += std::format(
+        " [cuda_error={} ({}): \"{}\"]", static_cast<int>(cuda_result),
+        error_name != nullptr ? error_name : "unknown",
+        error_message != nullptr ? error_message : "unknown");
+    return gwn_status(gwn_error::cuda_runtime_error, std::move(message), loc);
   }
 
-  [[nodiscard]] constexpr bool is_ok() const noexcept {
+  [[nodiscard]] bool is_ok() const noexcept {
     return error_ == gwn_error::success;
   }
-  [[nodiscard]] constexpr gwn_error error() const noexcept { return error_; }
-  [[nodiscard]] constexpr bool has_detail_code() const noexcept {
-    return has_detail_code_;
-  }
-  [[nodiscard]] constexpr std::int64_t detail_code() const noexcept {
-    return detail_code_;
-  }
-  [[nodiscard]] constexpr std::source_location location() const noexcept {
+  [[nodiscard]] gwn_error error() const noexcept { return error_; }
+  [[nodiscard]] std::source_location location() const noexcept {
     return location_;
   }
-  [[nodiscard]] constexpr bool has_location() const noexcept {
+  [[nodiscard]] bool has_location() const noexcept {
     return location_.line() != 0;
   }
-  [[nodiscard]] constexpr bool is_cuda_runtime_error() const noexcept {
-    return error_ == gwn_error::cuda_runtime_error && has_detail_code_;
-  }
-  [[nodiscard]] constexpr cudaError_t cuda_error() const noexcept {
-    if (!is_cuda_runtime_error()) {
-      return cudaSuccess;
-    }
-    return static_cast<cudaError_t>(static_cast<int>(detail_code_));
-  }
-  [[nodiscard]] constexpr std::string_view message() const noexcept {
-    return message_;
-  }
+  [[nodiscard]] const std::string& message() const noexcept { return message_; }
 
  private:
-  constexpr gwn_status(const gwn_error error_code,
-                       const std::string_view message) noexcept
-      : error_(error_code), message_(message) {}
+  gwn_status(const gwn_error error_code, std::string message) noexcept
+      : error_(error_code), message_(std::move(message)) {}
 
-  constexpr gwn_status(const gwn_error error_code,
-                       const std::string_view message,
-                       const std::int64_t detail_code,
-                       const std::source_location loc,
-                       const bool has_detail_code) noexcept
-      : error_(error_code),
-        detail_code_(detail_code),
-        has_detail_code_(has_detail_code),
-        location_(loc),
-        message_(message) {}
+  gwn_status(const gwn_error error_code,
+             std::string message,
+             const std::source_location loc) noexcept
+      : error_(error_code), location_(loc), message_(std::move(message)) {}
 
   gwn_error error_ = gwn_error::success;
-  std::int64_t detail_code_ = 0;
-  bool has_detail_code_ = false;
   std::source_location location_{};
-  std::string_view message_{};
+  std::string message_{};
 };
 
 /// \brief Scope guard used for deterministic cleanup in status-based code.
@@ -203,21 +176,12 @@ inline void gwn_throw_if_error(const gwn_status& status) {
     return;
   }
 
-  std::ostringstream out;
-  out << status.message();
-  if (status.is_cuda_runtime_error()) {
-    const cudaError_t result = status.cuda_error();
-    out << " [cuda_error=" << static_cast<int>(result) << " ("
-        << cudaGetErrorName(result) << "): \"" << cudaGetErrorString(result)
-        << "\"]";
-  } else if (status.has_detail_code()) {
-    out << " [detail_code=" << status.detail_code() << "]";
-  }
+  std::string out = status.message();
   if (status.has_location()) {
     const std::source_location loc = status.location();
-    out << " at " << loc.file_name() << ":" << loc.line();
+    out += std::format(" at {}:{}", loc.file_name(), loc.line());
   }
-  throw std::runtime_error(out.str());
+  throw std::runtime_error(out);
 }
 
 /// \brief Convert CUDA runtime result to `gwn_status`.

@@ -36,27 +36,24 @@ struct HostMesh {
   std::vector<Index> tri_i2;
 };
 
-[[nodiscard]] bool is_cuda_runtime_unavailable(
-    const cudaError_t result) noexcept {
-  return result == cudaErrorNoDevice || result == cudaErrorInsufficientDriver ||
-         result == cudaErrorInitializationError ||
-         result == cudaErrorSystemDriverMismatch ||
-         result == cudaErrorOperatingSystem ||
-         result == cudaErrorSystemNotReady || result == cudaErrorNotSupported;
+[[nodiscard]] bool is_cuda_runtime_unavailable_message(
+    const std::string_view message) noexcept {
+  return message.find("cudaErrorNoDevice") != std::string_view::npos ||
+         message.find("cudaErrorInsufficientDriver") !=
+             std::string_view::npos ||
+         message.find("cudaErrorInitializationError") !=
+             std::string_view::npos ||
+         message.find("cudaErrorSystemDriverMismatch") !=
+             std::string_view::npos ||
+         message.find("cudaErrorOperatingSystem") != std::string_view::npos ||
+         message.find("cudaErrorSystemNotReady") != std::string_view::npos ||
+         message.find("cudaErrorNotSupported") != std::string_view::npos;
 }
 
 [[nodiscard]] std::string status_to_debug_string(
     const gwn::gwn_status& status) {
   std::ostringstream out;
   out << status.message();
-  if (status.has_detail_code()) {
-    out << " [detail_code=" << status.detail_code() << "]";
-  }
-  if (status.is_cuda_runtime_error()) {
-    const cudaError_t error = status.cuda_error();
-    out << " [cuda_name=" << cudaGetErrorName(error) << ", cuda_message=\""
-        << cudaGetErrorString(error) << "\"]";
-  }
   if (status.has_location()) {
     const std::source_location loc = status.location();
     out << " at " << loc.file_name() << ":" << loc.line();
@@ -375,8 +372,9 @@ TEST(smallgwn_bvh_models, bvh_exact_batch_matches_cpu_on_common_models) {
         cuda::std::span<const Index>(mesh.tri_i0.data(), mesh.tri_i0.size()),
         cuda::std::span<const Index>(mesh.tri_i1.data(), mesh.tri_i1.size()),
         cuda::std::span<const Index>(mesh.tri_i2.data(), mesh.tri_i2.size()));
-    if (!upload_status.is_ok() && upload_status.is_cuda_runtime_error() &&
-        is_cuda_runtime_unavailable(upload_status.cuda_error())) {
+    if (!upload_status.is_ok() &&
+        upload_status.error() == gwn::gwn_error::cuda_runtime_error &&
+        is_cuda_runtime_unavailable_message(upload_status.message())) {
       GTEST_SKIP() << "CUDA runtime unavailable: " << upload_status.message();
     }
     ASSERT_TRUE(upload_status.is_ok()) << status_to_debug_string(upload_status);
