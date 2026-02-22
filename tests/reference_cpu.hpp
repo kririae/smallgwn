@@ -6,15 +6,15 @@
 #error "reference_cpu.hpp requires Eigen/Core and Eigen/Geometry in the include path."
 #endif
 
-#include <tbb/blocked_range.h>
-#include <tbb/parallel_for.h>
-
-#include <Eigen/Core>
-#include <Eigen/Geometry>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <span>
+
+#include <Eigen/Core>
+#include <Eigen/Geometry>
+#include <tbb/blocked_range.h>
+#include <tbb/parallel_for.h>
 
 namespace gwn::tests {
 
@@ -22,9 +22,7 @@ template <class Real> using reference_vec3 = Eigen::Matrix<Real, 3, 1>;
 
 template <class Real>
 inline Real reference_signed_solid_angle_triangle(
-    reference_vec3<Real> const &a,
-    reference_vec3<Real> const &b,
-    reference_vec3<Real> const &c,
+    reference_vec3<Real> const &a, reference_vec3<Real> const &b, reference_vec3<Real> const &c,
     reference_vec3<Real> const &q
 ) noexcept {
     reference_vec3<Real> qa = a - q;
@@ -51,15 +49,9 @@ inline Real reference_signed_solid_angle_triangle(
 
 template <class Real, class Index = std::int64_t>
 inline Real reference_winding_number_point(
-    std::span<Real const> vertex_x,
-    std::span<Real const> vertex_y,
-    std::span<Real const> vertex_z,
-    std::span<Index const> tri_i0,
-    std::span<Index const> tri_i1,
-    std::span<Index const> tri_i2,
-    Real const qx,
-    Real const qy,
-    Real const qz
+    std::span<Real const> vertex_x, std::span<Real const> vertex_y, std::span<Real const> vertex_z,
+    std::span<Index const> tri_i0, std::span<Index const> tri_i1, std::span<Index const> tri_i2,
+    Real const qx, Real const qy, Real const qz
 ) noexcept {
     constexpr Real k_pi = Real(3.141592653589793238462643383279502884L);
     reference_vec3<Real> const query(qx, qy, qz);
@@ -90,15 +82,9 @@ inline Real reference_winding_number_point(
 
 template <class Real, class Index = std::int64_t>
 inline gwn_status reference_winding_number_batch(
-    std::span<Real const> vertex_x,
-    std::span<Real const> vertex_y,
-    std::span<Real const> vertex_z,
-    std::span<Index const> tri_i0,
-    std::span<Index const> tri_i1,
-    std::span<Index const> tri_i2,
-    std::span<Real const> query_x,
-    std::span<Real const> query_y,
-    std::span<Real const> query_z,
+    std::span<Real const> vertex_x, std::span<Real const> vertex_y, std::span<Real const> vertex_z,
+    std::span<Index const> tri_i0, std::span<Index const> tri_i1, std::span<Index const> tri_i2,
+    std::span<Real const> query_x, std::span<Real const> query_y, std::span<Real const> query_z,
     std::span<Real> output
 ) {
     if (vertex_x.size() != vertex_y.size() || vertex_x.size() != vertex_z.size())
@@ -115,15 +101,8 @@ inline gwn_status reference_winding_number_batch(
         [&](tbb::blocked_range<std::size_t> const &range) {
         for (std::size_t query_id = range.begin(); query_id < range.end(); ++query_id) {
             output[query_id] = reference_winding_number_point<Real, Index>(
-                vertex_x,
-                vertex_y,
-                vertex_z,
-                tri_i0,
-                tri_i1,
-                tri_i2,
-                query_x[query_id],
-                query_y[query_id],
-                query_z[query_id]
+                vertex_x, vertex_y, vertex_z, tri_i0, tri_i1, tri_i2, query_x[query_id],
+                query_y[query_id], query_z[query_id]
             );
         }
     }

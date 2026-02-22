@@ -1,9 +1,9 @@
 #pragma once
 
+#include <cuda/std/span>
 #include <cuda_runtime_api.h>
 
 #include <cstddef>
-#include <cuda/std/span>
 #include <format>
 #include <source_location>
 #include <stdexcept>
@@ -72,8 +72,7 @@ public:
         char const *const error_name = cudaGetErrorName(cuda_result);
         char const *const error_message = cudaGetErrorString(cuda_result);
         message += std::format(
-            " [cuda_error={} ({}): \"{}\"]",
-            static_cast<int>(cuda_result),
+            " [cuda_error={} ({}): \"{}\"]", static_cast<int>(cuda_result),
             error_name != nullptr ? error_name : "unknown",
             error_message != nullptr ? error_message : "unknown"
         );

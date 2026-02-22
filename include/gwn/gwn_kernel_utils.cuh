@@ -61,8 +61,7 @@ __global__ __launch_bounds__(BlockSize) void gwn_linear_kernel(
 
 template <int BlockSize, gwn_linear_index_functor Functor>
 gwn_status gwn_launch_linear_kernel(
-    std::size_t const element_count,
-    Functor const &functor,
+    std::size_t const element_count, Functor const &functor,
     cudaStream_t const stream = gwn_default_stream()
 ) noexcept {
     if (element_count == 0)

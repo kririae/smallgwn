@@ -1,8 +1,9 @@
 #pragma once
 
+#include <cuda/std/span>
+
 #include <cstddef>
 #include <cstdint>
-#include <cuda/std/span>
 #include <utility>
 
 #include "gwn_utils.hpp"

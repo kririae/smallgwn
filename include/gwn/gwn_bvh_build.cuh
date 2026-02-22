@@ -1,12 +1,6 @@
 #pragma once
 
 #include <cuda_runtime_api.h>
-#include <thrust/device_ptr.h>
-#include <thrust/device_vector.h>
-#include <thrust/execution_policy.h>
-#include <thrust/extrema.h>
-#include <thrust/memory.h>
-#include <thrust/sort.h>
 
 #include <algorithm>
 #include <array>
@@ -14,6 +8,13 @@
 #include <cstdint>
 #include <exception>
 #include <vector>
+
+#include <thrust/device_ptr.h>
+#include <thrust/device_vector.h>
+#include <thrust/execution_policy.h>
+#include <thrust/extrema.h>
+#include <thrust/memory.h>
+#include <thrust/sort.h>
 
 #include "gwn_bvh.cuh"
 #include "gwn_geometry.cuh"
@@ -60,14 +61,9 @@ gwn_encode_morton_30(Real const nx, Real const ny, Real const nz) noexcept {
 template <class Real>
 __host__ __device__ inline gwn_aabb<Real>
 gwn_aabb_union(gwn_aabb<Real> const &left, gwn_aabb<Real> const &right) noexcept {
-    return gwn_aabb<Real>{
-        std::min(left.min_x, right.min_x),
-        std::min(left.min_y, right.min_y),
-        std::min(left.min_z, right.min_z),
-        std::max(left.max_x, right.max_x),
-        std::max(left.max_y, right.max_y),
-        std::max(left.max_z, right.max_z)
-    };
+    return gwn_aabb<Real>{std::min(left.min_x, right.min_x), std::min(left.min_y, right.min_y),
+                          std::min(left.min_z, right.min_z), std::max(left.max_x, right.max_x),
+                          std::max(left.max_y, right.max_y), std::max(left.max_z, right.max_z)};
 }
 
 template <class Real, class Index> struct gwn_compute_triangle_aabbs_and_morton_functor {
@@ -113,12 +109,9 @@ template <class Real, class Index> struct gwn_compute_triangle_aabbs_and_morton_
         Real const cz = geometry.vertex_z[c];
 
         gwn_aabb<Real> const bounds{
-            std::min(ax, std::min(bx, cx)),
-            std::min(ay, std::min(by, cy)),
-            std::min(az, std::min(bz, cz)),
-            std::max(ax, std::max(bx, cx)),
-            std::max(ay, std::max(by, cy)),
-            std::max(az, std::max(bz, cz)),
+            std::min(ax, std::min(bx, cx)), std::min(ay, std::min(by, cy)),
+            std::min(az, std::min(bz, cz)), std::max(ax, std::max(bx, cx)),
+            std::max(ay, std::max(by, cy)), std::max(az, std::max(bz, cz)),
         };
         primitive_aabbs[triangle_id] = bounds;
 
@@ -126,8 +119,7 @@ template <class Real, class Index> struct gwn_compute_triangle_aabbs_and_morton_
         Real const center_y = (bounds.min_y + bounds.max_y) * Real(0.5);
         Real const center_z = (bounds.min_z + bounds.max_z) * Real(0.5);
         morton_codes[triangle_id] = gwn_encode_morton_30(
-            (center_x - scene_min_x) * scene_inv_x,
-            (center_y - scene_min_y) * scene_inv_y,
+            (center_x - scene_min_x) * scene_inv_x, (center_y - scene_min_y) * scene_inv_y,
             (center_z - scene_min_z) * scene_inv_z
         );
     }
@@ -246,8 +238,7 @@ template <class Real, class Index> struct gwn_patch_child_indices_functor {
 
 template <class Real, class Index>
 gwn_status gwn_build_bvh4_lbvh(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh_accessor<Real, Index> &bvh,
+    gwn_geometry_accessor<Real, Index> const &geometry, gwn_bvh_accessor<Real, Index> &bvh,
     cudaStream_t stream = gwn_default_stream()
 ) noexcept try {
     if (!geometry.is_valid())
@@ -289,45 +280,27 @@ gwn_status gwn_build_bvh4_lbvh(
     Real scene_min_z = Real(0);
     Real scene_max_z = Real(0);
     GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemcpyAsync(
-        &scene_min_x,
-        thrust::raw_pointer_cast(x_pair.first),
-        sizeof(Real),
-        cudaMemcpyDeviceToHost,
+        &scene_min_x, thrust::raw_pointer_cast(x_pair.first), sizeof(Real), cudaMemcpyDeviceToHost,
         stream
     )));
     GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemcpyAsync(
-        &scene_max_x,
-        thrust::raw_pointer_cast(x_pair.second),
-        sizeof(Real),
-        cudaMemcpyDeviceToHost,
+        &scene_max_x, thrust::raw_pointer_cast(x_pair.second), sizeof(Real), cudaMemcpyDeviceToHost,
         stream
     )));
     GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemcpyAsync(
-        &scene_min_y,
-        thrust::raw_pointer_cast(y_pair.first),
-        sizeof(Real),
-        cudaMemcpyDeviceToHost,
+        &scene_min_y, thrust::raw_pointer_cast(y_pair.first), sizeof(Real), cudaMemcpyDeviceToHost,
         stream
     )));
     GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemcpyAsync(
-        &scene_max_y,
-        thrust::raw_pointer_cast(y_pair.second),
-        sizeof(Real),
-        cudaMemcpyDeviceToHost,
+        &scene_max_y, thrust::raw_pointer_cast(y_pair.second), sizeof(Real), cudaMemcpyDeviceToHost,
         stream
     )));
     GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemcpyAsync(
-        &scene_min_z,
-        thrust::raw_pointer_cast(z_pair.first),
-        sizeof(Real),
-        cudaMemcpyDeviceToHost,
+        &scene_min_z, thrust::raw_pointer_cast(z_pair.first), sizeof(Real), cudaMemcpyDeviceToHost,
         stream
     )));
     GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemcpyAsync(
-        &scene_max_z,
-        thrust::raw_pointer_cast(z_pair.second),
-        sizeof(Real),
-        cudaMemcpyDeviceToHost,
+        &scene_max_z, thrust::raw_pointer_cast(z_pair.second), sizeof(Real), cudaMemcpyDeviceToHost,
         stream
     )));
     GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaStreamSynchronize(stream)));
@@ -355,16 +328,8 @@ gwn_status gwn_build_bvh4_lbvh(
         detail::gwn_launch_linear_kernel<k_block_size>(
             primitive_count,
             detail::gwn_compute_triangle_aabbs_and_morton_functor<Real, Index>{
-                geometry,
-                scene_min_x,
-                scene_min_y,
-                scene_min_z,
-                scene_inv_x,
-                scene_inv_y,
-                scene_inv_z,
-                primitive_aabbs_span,
-                morton_codes_span,
-                sorted_primitive_indices_span
+                geometry, scene_min_x, scene_min_y, scene_min_z, scene_inv_x, scene_inv_y,
+                scene_inv_z, primitive_aabbs_span, morton_codes_span, sorted_primitive_indices_span
             },
             stream
         )
@@ -390,9 +355,7 @@ gwn_status gwn_build_bvh4_lbvh(
 
     GWN_RETURN_ON_ERROR(
         detail::gwn_copy_device_to_span(
-            staging_bvh.primitive_indices,
-            sorted_primitive_indices_span.data(),
-            primitive_count,
+            staging_bvh.primitive_indices, sorted_primitive_indices_span.data(), primitive_count,
             stream
         )
     );
@@ -435,9 +398,7 @@ gwn_status gwn_build_bvh4_lbvh(
             detail::gwn_launch_linear_kernel<k_block_size>(
                 parent_count,
                 detail::gwn_build_bvh4_parent_level_functor<Real, Index>{
-                    current_entries_const_span,
-                    current_count,
-                    parent_entries_span,
+                    current_entries_const_span, current_count, parent_entries_span,
                     parent_nodes_span
                 },
                 stream
@@ -479,8 +440,7 @@ gwn_status gwn_build_bvh4_lbvh(
             final_nodes + level_offsets[level],
             thrust::raw_pointer_cast(levels_bottom[bottom_index].data()),
             level_node_counts[level] * sizeof(gwn_bvh4_node_soa<Real, Index>),
-            cudaMemcpyDeviceToDevice,
-            stream
+            cudaMemcpyDeviceToDevice, stream
         )));
     }
 

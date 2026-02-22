@@ -1,12 +1,13 @@
-#include <gtest/gtest.h>
-
 #include <array>
 #include <cmath>
 #include <cstdint>
-#include <gwn/gwn.cuh>
 #include <span>
 #include <string_view>
 #include <vector>
+
+#include <gtest/gtest.h>
+
+#include <gwn/gwn.cuh>
 
 #include "reference_cpu.hpp"
 #include "reference_hdk/UT_SolidAngle.h"
@@ -180,8 +181,7 @@ TEST(smallgwn_parity_scaffold, bvh_exact_batch_matches_cpu_reference) {
 
     gwn::gwn_status const bvh_query_status =
         gwn::gwn_compute_winding_number_batch_bvh_exact<float, std::int64_t>(
-            geometry.accessor(),
-            bvh.accessor(),
+            geometry.accessor(), bvh.accessor(),
             cuda::std::span<float const>(d_query_x, query_x.size()),
             cuda::std::span<float const>(d_query_y, query_y.size()),
             cuda::std::span<float const>(d_query_z, query_z.size()),

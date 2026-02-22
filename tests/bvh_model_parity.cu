@@ -1,5 +1,4 @@
 #include <cuda_runtime_api.h>
-#include <gtest/gtest.h>
 
 #include <algorithm>
 #include <array>
@@ -10,13 +9,16 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
-#include <gwn/gwn.cuh>
 #include <limits>
 #include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
+
+#include <gtest/gtest.h>
+
+#include <gwn/gwn.cuh>
 
 #include "reference_cpu.hpp"
 
@@ -187,11 +189,9 @@ std::array<std::vector<Real>, 3> make_query_soa(HostMesh const &mesh) {
         {{center_x, center_y - Real(1.3) * extent_y, center_z}},
         {{center_x, center_y, center_z + Real(1.3) * extent_z}},
         {{center_x, center_y, center_z - Real(1.3) * extent_z}},
-        {{center_x + Real(0.31) * extent_x,
-          center_y - Real(0.27) * extent_y,
+        {{center_x + Real(0.31) * extent_x, center_y - Real(0.27) * extent_y,
           center_z + Real(0.23) * extent_z}},
-        {{center_x - Real(0.19) * extent_x,
-          center_y + Real(0.37) * extent_y,
+        {{center_x - Real(0.19) * extent_x, center_y + Real(0.37) * extent_y,
           center_z - Real(0.29) * extent_z}},
     }};
 
@@ -215,13 +215,10 @@ void assert_bvh_structure(
     std::vector<Index> primitive_indices(primitive_count, Index(0));
     if (primitive_count > 0) {
         ASSERT_EQ(
-            cudaSuccess,
-            cudaMemcpy(
-                primitive_indices.data(),
-                accessor.primitive_indices.data(),
-                primitive_count * sizeof(Index),
-                cudaMemcpyDeviceToHost
-            )
+            cudaSuccess, cudaMemcpy(
+                             primitive_indices.data(), accessor.primitive_indices.data(),
+                             primitive_count * sizeof(Index), cudaMemcpyDeviceToHost
+                         )
         );
     }
 
@@ -252,13 +249,10 @@ void assert_bvh_structure(
 
     std::vector<gwn::gwn_bvh4_node_soa<Real, Index>> nodes(accessor.nodes.size());
     ASSERT_EQ(
-        cudaSuccess,
-        cudaMemcpy(
-            nodes.data(),
-            accessor.nodes.data(),
-            nodes.size() * sizeof(nodes[0]),
-            cudaMemcpyDeviceToHost
-        )
+        cudaSuccess, cudaMemcpy(
+                         nodes.data(), accessor.nodes.data(), nodes.size() * sizeof(nodes[0]),
+                         cudaMemcpyDeviceToHost
+                     )
     );
 
     std::vector<int> sorted_slot_seen(primitive_count, 0);
@@ -411,8 +405,7 @@ TEST(smallgwn_bvh_models, bvh_exact_batch_matches_cpu_on_common_models) {
 
         gwn::gwn_status const query_status =
             gwn::gwn_compute_winding_number_batch_bvh_exact<Real, Index>(
-                geometry.accessor(),
-                bvh.accessor(),
+                geometry.accessor(), bvh.accessor(),
                 cuda::std::span<Real const>(d_query_x, query_count),
                 cuda::std::span<Real const>(d_query_y, query_count),
                 cuda::std::span<Real const>(d_query_z, query_count),

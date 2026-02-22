@@ -10,11 +10,12 @@
 
 #include <cuda_runtime.h>
 
-#include <Eigen/Core>
-#include <Eigen/Geometry>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+
+#include <Eigen/Core>
+#include <Eigen/Geometry>
 
 namespace gwn {
 
@@ -22,16 +23,13 @@ template <class Real> using gwn_vec3 = Eigen::Matrix<Real, 3, 1>;
 
 template <class Real>
 __host__ __device__ inline Real gwn_signed_solid_angle_triangle(
-    gwn_vec3<Real> const &a,
-    gwn_vec3<Real> const &b,
-    gwn_vec3<Real> const &c,
+    gwn_vec3<Real> const &a, gwn_vec3<Real> const &b, gwn_vec3<Real> const &c,
     gwn_vec3<Real> const &q
 ) noexcept;
 
 template <class Real, class Index>
 __device__ inline Real gwn_triangle_solid_angle_from_primitive(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    Index const primitive_id,
+    gwn_geometry_accessor<Real, Index> const &geometry, Index const primitive_id,
     gwn_vec3<Real> const &query
 ) noexcept {
     if (primitive_id < Index(0) ||
@@ -68,9 +66,7 @@ __device__ inline Real gwn_triangle_solid_angle_from_primitive(
 
 template <class Real>
 __host__ __device__ inline Real gwn_signed_solid_angle_triangle(
-    gwn_vec3<Real> const &a,
-    gwn_vec3<Real> const &b,
-    gwn_vec3<Real> const &c,
+    gwn_vec3<Real> const &a, gwn_vec3<Real> const &b, gwn_vec3<Real> const &c,
     gwn_vec3<Real> const &q
 ) noexcept {
     gwn_vec3<Real> qa = a - q;
@@ -118,11 +114,8 @@ __device__ inline Real gwn_winding_number_point(
 
 template <class Real, class Index>
 __device__ inline Real gwn_winding_number_point_bvh_exact(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh_accessor<Real, Index> const &bvh,
-    Real const qx,
-    Real const qy,
-    Real const qz
+    gwn_geometry_accessor<Real, Index> const &geometry, gwn_bvh_accessor<Real, Index> const &bvh,
+    Real const qx, Real const qy, Real const qz
 ) noexcept {
     if (!geometry.is_valid() || !bvh.is_valid())
         return Real(0);
@@ -226,10 +219,8 @@ template <class Real, class Index> struct gwn_winding_number_batch_bvh_exact_fun
 template <class Real, class Index>
 [[nodiscard]] inline gwn_winding_number_batch_functor<Real, Index>
 gwn_make_winding_number_batch_functor(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    cuda::std::span<Real const> const query_x,
-    cuda::std::span<Real const> const query_y,
-    cuda::std::span<Real const> const query_z,
+    gwn_geometry_accessor<Real, Index> const &geometry, cuda::std::span<Real const> const query_x,
+    cuda::std::span<Real const> const query_y, cuda::std::span<Real const> const query_z,
     cuda::std::span<Real> const output
 ) {
     return gwn_winding_number_batch_functor<Real, Index>{
@@ -240,28 +231,21 @@ gwn_make_winding_number_batch_functor(
 template <class Real, class Index>
 [[nodiscard]] inline gwn_winding_number_batch_bvh_exact_functor<Real, Index>
 gwn_make_winding_number_batch_bvh_exact_functor(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh_accessor<Real, Index> const &bvh,
-    cuda::std::span<Real const> const query_x,
-    cuda::std::span<Real const> const query_y,
-    cuda::std::span<Real const> const query_z,
-    cuda::std::span<Real> const output
+    gwn_geometry_accessor<Real, Index> const &geometry, gwn_bvh_accessor<Real, Index> const &bvh,
+    cuda::std::span<Real const> const query_x, cuda::std::span<Real const> const query_y,
+    cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output
 ) {
-    return gwn_winding_number_batch_bvh_exact_functor<Real, Index>{
-        geometry, bvh, query_x, query_y, query_z, output
-    };
+    return gwn_winding_number_batch_bvh_exact_functor<Real, Index>{geometry, bvh,     query_x,
+                                                                   query_y,  query_z, output};
 }
 
 } // namespace detail
 
 template <class Real, class Index = std::int64_t>
 gwn_status gwn_compute_winding_number_batch(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    cuda::std::span<Real const> const query_x,
-    cuda::std::span<Real const> const query_y,
-    cuda::std::span<Real const> const query_z,
-    cuda::std::span<Real> const output,
-    cudaStream_t const stream = gwn_default_stream()
+    gwn_geometry_accessor<Real, Index> const &geometry, cuda::std::span<Real const> const query_x,
+    cuda::std::span<Real const> const query_y, cuda::std::span<Real const> const query_z,
+    cuda::std::span<Real> const output, cudaStream_t const stream = gwn_default_stream()
 ) noexcept {
     if (!geometry.is_valid())
         return gwn_status::invalid_argument("Geometry accessor contains mismatched span lengths.");
@@ -293,12 +277,9 @@ gwn_status gwn_compute_winding_number_batch(
 
 template <class Real, class Index = std::int64_t>
 gwn_status gwn_compute_winding_number_batch_bvh_exact(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh_accessor<Real, Index> const &bvh,
-    cuda::std::span<Real const> const query_x,
-    cuda::std::span<Real const> const query_y,
-    cuda::std::span<Real const> const query_z,
-    cuda::std::span<Real> const output,
+    gwn_geometry_accessor<Real, Index> const &geometry, gwn_bvh_accessor<Real, Index> const &bvh,
+    cuda::std::span<Real const> const query_x, cuda::std::span<Real const> const query_y,
+    cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output,
     cudaStream_t const stream = gwn_default_stream()
 ) noexcept {
     if (!geometry.is_valid())

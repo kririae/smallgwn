@@ -1,10 +1,10 @@
 #pragma once
 
+#include <cuda/std/span>
 #include <cuda_runtime_api.h>
 
 #include <cstddef>
 #include <cstdint>
-#include <cuda/std/span>
 #include <type_traits>
 #include <utility>
 
@@ -134,26 +134,16 @@ void gwn_release_accessor(
     gwn_geometry_accessor<Real, Index> &accessor, cudaStream_t const stream
 ) noexcept {
     gwn_release_spans(
-        stream,
-        accessor.tri_i2,
-        accessor.tri_i1,
-        accessor.tri_i0,
-        accessor.vertex_z,
-        accessor.vertex_y,
-        accessor.vertex_x
+        stream, accessor.tri_i2, accessor.tri_i1, accessor.tri_i0, accessor.vertex_z,
+        accessor.vertex_y, accessor.vertex_x
     );
 }
 
 template <class Real, class Index>
 gwn_status gwn_upload_accessor(
-    gwn_geometry_accessor<Real, Index> &accessor,
-    cuda::std::span<Real const> x,
-    cuda::std::span<Real const> y,
-    cuda::std::span<Real const> z,
-    cuda::std::span<Index const> i0,
-    cuda::std::span<Index const> i1,
-    cuda::std::span<Index const> i2,
-    cudaStream_t const stream
+    gwn_geometry_accessor<Real, Index> &accessor, cuda::std::span<Real const> x,
+    cuda::std::span<Real const> y, cuda::std::span<Real const> z, cuda::std::span<Index const> i0,
+    cuda::std::span<Index const> i1, cuda::std::span<Index const> i2, cudaStream_t const stream
 ) {
     if (x.size() != y.size() || x.size() != z.size())
         return gwn_status::invalid_argument("Vertex SoA spans must have identical lengths.");
@@ -189,12 +179,9 @@ public:
     gwn_geometry_object() = default;
 
     gwn_geometry_object(
-        cuda::std::span<Real const> const x,
-        cuda::std::span<Real const> const y,
-        cuda::std::span<Real const> const z,
-        cuda::std::span<Index const> const i0,
-        cuda::std::span<Index const> const i1,
-        cuda::std::span<Index const> const i2,
+        cuda::std::span<Real const> const x, cuda::std::span<Real const> const y,
+        cuda::std::span<Real const> const z, cuda::std::span<Index const> const i0,
+        cuda::std::span<Index const> const i1, cuda::std::span<Index const> const i2,
         cudaStream_t const stream = gwn_default_stream()
     ) {
         gwn_throw_if_error(upload(x, y, z, i0, i1, i2, stream));
@@ -210,12 +197,9 @@ public:
     ~gwn_geometry_object() { clear(); }
 
     gwn_status upload(
-        cuda::std::span<Real const> const x,
-        cuda::std::span<Real const> const y,
-        cuda::std::span<Real const> const z,
-        cuda::std::span<Index const> const i0,
-        cuda::std::span<Index const> const i1,
-        cuda::std::span<Index const> const i2,
+        cuda::std::span<Real const> const x, cuda::std::span<Real const> const y,
+        cuda::std::span<Real const> const z, cuda::std::span<Index const> const i0,
+        cuda::std::span<Index const> const i1, cuda::std::span<Index const> const i2,
         cudaStream_t const stream = gwn_default_stream()
     ) noexcept {
         gwn_geometry_object staging;
