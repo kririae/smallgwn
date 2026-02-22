@@ -1,7 +1,7 @@
 #pragma once
 
 #include "gwn_geometry.cuh"
-#include "gwn_utils.hpp"
+#include "gwn_kernel_utils.cuh"
 
 #if !__has_include(<Eigen/Core>) || !__has_include(<Eigen/Geometry>)
 #error \
@@ -203,23 +203,61 @@ __device__ inline Real gwn_winding_number_point_bvh_exact(
   return omega_sum / (Real(4) * k_pi);
 }
 
+namespace detail {
+
 template <class Real, class Index>
-__global__ inline void gwn_winding_number_batch_kernel(
-    const gwn_geometry_accessor<Real, Index> geometry,
+struct gwn_winding_number_batch_functor {
+  gwn_geometry_accessor<Real, Index> geometry{};
+  cuda::std::span<const Real> query_x{};
+  cuda::std::span<const Real> query_y{};
+  cuda::std::span<const Real> query_z{};
+  cuda::std::span<Real> output{};
+
+  __device__ void operator()(const std::size_t query_id) const {
+    output[query_id] = gwn_winding_number_point(
+        geometry, query_x[query_id], query_y[query_id], query_z[query_id]);
+  }
+};
+
+template <class Real, class Index>
+struct gwn_winding_number_batch_bvh_exact_functor {
+  gwn_geometry_accessor<Real, Index> geometry{};
+  cuda::std::span<const Real> query_x{};
+  cuda::std::span<const Real> query_y{};
+  cuda::std::span<const Real> query_z{};
+  cuda::std::span<Real> output{};
+
+  __device__ void operator()(const std::size_t query_id) const {
+    output[query_id] = gwn_winding_number_point_bvh_exact(
+        geometry, query_x[query_id], query_y[query_id], query_z[query_id]);
+  }
+};
+
+template <class Real, class Index>
+[[nodiscard]] inline gwn_winding_number_batch_functor<Real, Index>
+gwn_make_winding_number_batch_functor(
+    const gwn_geometry_accessor<Real, Index>& geometry,
     const cuda::std::span<const Real> query_x,
     const cuda::std::span<const Real> query_y,
     const cuda::std::span<const Real> query_z,
     const cuda::std::span<Real> output) {
-  const std::size_t query_id = static_cast<std::size_t>(blockIdx.x) *
-                                   static_cast<std::size_t>(blockDim.x) +
-                               static_cast<std::size_t>(threadIdx.x);
-  if (query_id >= output.size()) {
-    return;
-  }
-
-  output[query_id] = gwn_winding_number_point(
-      geometry, query_x[query_id], query_y[query_id], query_z[query_id]);
+  return gwn_winding_number_batch_functor<Real, Index>{
+      geometry, query_x, query_y, query_z, output};
 }
+
+template <class Real, class Index>
+[[nodiscard]] inline gwn_winding_number_batch_bvh_exact_functor<Real, Index>
+gwn_make_winding_number_batch_bvh_exact_functor(
+    const gwn_geometry_accessor<Real, Index>& geometry,
+    const cuda::std::span<const Real> query_x,
+    const cuda::std::span<const Real> query_y,
+    const cuda::std::span<const Real> query_z,
+    const cuda::std::span<Real> output) {
+  return gwn_winding_number_batch_bvh_exact_functor<Real, Index>{
+      geometry, query_x, query_y, query_z, output};
+}
+
+}  // namespace detail
 
 template <class Real, class Index = std::int64_t>
 gwn_status gwn_compute_winding_number_batch(
@@ -248,38 +286,12 @@ gwn_status gwn_compute_winding_number_batch(
     return gwn_status::ok();
   }
 
-#if defined(__CUDACC__)
-  constexpr int k_block_size = 128;
-  const int block_count = static_cast<int>(
-      (output.size() + static_cast<std::size_t>(k_block_size) - 1) /
-      static_cast<std::size_t>(k_block_size));
-  gwn_winding_number_batch_kernel<Real, Index>
-      <<<block_count, k_block_size, 0, stream>>>(geometry, query_x, query_y,
-                                                 query_z, output);
-  return gwn_cuda_to_status(cudaGetLastError());
-#else
-  (void)stream;
-  return gwn_status::invalid_argument(
-      "Batch kernel launch requires CUDA compilation.");
-#endif
-}
-
-template <class Real, class Index>
-__global__ inline void gwn_winding_number_batch_bvh_exact_kernel(
-    const gwn_geometry_accessor<Real, Index> geometry,
-    const cuda::std::span<const Real> query_x,
-    const cuda::std::span<const Real> query_y,
-    const cuda::std::span<const Real> query_z,
-    const cuda::std::span<Real> output) {
-  const std::size_t query_id = static_cast<std::size_t>(blockIdx.x) *
-                                   static_cast<std::size_t>(blockDim.x) +
-                               static_cast<std::size_t>(threadIdx.x);
-  if (query_id >= output.size()) {
-    return;
-  }
-
-  output[query_id] = gwn_winding_number_point_bvh_exact(
-      geometry, query_x[query_id], query_y[query_id], query_z[query_id]);
+  constexpr int k_block_size = detail::k_gwn_default_block_size;
+  return detail::gwn_launch_linear_kernel<k_block_size>(
+      output.size(),
+      detail::gwn_make_winding_number_batch_functor<Real, Index>(
+          geometry, query_x, query_y, query_z, output),
+      stream);
 }
 
 template <class Real, class Index = std::int64_t>
@@ -310,20 +322,12 @@ gwn_status gwn_compute_winding_number_batch_bvh_exact(
     return gwn_status::ok();
   }
 
-#if defined(__CUDACC__)
-  constexpr int k_block_size = 128;
-  const int block_count = static_cast<int>(
-      (output.size() + static_cast<std::size_t>(k_block_size) - 1) /
-      static_cast<std::size_t>(k_block_size));
-  gwn_winding_number_batch_bvh_exact_kernel<Real, Index>
-      <<<block_count, k_block_size, 0, stream>>>(geometry, query_x, query_y,
-                                                 query_z, output);
-  return gwn_cuda_to_status(cudaGetLastError());
-#else
-  (void)stream;
-  return gwn_status::invalid_argument(
-      "Batch kernel launch requires CUDA compilation.");
-#endif
+  constexpr int k_block_size = detail::k_gwn_default_block_size;
+  return detail::gwn_launch_linear_kernel<k_block_size>(
+      output.size(),
+      detail::gwn_make_winding_number_batch_bvh_exact_functor<Real, Index>(
+          geometry, query_x, query_y, query_z, output),
+      stream);
 }
 
 }  // namespace gwn
