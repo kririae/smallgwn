@@ -51,32 +51,28 @@ template <class T>
 gwn_status gwn_upload_span(cuda::std::span<const T>& dst,
                            cuda::std::span<const T> src,
                            const cudaStream_t stream) {
+  if (dst.data() != nullptr) {
+    GWN_RETURN_ON_ERROR(gwn_cuda_free(gwn_mutable_data(dst), stream));
+    dst = {};
+  }
+
   dst = {};
   if (src.empty()) {
     return gwn_status::ok();
   }
 
   void* device_ptr = nullptr;
-  gwn_status status = gwn_cuda_malloc(&device_ptr, src.size_bytes(), stream);
-  if (!status.is_ok()) {
-    return status;
-  }
+  GWN_RETURN_ON_ERROR(gwn_cuda_malloc(&device_ptr, src.size_bytes(), stream));
+  auto cleanup_device_ptr = gwn_make_scope_exit(
+      [&]() noexcept { (void)gwn_cuda_free(device_ptr, stream); });
 
-  status = gwn_cuda_to_status(cudaMemcpyAsync(device_ptr, src.data(),
-                                              src.size_bytes(),
-                                              cudaMemcpyHostToDevice, stream));
-  if (!status.is_ok()) {
-    (void)gwn_cuda_free(device_ptr, stream);
-    return status;
-  }
-
-  status = gwn_cuda_to_status(cudaStreamSynchronize(stream));
-  if (!status.is_ok()) {
-    (void)gwn_cuda_free(device_ptr, stream);
-    return status;
-  }
+  GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
+      cudaMemcpyAsync(device_ptr, src.data(), src.size_bytes(),
+                      cudaMemcpyHostToDevice, stream)));
+  GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaStreamSynchronize(stream)));
 
   dst = cuda::std::span<const T>(static_cast<const T*>(device_ptr), src.size());
+  cleanup_device_ptr.release();
   return gwn_status::ok();
 }
 
@@ -85,7 +81,7 @@ gwn_status gwn_allocate_span(cuda::std::span<const T>& dst,
                              const std::size_t count,
                              const cudaStream_t stream) {
   if (dst.data() != nullptr) {
-    (void)gwn_cuda_free(gwn_mutable_data(dst), stream);
+    GWN_RETURN_ON_ERROR(gwn_cuda_free(gwn_mutable_data(dst), stream));
     dst = {};
   }
 
@@ -94,10 +90,7 @@ gwn_status gwn_allocate_span(cuda::std::span<const T>& dst,
   }
 
   void* raw_ptr = nullptr;
-  gwn_status status = gwn_cuda_malloc(&raw_ptr, count * sizeof(T), stream);
-  if (!status.is_ok()) {
-    return status;
-  }
+  GWN_RETURN_ON_ERROR(gwn_cuda_malloc(&raw_ptr, count * sizeof(T), stream));
 
   dst = cuda::std::span<const T>(static_cast<const T*>(raw_ptr), count);
   return gwn_status::ok();
@@ -108,21 +101,23 @@ gwn_status gwn_copy_device_to_span(cuda::std::span<const T>& dst,
                                    const T* src,
                                    const std::size_t count,
                                    const cudaStream_t stream) {
-  gwn_status status = gwn_allocate_span(dst, count, stream);
-  if (!status.is_ok() || count == 0) {
-    return status;
+  GWN_RETURN_ON_ERROR(gwn_allocate_span(dst, count, stream));
+  if (count == 0) {
+    return gwn_status::ok();
   }
 
-  status = gwn_cuda_to_status(
-      cudaMemcpyAsync(gwn_mutable_data(dst), src, count * sizeof(T),
-                      cudaMemcpyDeviceToDevice, stream));
-  if (!status.is_ok()) {
+  auto cleanup_dst = gwn_make_scope_exit([&]() noexcept {
     (void)gwn_cuda_free(gwn_mutable_data(dst), stream);
     dst = {};
-    return status;
-  }
+  });
 
-  return gwn_cuda_to_status(cudaStreamSynchronize(stream));
+  GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
+      cudaMemcpyAsync(gwn_mutable_data(dst), src, count * sizeof(T),
+                      cudaMemcpyDeviceToDevice, stream)));
+  GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaStreamSynchronize(stream)));
+
+  cleanup_dst.release();
+  return gwn_status::ok();
 }
 
 template <class T>
@@ -164,27 +159,18 @@ gwn_status gwn_upload_accessor(gwn_geometry_accessor<Real, Index>& accessor,
         "Triangle SoA spans must have identical lengths.");
   }
 
-  const auto upload_one = [&](auto& dst, auto src) {
-    return gwn_upload_span(dst, src, stream);
-  };
+  auto cleanup_accessor = gwn_make_scope_exit(
+      [&]() noexcept { gwn_release_accessor(accessor, stream); });
 
-  if (auto status = upload_one(accessor.vertex_x, x); !status.is_ok()) {
-    return status;
-  }
-  if (auto status = upload_one(accessor.vertex_y, y); !status.is_ok()) {
-    return status;
-  }
-  if (auto status = upload_one(accessor.vertex_z, z); !status.is_ok()) {
-    return status;
-  }
-  if (auto status = upload_one(accessor.tri_i0, i0); !status.is_ok()) {
-    return status;
-  }
-  if (auto status = upload_one(accessor.tri_i1, i1); !status.is_ok()) {
-    return status;
-  }
+  GWN_RETURN_ON_ERROR(gwn_upload_span(accessor.vertex_x, x, stream));
+  GWN_RETURN_ON_ERROR(gwn_upload_span(accessor.vertex_y, y, stream));
+  GWN_RETURN_ON_ERROR(gwn_upload_span(accessor.vertex_z, z, stream));
+  GWN_RETURN_ON_ERROR(gwn_upload_span(accessor.tri_i0, i0, stream));
+  GWN_RETURN_ON_ERROR(gwn_upload_span(accessor.tri_i1, i1, stream));
+  GWN_RETURN_ON_ERROR(gwn_upload_span(accessor.tri_i2, i2, stream));
 
-  return upload_one(accessor.tri_i2, i2);
+  cleanup_accessor.release();
+  return gwn_status::ok();
 }
 
 }  // namespace detail
@@ -231,12 +217,8 @@ class gwn_geometry_object final : public gwn_noncopyable {
                     const cuda::std::span<const Index> i2,
                     const cudaStream_t stream = gwn_default_stream()) noexcept {
     gwn_geometry_object staging;
-    if (auto status = detail::gwn_upload_accessor(staging.accessor_, x, y, z,
-                                                  i0, i1, i2, stream);
-        !status.is_ok()) {
-      staging.clear(stream);
-      return status;
-    }
+    GWN_RETURN_ON_ERROR(detail::gwn_upload_accessor(staging.accessor_, x, y, z,
+                                                    i0, i1, i2, stream));
 
     swap(*this, staging);
     return gwn_status::ok();

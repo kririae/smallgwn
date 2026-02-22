@@ -163,6 +163,7 @@ __device__ inline Real gwn_winding_number_point_bvh_exact(
 
     const gwn_bvh4_node_soa<Real, Index>& node =
         bvh.nodes[static_cast<std::size_t>(node_index)];
+    GWN_PRAGMA_UNROLL
     for (int child_slot = 0; child_slot < 4; ++child_slot) {
       const auto child_kind =
           static_cast<gwn_bvh_child_kind>(node.child_kind[child_slot]);

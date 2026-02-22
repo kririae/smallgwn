@@ -7,6 +7,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 
 namespace gwn {
@@ -72,6 +73,62 @@ class gwn_status {
   cudaError_t cuda_result_ = cudaSuccess;
   std::string message_{};
 };
+
+template <class Callback>
+class gwn_scope_exit {
+ public:
+  explicit gwn_scope_exit(Callback callback) noexcept(
+      std::is_nothrow_move_constructible_v<Callback>)
+      : callback_(std::move(callback)) {}
+
+  gwn_scope_exit(const gwn_scope_exit&) = delete;
+  gwn_scope_exit& operator=(const gwn_scope_exit&) = delete;
+
+  gwn_scope_exit(gwn_scope_exit&& other) noexcept(
+      std::is_nothrow_move_constructible_v<Callback>)
+      : callback_(std::move(other.callback_)),
+        is_active_(std::exchange(other.is_active_, false)) {}
+
+  gwn_scope_exit& operator=(gwn_scope_exit&&) = delete;
+
+  ~gwn_scope_exit() noexcept {
+    if (is_active_) {
+      callback_();
+    }
+  }
+
+  void release() noexcept { is_active_ = false; }
+
+ private:
+  Callback callback_;
+  bool is_active_ = true;
+};
+
+template <class Callback>
+[[nodiscard]] auto gwn_make_scope_exit(Callback&& callback)
+    -> gwn_scope_exit<std::decay_t<Callback>> {
+  return gwn_scope_exit<std::decay_t<Callback>>(
+      std::forward<Callback>(callback));
+}
+
+#ifndef GWN_HANDLE_STATUS_FAIL
+#define GWN_HANDLE_STATUS_FAIL(status) ((void)(status))
+#endif
+
+#ifndef GWN_RETURN_ON_ERROR
+#define GWN_RETURN_ON_ERROR(expr)                \
+  do {                                           \
+    const ::gwn::gwn_status gwn_status = (expr); \
+    if (!gwn_status.is_ok()) {                   \
+      GWN_HANDLE_STATUS_FAIL(gwn_status);        \
+      return gwn_status;                         \
+    }                                            \
+  } while (false)
+#endif
+
+#ifndef GWN_PRAGMA_UNROLL
+#define GWN_PRAGMA_UNROLL _Pragma("unroll")
+#endif
 
 inline void gwn_throw_if_error(const gwn_status& status) {
   if (!status.is_ok()) {

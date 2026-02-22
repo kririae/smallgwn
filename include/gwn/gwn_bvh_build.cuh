@@ -183,6 +183,7 @@ struct gwn_build_bvh4_parent_level_functor {
     gwn_aabb<Real> parent_bounds{};
     bool has_child = false;
 
+    GWN_PRAGMA_UNROLL
     for (int child_slot = 0; child_slot < 4; ++child_slot) {
       const std::size_t child_id =
           parent_id * 4 + static_cast<std::size_t>(child_slot);
@@ -237,6 +238,7 @@ struct gwn_patch_child_indices_functor {
 
   __device__ void operator()(const std::size_t node_id) const {
     gwn_bvh4_node_soa<Real, Index>& node = nodes[node_id];
+    GWN_PRAGMA_UNROLL
     for (int child_slot = 0; child_slot < 4; ++child_slot) {
       if (node.child_kind[child_slot] ==
           static_cast<std::uint8_t>(gwn_bvh_child_kind::k_internal)) {
@@ -258,8 +260,8 @@ gwn_status gwn_build_bvh4_lbvh(
         "Geometry accessor is invalid for BVH construction.");
   }
 
-  detail::gwn_release_bvh_accessor(bvh, stream);
   if (geometry.triangle_count() == 0) {
+    detail::gwn_release_bvh_accessor(bvh, stream);
     return gwn_status::ok();
   }
   if (geometry.vertex_count() == 0) {
@@ -270,6 +272,16 @@ gwn_status gwn_build_bvh4_lbvh(
   const std::size_t primitive_count = geometry.triangle_count();
   constexpr std::size_t k_leaf_primitive_capacity = 4;
   constexpr int k_block_size = detail::k_gwn_default_block_size;
+  gwn_bvh_accessor<Real, Index> staging_bvh{};
+  auto cleanup_staging_bvh = gwn_make_scope_exit([&]() noexcept {
+    detail::gwn_release_bvh_accessor(staging_bvh, stream);
+  });
+  auto commit_staging_bvh = [&]() -> gwn_status {
+    detail::gwn_release_bvh_accessor(bvh, stream);
+    bvh = staging_bvh;
+    cleanup_staging_bvh.release();
+    return gwn_status::ok();
+  };
 
   auto exec = thrust::cuda::par.on(stream);
   thrust::device_ptr<const Real> vx_ptr(geometry.vertex_x.data());
@@ -288,46 +300,25 @@ gwn_status gwn_build_bvh4_lbvh(
   Real scene_max_y = Real(0);
   Real scene_min_z = Real(0);
   Real scene_max_z = Real(0);
-  gwn_status status = gwn_cuda_to_status(
+  GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
       cudaMemcpyAsync(&scene_min_x, thrust::raw_pointer_cast(x_pair.first),
-                      sizeof(Real), cudaMemcpyDeviceToHost, stream));
-  if (!status.is_ok()) {
-    return status;
-  }
-  status = gwn_cuda_to_status(
+                      sizeof(Real), cudaMemcpyDeviceToHost, stream)));
+  GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
       cudaMemcpyAsync(&scene_max_x, thrust::raw_pointer_cast(x_pair.second),
-                      sizeof(Real), cudaMemcpyDeviceToHost, stream));
-  if (!status.is_ok()) {
-    return status;
-  }
-  status = gwn_cuda_to_status(
+                      sizeof(Real), cudaMemcpyDeviceToHost, stream)));
+  GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
       cudaMemcpyAsync(&scene_min_y, thrust::raw_pointer_cast(y_pair.first),
-                      sizeof(Real), cudaMemcpyDeviceToHost, stream));
-  if (!status.is_ok()) {
-    return status;
-  }
-  status = gwn_cuda_to_status(
+                      sizeof(Real), cudaMemcpyDeviceToHost, stream)));
+  GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
       cudaMemcpyAsync(&scene_max_y, thrust::raw_pointer_cast(y_pair.second),
-                      sizeof(Real), cudaMemcpyDeviceToHost, stream));
-  if (!status.is_ok()) {
-    return status;
-  }
-  status = gwn_cuda_to_status(
+                      sizeof(Real), cudaMemcpyDeviceToHost, stream)));
+  GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
       cudaMemcpyAsync(&scene_min_z, thrust::raw_pointer_cast(z_pair.first),
-                      sizeof(Real), cudaMemcpyDeviceToHost, stream));
-  if (!status.is_ok()) {
-    return status;
-  }
-  status = gwn_cuda_to_status(
+                      sizeof(Real), cudaMemcpyDeviceToHost, stream)));
+  GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
       cudaMemcpyAsync(&scene_max_z, thrust::raw_pointer_cast(z_pair.second),
-                      sizeof(Real), cudaMemcpyDeviceToHost, stream));
-  if (!status.is_ok()) {
-    return status;
-  }
-  status = gwn_cuda_to_status(cudaStreamSynchronize(stream));
-  if (!status.is_ok()) {
-    return status;
-  }
+                      sizeof(Real), cudaMemcpyDeviceToHost, stream)));
+  GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaStreamSynchronize(stream)));
 
   const Real scene_inv_x = (scene_max_x > scene_min_x)
                                ? Real(1) / (scene_max_x - scene_min_x)
@@ -349,16 +340,13 @@ gwn_status gwn_build_bvh4_lbvh(
   const auto sorted_primitive_indices_span = cuda::std::span<Index>(
       thrust::raw_pointer_cast(sorted_primitive_indices.data()),
       primitive_count);
-  status = detail::gwn_launch_linear_kernel<k_block_size>(
+  GWN_RETURN_ON_ERROR(detail::gwn_launch_linear_kernel<k_block_size>(
       primitive_count,
       detail::gwn_compute_triangle_aabbs_and_morton_functor<Real, Index>{
           geometry, scene_min_x, scene_min_y, scene_min_z, scene_inv_x,
           scene_inv_y, scene_inv_z, primitive_aabbs_span, morton_codes_span,
           sorted_primitive_indices_span},
-      stream);
-  if (!status.is_ok()) {
-    return status;
-  }
+      stream));
 
   thrust::stable_sort_by_key(exec, morton_codes.begin(), morton_codes.end(),
                              sorted_primitive_indices.begin());
@@ -366,23 +354,16 @@ gwn_status gwn_build_bvh4_lbvh(
   thrust::device_vector<gwn_aabb<Real>> sorted_aabbs(primitive_count);
   const auto sorted_aabbs_span = cuda::std::span<gwn_aabb<Real>>(
       thrust::raw_pointer_cast(sorted_aabbs.data()), primitive_count);
-  status = detail::gwn_launch_linear_kernel<k_block_size>(
+  GWN_RETURN_ON_ERROR(detail::gwn_launch_linear_kernel<k_block_size>(
       primitive_count,
       detail::gwn_gather_sorted_aabbs_functor<Real, Index>{
           primitive_aabbs_span, sorted_primitive_indices_span,
           sorted_aabbs_span},
-      stream);
-  if (!status.is_ok()) {
-    return status;
-  }
+      stream));
 
-  status = detail::gwn_copy_device_to_span(bvh.primitive_indices,
-                                           sorted_primitive_indices_span.data(),
-                                           primitive_count, stream);
-  if (!status.is_ok()) {
-    detail::gwn_release_bvh_accessor(bvh, stream);
-    return status;
-  }
+  GWN_RETURN_ON_ERROR(detail::gwn_copy_device_to_span(
+      staging_bvh.primitive_indices, sorted_primitive_indices_span.data(),
+      primitive_count, stream));
 
   const std::size_t leaf_count =
       (primitive_count + k_leaf_primitive_capacity - 1) /
@@ -392,16 +373,12 @@ gwn_status gwn_build_bvh4_lbvh(
   auto current_entries_span =
       cuda::std::span<detail::gwn_build_entry<Real, Index>>(
           thrust::raw_pointer_cast(current_entries.data()), leaf_count);
-  status = detail::gwn_launch_linear_kernel<k_block_size>(
+  GWN_RETURN_ON_ERROR(detail::gwn_launch_linear_kernel<k_block_size>(
       leaf_count,
       detail::gwn_build_leaf_entries_functor<Real, Index>{
           sorted_aabbs_span, primitive_count, k_leaf_primitive_capacity,
           current_entries_span},
-      stream);
-  if (!status.is_ok()) {
-    detail::gwn_release_bvh_accessor(bvh, stream);
-    return status;
-  }
+      stream));
 
   std::vector<thrust::device_vector<gwn_bvh4_node_soa<Real, Index>>>
       levels_bottom;
@@ -423,16 +400,12 @@ gwn_status gwn_build_bvh4_lbvh(
         cuda::std::span<gwn_bvh4_node_soa<Real, Index>>(
             thrust::raw_pointer_cast(parent_nodes.data()), parent_count);
 
-    status = detail::gwn_launch_linear_kernel<k_block_size>(
+    GWN_RETURN_ON_ERROR(detail::gwn_launch_linear_kernel<k_block_size>(
         parent_count,
         detail::gwn_build_bvh4_parent_level_functor<Real, Index>{
             current_entries_const_span, current_count, parent_entries_span,
             parent_nodes_span},
-        stream);
-    if (!status.is_ok()) {
-      detail::gwn_release_bvh_accessor(bvh, stream);
-      return status;
-    }
+        stream));
 
     levels_bottom.push_back(std::move(parent_nodes));
     current_entries = std::move(parent_entries);
@@ -440,10 +413,10 @@ gwn_status gwn_build_bvh4_lbvh(
   }
 
   if (levels_bottom.empty()) {
-    bvh.root_kind = gwn_bvh_child_kind::k_leaf;
-    bvh.root_index = 0;
-    bvh.root_count = static_cast<Index>(primitive_count);
-    return gwn_status::ok();
+    staging_bvh.root_kind = gwn_bvh_child_kind::k_leaf;
+    staging_bvh.root_index = 0;
+    staging_bvh.root_count = static_cast<Index>(primitive_count);
+    return commit_staging_bvh();
   }
 
   const std::size_t level_count = levels_bottom.size();
@@ -457,53 +430,38 @@ gwn_status gwn_build_bvh4_lbvh(
     total_node_count += level_node_counts[level];
   }
 
-  status = detail::gwn_allocate_span(bvh.nodes, total_node_count, stream);
-  if (!status.is_ok()) {
-    detail::gwn_release_bvh_accessor(bvh, stream);
-    return status;
-  }
+  GWN_RETURN_ON_ERROR(
+      detail::gwn_allocate_span(staging_bvh.nodes, total_node_count, stream));
 
   gwn_bvh4_node_soa<Real, Index>* final_nodes =
-      const_cast<gwn_bvh4_node_soa<Real, Index>*>(bvh.nodes.data());
+      const_cast<gwn_bvh4_node_soa<Real, Index>*>(staging_bvh.nodes.data());
   auto final_nodes_span = cuda::std::span<gwn_bvh4_node_soa<Real, Index>>(
       final_nodes, total_node_count);
   for (std::size_t level = 0; level < level_count; ++level) {
     const std::size_t bottom_index = level_count - 1 - level;
-    status = gwn_cuda_to_status(cudaMemcpyAsync(
+    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemcpyAsync(
         final_nodes + level_offsets[level],
         thrust::raw_pointer_cast(levels_bottom[bottom_index].data()),
         level_node_counts[level] * sizeof(gwn_bvh4_node_soa<Real, Index>),
-        cudaMemcpyDeviceToDevice, stream));
-    if (!status.is_ok()) {
-      detail::gwn_release_bvh_accessor(bvh, stream);
-      return status;
-    }
+        cudaMemcpyDeviceToDevice, stream)));
   }
 
   for (std::size_t level = 0; level + 1 < level_count; ++level) {
-    status = detail::gwn_launch_linear_kernel<k_block_size>(
+    GWN_RETURN_ON_ERROR(detail::gwn_launch_linear_kernel<k_block_size>(
         level_node_counts[level],
         detail::gwn_patch_child_indices_functor<Real, Index>{
             final_nodes_span.subspan(level_offsets[level],
                                      level_node_counts[level]),
             static_cast<Index>(level_offsets[level + 1])},
-        stream);
-    if (!status.is_ok()) {
-      detail::gwn_release_bvh_accessor(bvh, stream);
-      return status;
-    }
+        stream));
   }
 
-  status = gwn_cuda_to_status(cudaStreamSynchronize(stream));
-  if (!status.is_ok()) {
-    detail::gwn_release_bvh_accessor(bvh, stream);
-    return status;
-  }
+  GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaStreamSynchronize(stream)));
 
-  bvh.root_kind = gwn_bvh_child_kind::k_internal;
-  bvh.root_index = 0;
-  bvh.root_count = 0;
-  return gwn_status::ok();
+  staging_bvh.root_kind = gwn_bvh_child_kind::k_internal;
+  staging_bvh.root_index = 0;
+  staging_bvh.root_count = 0;
+  return commit_staging_bvh();
 }
 
 }  // namespace gwn
