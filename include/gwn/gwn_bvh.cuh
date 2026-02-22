@@ -1,9 +1,12 @@
 #pragma once
 
+#include "gwn_utils.hpp"
+
 #include <cuda/std/span>
 
 #include <cstddef>
 #include <cstdint>
+#include <utility>
 
 namespace gwn {
 
@@ -73,6 +76,66 @@ struct gwn_bvh_accessor {
 
     return false;
   }
+};
+
+namespace detail {
+
+template <class T>
+void gwn_release_bvh_span(cuda::std::span<const T>& span_view,
+                          const cudaStream_t stream) noexcept {
+  if (span_view.data() != nullptr) {
+    (void)gwn_cuda_free(const_cast<T*>(span_view.data()), stream);
+    span_view = {};
+  }
+}
+
+template <class Real, class Index>
+void gwn_release_bvh_accessor(gwn_bvh_accessor<Real, Index>& bvh,
+                              const cudaStream_t stream) noexcept {
+  gwn_release_bvh_span(bvh.primitive_indices, stream);
+  gwn_release_bvh_span(bvh.nodes, stream);
+  bvh.root_kind = gwn_bvh_child_kind::k_invalid;
+  bvh.root_index = 0;
+  bvh.root_count = 0;
+}
+
+}  // namespace detail
+
+template <class Real = float, class Index = std::int64_t>
+class gwn_bvh_object final : public gwn_noncopyable {
+ public:
+  using real_type = Real;
+  using index_type = Index;
+  using accessor_type = gwn_bvh_accessor<Real, Index>;
+
+  gwn_bvh_object() = default;
+
+  gwn_bvh_object(gwn_bvh_object&& other) noexcept { swap(*this, other); }
+
+  gwn_bvh_object& operator=(gwn_bvh_object other) noexcept {
+    swap(*this, other);
+    return *this;
+  }
+
+  ~gwn_bvh_object() { clear(); }
+
+  void clear(const cudaStream_t stream = gwn_default_stream()) noexcept {
+    detail::gwn_release_bvh_accessor(accessor_, stream);
+  }
+
+  [[nodiscard]] accessor_type& accessor() noexcept { return accessor_; }
+  [[nodiscard]] const accessor_type& accessor() const noexcept {
+    return accessor_;
+  }
+  [[nodiscard]] bool has_bvh() const noexcept { return accessor_.is_valid(); }
+
+  friend void swap(gwn_bvh_object& lhs, gwn_bvh_object& rhs) noexcept {
+    using std::swap;
+    swap(lhs.accessor_, rhs.accessor_);
+  }
+
+ private:
+  accessor_type accessor_{};
 };
 
 }  // namespace gwn

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "gwn_bvh.cuh"
 #include "gwn_geometry.cuh"
 #include "gwn_kernel_utils.cuh"
 
@@ -121,10 +122,11 @@ __device__ inline Real gwn_winding_number_point(
 template <class Real, class Index>
 __device__ inline Real gwn_winding_number_point_bvh_exact(
     const gwn_geometry_accessor<Real, Index>& geometry,
+    const gwn_bvh_accessor<Real, Index>& bvh,
     const Real qx,
     const Real qy,
     const Real qz) noexcept {
-  if (!geometry.is_valid() || !geometry.has_bvh()) {
+  if (!geometry.is_valid() || !bvh.is_valid()) {
     return Real(0);
   }
 
@@ -135,8 +137,6 @@ __device__ inline Real gwn_winding_number_point_bvh_exact(
 
   const gwn_vec3<Real> query(qx, qy, qz);
   Real omega_sum = Real(0);
-  const gwn_bvh_accessor<Real, Index>& bvh = geometry.bvh;
-
   if (bvh.root_kind == gwn_bvh_child_kind::k_leaf) {
     for (Index primitive_offset = 0; primitive_offset < bvh.root_count;
          ++primitive_offset) {
@@ -222,6 +222,7 @@ struct gwn_winding_number_batch_functor {
 template <class Real, class Index>
 struct gwn_winding_number_batch_bvh_exact_functor {
   gwn_geometry_accessor<Real, Index> geometry{};
+  gwn_bvh_accessor<Real, Index> bvh{};
   cuda::std::span<const Real> query_x{};
   cuda::std::span<const Real> query_y{};
   cuda::std::span<const Real> query_z{};
@@ -229,7 +230,7 @@ struct gwn_winding_number_batch_bvh_exact_functor {
 
   __device__ void operator()(const std::size_t query_id) const {
     output[query_id] = gwn_winding_number_point_bvh_exact(
-        geometry, query_x[query_id], query_y[query_id], query_z[query_id]);
+        geometry, bvh, query_x[query_id], query_y[query_id], query_z[query_id]);
   }
 };
 
@@ -249,12 +250,13 @@ template <class Real, class Index>
 [[nodiscard]] inline gwn_winding_number_batch_bvh_exact_functor<Real, Index>
 gwn_make_winding_number_batch_bvh_exact_functor(
     const gwn_geometry_accessor<Real, Index>& geometry,
+    const gwn_bvh_accessor<Real, Index>& bvh,
     const cuda::std::span<const Real> query_x,
     const cuda::std::span<const Real> query_y,
     const cuda::std::span<const Real> query_z,
     const cuda::std::span<Real> output) {
   return gwn_winding_number_batch_bvh_exact_functor<Real, Index>{
-      geometry, query_x, query_y, query_z, output};
+      geometry, bvh, query_x, query_y, query_z, output};
 }
 
 }  // namespace detail
@@ -297,6 +299,7 @@ gwn_status gwn_compute_winding_number_batch(
 template <class Real, class Index = std::int64_t>
 gwn_status gwn_compute_winding_number_batch_bvh_exact(
     const gwn_geometry_accessor<Real, Index>& geometry,
+    const gwn_bvh_accessor<Real, Index>& bvh,
     const cuda::std::span<const Real> query_x,
     const cuda::std::span<const Real> query_y,
     const cuda::std::span<const Real> query_z,
@@ -306,9 +309,8 @@ gwn_status gwn_compute_winding_number_batch_bvh_exact(
     return gwn_status::invalid_argument(
         "Geometry accessor contains mismatched span lengths.");
   }
-  if (!geometry.has_bvh()) {
-    return gwn_status::invalid_argument(
-        "Geometry accessor has no BVH. Call build_bvh() first.");
+  if (!bvh.is_valid()) {
+    return gwn_status::invalid_argument("BVH accessor is invalid.");
   }
   if (query_x.size() != query_y.size() || query_x.size() != query_z.size()) {
     return gwn_status::invalid_argument(
@@ -326,7 +328,7 @@ gwn_status gwn_compute_winding_number_batch_bvh_exact(
   return detail::gwn_launch_linear_kernel<k_block_size>(
       output.size(),
       detail::gwn_make_winding_number_batch_bvh_exact_functor<Real, Index>(
-          geometry, query_x, query_y, query_z, output),
+          geometry, bvh, query_x, query_y, query_z, output),
       stream);
 }
 

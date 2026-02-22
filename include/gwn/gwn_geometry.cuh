@@ -1,6 +1,5 @@
 #pragma once
 
-#include "gwn_bvh.cuh"
 #include "gwn_utils.hpp"
 
 #include <cuda_runtime_api.h>
@@ -25,7 +24,6 @@ struct gwn_geometry_accessor {
   cuda::std::span<const Index> tri_i0{};
   cuda::std::span<const Index> tri_i1{};
   cuda::std::span<const Index> tri_i2{};
-  gwn_bvh_accessor<Real, Index> bvh{};
 
   __host__ __device__ constexpr std::size_t vertex_count() const noexcept {
     return vertex_x.size();
@@ -39,16 +37,7 @@ struct gwn_geometry_accessor {
            vertex_x.size() == vertex_z.size() &&
            tri_i0.size() == tri_i1.size() && tri_i0.size() == tri_i2.size();
   }
-
-  __host__ __device__ constexpr bool has_bvh() const noexcept {
-    return bvh.is_valid();
-  }
 };
-
-template <class Real, class Index>
-gwn_status gwn_build_bvh4_lbvh(
-    gwn_geometry_accessor<Real, Index>& accessor,
-    cudaStream_t stream = gwn_default_stream()) noexcept;
 
 namespace detail {
 
@@ -151,18 +140,8 @@ void gwn_release_spans(const cudaStream_t stream, Spans&... spans) noexcept {
 }
 
 template <class Real, class Index>
-void gwn_release_bvh(gwn_bvh_accessor<Real, Index>& bvh,
-                     const cudaStream_t stream) noexcept {
-  gwn_release_spans(stream, bvh.primitive_indices, bvh.nodes);
-  bvh.root_kind = gwn_bvh_child_kind::k_invalid;
-  bvh.root_index = 0;
-  bvh.root_count = 0;
-}
-
-template <class Real, class Index>
 void gwn_release_accessor(gwn_geometry_accessor<Real, Index>& accessor,
                           const cudaStream_t stream) noexcept {
-  gwn_release_bvh(accessor.bvh, stream);
   gwn_release_spans(stream, accessor.tri_i2, accessor.tri_i1, accessor.tri_i0,
                     accessor.vertex_z, accessor.vertex_y, accessor.vertex_x);
 }
@@ -267,13 +246,6 @@ class gwn_geometry_object final : public gwn_noncopyable {
     detail::gwn_release_accessor(accessor_, stream);
   }
 
-  void clear_bvh(const cudaStream_t stream = gwn_default_stream()) noexcept {
-    detail::gwn_release_bvh(accessor_.bvh, stream);
-  }
-
-  gwn_status build_bvh(
-      const cudaStream_t stream = gwn_default_stream()) noexcept;
-
   [[nodiscard]] const accessor_type& accessor() const noexcept {
     return accessor_;
   }
@@ -283,11 +255,6 @@ class gwn_geometry_object final : public gwn_noncopyable {
   [[nodiscard]] std::size_t triangle_count() const noexcept {
     return accessor_.triangle_count();
   }
-  [[nodiscard]] const gwn_bvh_accessor<Real, Index>& bvh_accessor()
-      const noexcept {
-    return accessor_.bvh;
-  }
-  [[nodiscard]] bool has_bvh() const noexcept { return accessor_.has_bvh(); }
 
   friend void swap(gwn_geometry_object& lhs,
                    gwn_geometry_object& rhs) noexcept {
@@ -298,11 +265,5 @@ class gwn_geometry_object final : public gwn_noncopyable {
  private:
   accessor_type accessor_{};
 };
-
-template <class Real, class Index>
-gwn_status gwn_geometry_object<Real, Index>::build_bvh(
-    const cudaStream_t stream) noexcept {
-  return gwn_build_bvh4_lbvh<Real, Index>(accessor_, stream);
-}
 
 }  // namespace gwn

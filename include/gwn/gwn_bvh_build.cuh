@@ -1,5 +1,6 @@
 #pragma once
 
+#include "gwn_bvh.cuh"
 #include "gwn_geometry.cuh"
 #include "gwn_kernel_utils.cuh"
 
@@ -248,36 +249,38 @@ struct gwn_patch_child_indices_functor {
 }  // namespace detail
 
 template <class Real, class Index>
-gwn_status gwn_build_bvh4_lbvh(gwn_geometry_accessor<Real, Index>& accessor,
-                               cudaStream_t stream) noexcept {
-  if (!accessor.is_valid()) {
+gwn_status gwn_build_bvh4_lbvh(
+    const gwn_geometry_accessor<Real, Index>& geometry,
+    gwn_bvh_accessor<Real, Index>& bvh,
+    cudaStream_t stream = gwn_default_stream()) noexcept {
+  if (!geometry.is_valid()) {
     return gwn_status::invalid_argument(
         "Geometry accessor is invalid for BVH construction.");
   }
 
-  detail::gwn_release_bvh(accessor.bvh, stream);
-  if (accessor.triangle_count() == 0) {
+  detail::gwn_release_bvh_accessor(bvh, stream);
+  if (geometry.triangle_count() == 0) {
     return gwn_status::ok();
   }
-  if (accessor.vertex_count() == 0) {
+  if (geometry.vertex_count() == 0) {
     return gwn_status::invalid_argument(
         "Cannot build BVH with triangles but zero vertices.");
   }
 
-  const std::size_t primitive_count = accessor.triangle_count();
+  const std::size_t primitive_count = geometry.triangle_count();
   constexpr std::size_t k_leaf_primitive_capacity = 4;
   constexpr int k_block_size = detail::k_gwn_default_block_size;
 
   auto exec = thrust::cuda::par.on(stream);
-  thrust::device_ptr<const Real> vx_ptr(accessor.vertex_x.data());
-  thrust::device_ptr<const Real> vy_ptr(accessor.vertex_y.data());
-  thrust::device_ptr<const Real> vz_ptr(accessor.vertex_z.data());
+  thrust::device_ptr<const Real> vx_ptr(geometry.vertex_x.data());
+  thrust::device_ptr<const Real> vy_ptr(geometry.vertex_y.data());
+  thrust::device_ptr<const Real> vz_ptr(geometry.vertex_z.data());
   auto x_pair =
-      thrust::minmax_element(exec, vx_ptr, vx_ptr + accessor.vertex_count());
+      thrust::minmax_element(exec, vx_ptr, vx_ptr + geometry.vertex_count());
   auto y_pair =
-      thrust::minmax_element(exec, vy_ptr, vy_ptr + accessor.vertex_count());
+      thrust::minmax_element(exec, vy_ptr, vy_ptr + geometry.vertex_count());
   auto z_pair =
-      thrust::minmax_element(exec, vz_ptr, vz_ptr + accessor.vertex_count());
+      thrust::minmax_element(exec, vz_ptr, vz_ptr + geometry.vertex_count());
 
   Real scene_min_x = Real(0);
   Real scene_max_x = Real(0);
@@ -349,7 +352,7 @@ gwn_status gwn_build_bvh4_lbvh(gwn_geometry_accessor<Real, Index>& accessor,
   status = detail::gwn_launch_linear_kernel<k_block_size>(
       primitive_count,
       detail::gwn_compute_triangle_aabbs_and_morton_functor<Real, Index>{
-          accessor, scene_min_x, scene_min_y, scene_min_z, scene_inv_x,
+          geometry, scene_min_x, scene_min_y, scene_min_z, scene_inv_x,
           scene_inv_y, scene_inv_z, primitive_aabbs_span, morton_codes_span,
           sorted_primitive_indices_span},
       stream);
@@ -373,11 +376,11 @@ gwn_status gwn_build_bvh4_lbvh(gwn_geometry_accessor<Real, Index>& accessor,
     return status;
   }
 
-  status = detail::gwn_copy_device_to_span(accessor.bvh.primitive_indices,
+  status = detail::gwn_copy_device_to_span(bvh.primitive_indices,
                                            sorted_primitive_indices_span.data(),
                                            primitive_count, stream);
   if (!status.is_ok()) {
-    detail::gwn_release_bvh(accessor.bvh, stream);
+    detail::gwn_release_bvh_accessor(bvh, stream);
     return status;
   }
 
@@ -396,7 +399,7 @@ gwn_status gwn_build_bvh4_lbvh(gwn_geometry_accessor<Real, Index>& accessor,
           current_entries_span},
       stream);
   if (!status.is_ok()) {
-    detail::gwn_release_bvh(accessor.bvh, stream);
+    detail::gwn_release_bvh_accessor(bvh, stream);
     return status;
   }
 
@@ -427,7 +430,7 @@ gwn_status gwn_build_bvh4_lbvh(gwn_geometry_accessor<Real, Index>& accessor,
             parent_nodes_span},
         stream);
     if (!status.is_ok()) {
-      detail::gwn_release_bvh(accessor.bvh, stream);
+      detail::gwn_release_bvh_accessor(bvh, stream);
       return status;
     }
 
@@ -437,9 +440,9 @@ gwn_status gwn_build_bvh4_lbvh(gwn_geometry_accessor<Real, Index>& accessor,
   }
 
   if (levels_bottom.empty()) {
-    accessor.bvh.root_kind = gwn_bvh_child_kind::k_leaf;
-    accessor.bvh.root_index = 0;
-    accessor.bvh.root_count = static_cast<Index>(primitive_count);
+    bvh.root_kind = gwn_bvh_child_kind::k_leaf;
+    bvh.root_index = 0;
+    bvh.root_count = static_cast<Index>(primitive_count);
     return gwn_status::ok();
   }
 
@@ -454,15 +457,14 @@ gwn_status gwn_build_bvh4_lbvh(gwn_geometry_accessor<Real, Index>& accessor,
     total_node_count += level_node_counts[level];
   }
 
-  status =
-      detail::gwn_allocate_span(accessor.bvh.nodes, total_node_count, stream);
+  status = detail::gwn_allocate_span(bvh.nodes, total_node_count, stream);
   if (!status.is_ok()) {
-    detail::gwn_release_bvh(accessor.bvh, stream);
+    detail::gwn_release_bvh_accessor(bvh, stream);
     return status;
   }
 
   gwn_bvh4_node_soa<Real, Index>* final_nodes =
-      const_cast<gwn_bvh4_node_soa<Real, Index>*>(accessor.bvh.nodes.data());
+      const_cast<gwn_bvh4_node_soa<Real, Index>*>(bvh.nodes.data());
   auto final_nodes_span = cuda::std::span<gwn_bvh4_node_soa<Real, Index>>(
       final_nodes, total_node_count);
   for (std::size_t level = 0; level < level_count; ++level) {
@@ -473,7 +475,7 @@ gwn_status gwn_build_bvh4_lbvh(gwn_geometry_accessor<Real, Index>& accessor,
         level_node_counts[level] * sizeof(gwn_bvh4_node_soa<Real, Index>),
         cudaMemcpyDeviceToDevice, stream));
     if (!status.is_ok()) {
-      detail::gwn_release_bvh(accessor.bvh, stream);
+      detail::gwn_release_bvh_accessor(bvh, stream);
       return status;
     }
   }
@@ -487,20 +489,20 @@ gwn_status gwn_build_bvh4_lbvh(gwn_geometry_accessor<Real, Index>& accessor,
             static_cast<Index>(level_offsets[level + 1])},
         stream);
     if (!status.is_ok()) {
-      detail::gwn_release_bvh(accessor.bvh, stream);
+      detail::gwn_release_bvh_accessor(bvh, stream);
       return status;
     }
   }
 
   status = gwn_cuda_to_status(cudaStreamSynchronize(stream));
   if (!status.is_ok()) {
-    detail::gwn_release_bvh(accessor.bvh, stream);
+    detail::gwn_release_bvh_accessor(bvh, stream);
     return status;
   }
 
-  accessor.bvh.root_kind = gwn_bvh_child_kind::k_internal;
-  accessor.bvh.root_index = 0;
-  accessor.bvh.root_count = 0;
+  bvh.root_kind = gwn_bvh_child_kind::k_internal;
+  bvh.root_index = 0;
+  bvh.root_count = 0;
   return gwn_status::ok();
 }
 

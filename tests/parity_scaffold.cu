@@ -122,13 +122,16 @@ TEST(smallgwn_parity_scaffold, bvh_exact_batch_matches_cpu_reference) {
   }
   ASSERT_TRUE(upload_status.is_ok()) << upload_status.message();
 
-  const gwn::gwn_status build_status = geometry.build_bvh();
+  gwn::gwn_bvh_object<float, std::int64_t> bvh;
+  const gwn::gwn_status build_status =
+      gwn::gwn_build_bvh4_lbvh<float, std::int64_t>(geometry.accessor(),
+                                                    bvh.accessor());
   ASSERT_TRUE(build_status.is_ok()) << build_status.message();
-  ASSERT_TRUE(geometry.has_bvh());
-  const auto& bvh = geometry.bvh_accessor();
-  EXPECT_TRUE(bvh.is_valid());
-  EXPECT_EQ(bvh.root_kind, gwn::gwn_bvh_child_kind::k_internal);
-  EXPECT_EQ(bvh.primitive_indices.size(), tri_i0.size());
+  ASSERT_TRUE(bvh.has_bvh());
+  const auto& bvh_accessor = bvh.accessor();
+  EXPECT_TRUE(bvh_accessor.is_valid());
+  EXPECT_EQ(bvh_accessor.root_kind, gwn::gwn_bvh_child_kind::k_internal);
+  EXPECT_EQ(bvh_accessor.primitive_indices.size(), tri_i0.size());
 
   float* d_query_x = nullptr;
   float* d_query_y = nullptr;
@@ -171,7 +174,7 @@ TEST(smallgwn_parity_scaffold, bvh_exact_batch_matches_cpu_reference) {
 
   const gwn::gwn_status bvh_query_status =
       gwn::gwn_compute_winding_number_batch_bvh_exact<float, std::int64_t>(
-          geometry.accessor(),
+          geometry.accessor(), bvh.accessor(),
           cuda::std::span<const float>(d_query_x, query_x.size()),
           cuda::std::span<const float>(d_query_y, query_y.size()),
           cuda::std::span<const float>(d_query_z, query_z.size()),
