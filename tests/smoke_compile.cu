@@ -34,5 +34,17 @@ int main() {
         gwn::gwn_compute_winding_number_batch_bvh_exact<real_type, index_type>(
             accessor, bvh, query_x, query_y, query_z, output
         );
-    return bvh_missing_result.is_ok() ? 1 : 0;
+    if (bvh_missing_result.is_ok())
+        return 1;
+
+    gwn::gwn_status const taylor_build_result =
+        gwn::gwn_build_bvh4_lbvh_taylor<0, real_type, index_type>(accessor, bvh);
+    if (!taylor_build_result.is_ok())
+        return 1;
+
+    gwn::gwn_status const taylor_query_missing_result =
+        gwn::gwn_compute_winding_number_batch_bvh_taylor<0, real_type, index_type>(
+            accessor, bvh, query_x, query_y, query_z, output
+        );
+    return taylor_query_missing_result.is_ok() ? 1 : 0;
 }

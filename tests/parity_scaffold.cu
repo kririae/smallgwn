@@ -199,3 +199,145 @@ TEST(smallgwn_parity_scaffold, bvh_exact_batch_matches_cpu_reference) {
     for (std::size_t query_id = 0; query_id < query_x.size(); ++query_id)
         EXPECT_NEAR(gpu_output[query_id], reference_output[query_id], k_epsilon);
 }
+
+TEST(smallgwn_parity_scaffold, bvh_taylor_orders_match_reference_for_far_queries) {
+    constexpr float k_order0_epsilon = 3e-2f;
+    constexpr float k_order1_epsilon = 1e-2f;
+    constexpr float k_accuracy_scale = 2.0f;
+
+    std::array<float, 6> const vertex_x{1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+    std::array<float, 6> const vertex_y{0.0f, 0.0f, 1.0f, -1.0f, 0.0f, 0.0f};
+    std::array<float, 6> const vertex_z{0.0f, 0.0f, 0.0f, 0.0f, 1.0f, -1.0f};
+
+    std::array<std::int64_t, 8> const tri_i0{0, 2, 1, 3, 2, 1, 3, 0};
+    std::array<std::int64_t, 8> const tri_i1{2, 1, 3, 0, 0, 2, 1, 3};
+    std::array<std::int64_t, 8> const tri_i2{4, 4, 4, 4, 5, 5, 5, 5};
+
+    std::array<float, 4> const query_x{3.5f, -3.0f, 0.0f, 0.0f};
+    std::array<float, 4> const query_y{0.0f, 0.0f, 3.5f, -3.0f};
+    std::array<float, 4> const query_z{0.0f, 0.0f, 0.0f, 0.0f};
+
+    std::vector<float> reference_output(query_x.size(), 0.0f);
+    gwn::gwn_status const reference_status =
+        gwn::tests::reference_winding_number_batch<float, std::int64_t>(
+            std::span<float const>(vertex_x.data(), vertex_x.size()),
+            std::span<float const>(vertex_y.data(), vertex_y.size()),
+            std::span<float const>(vertex_z.data(), vertex_z.size()),
+            std::span<std::int64_t const>(tri_i0.data(), tri_i0.size()),
+            std::span<std::int64_t const>(tri_i1.data(), tri_i1.size()),
+            std::span<std::int64_t const>(tri_i2.data(), tri_i2.size()),
+            std::span<float const>(query_x.data(), query_x.size()),
+            std::span<float const>(query_y.data(), query_y.size()),
+            std::span<float const>(query_z.data(), query_z.size()),
+            std::span<float>(reference_output.data(), reference_output.size())
+        );
+    ASSERT_TRUE(reference_status.is_ok()) << reference_status.message();
+
+    gwn::gwn_geometry_object<float, std::int64_t> geometry;
+    gwn::gwn_status const upload_status = geometry.upload(
+        cuda::std::span<float const>(vertex_x.data(), vertex_x.size()),
+        cuda::std::span<float const>(vertex_y.data(), vertex_y.size()),
+        cuda::std::span<float const>(vertex_z.data(), vertex_z.size()),
+        cuda::std::span<std::int64_t const>(tri_i0.data(), tri_i0.size()),
+        cuda::std::span<std::int64_t const>(tri_i1.data(), tri_i1.size()),
+        cuda::std::span<std::int64_t const>(tri_i2.data(), tri_i2.size())
+    );
+    if (!upload_status.is_ok() && upload_status.error() == gwn::gwn_error::cuda_runtime_error &&
+        is_cuda_runtime_unavailable_message(upload_status.message())) {
+        GTEST_SKIP() << "CUDA runtime unavailable: " << upload_status.message();
+    }
+    ASSERT_TRUE(upload_status.is_ok()) << upload_status.message();
+
+    gwn::gwn_bvh_object<float, std::int64_t> bvh;
+    gwn::gwn_status const build_status = gwn::gwn_build_bvh4_lbvh_taylor<0, float, std::int64_t>(
+        geometry.accessor(), bvh.accessor()
+    );
+    ASSERT_TRUE(build_status.is_ok()) << build_status.message();
+    ASSERT_TRUE(bvh.accessor().template has_taylor_order<0>());
+
+    float *d_query_x = nullptr;
+    float *d_query_y = nullptr;
+    float *d_query_z = nullptr;
+    float *d_output = nullptr;
+    std::size_t const query_bytes = query_x.size() * sizeof(float);
+    cudaError_t result = cudaMalloc(&d_query_x, query_bytes);
+    if (is_cuda_runtime_unavailable(result))
+        GTEST_SKIP() << "CUDA runtime unavailable: " << cudaGetErrorString(result);
+    ASSERT_EQ(cudaSuccess, result);
+    ASSERT_EQ(cudaSuccess, cudaMalloc(&d_query_y, query_bytes));
+    ASSERT_EQ(cudaSuccess, cudaMalloc(&d_query_z, query_bytes));
+    ASSERT_EQ(cudaSuccess, cudaMalloc(&d_output, query_bytes));
+    auto const cleanup = [&]() {
+        if (d_output != nullptr) {
+            (void)cudaFree(d_output);
+            d_output = nullptr;
+        }
+        if (d_query_z != nullptr) {
+            (void)cudaFree(d_query_z);
+            d_query_z = nullptr;
+        }
+        if (d_query_y != nullptr) {
+            (void)cudaFree(d_query_y);
+            d_query_y = nullptr;
+        }
+        if (d_query_x != nullptr) {
+            (void)cudaFree(d_query_x);
+            d_query_x = nullptr;
+        }
+    };
+
+    ASSERT_EQ(
+        cudaSuccess, cudaMemcpy(d_query_x, query_x.data(), query_bytes, cudaMemcpyHostToDevice)
+    );
+    ASSERT_EQ(
+        cudaSuccess, cudaMemcpy(d_query_y, query_y.data(), query_bytes, cudaMemcpyHostToDevice)
+    );
+    ASSERT_EQ(
+        cudaSuccess, cudaMemcpy(d_query_z, query_z.data(), query_bytes, cudaMemcpyHostToDevice)
+    );
+
+    gwn::gwn_status const order0_query_status =
+        gwn::gwn_compute_winding_number_batch_bvh_taylor<0, float, std::int64_t>(
+            geometry.accessor(), bvh.accessor(),
+            cuda::std::span<float const>(d_query_x, query_x.size()),
+            cuda::std::span<float const>(d_query_y, query_y.size()),
+            cuda::std::span<float const>(d_query_z, query_z.size()),
+            cuda::std::span<float>(d_output, query_x.size()), k_accuracy_scale
+        );
+    ASSERT_TRUE(order0_query_status.is_ok()) << order0_query_status.message();
+    ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+
+    std::vector<float> order0_output(query_x.size(), 0.0f);
+    ASSERT_EQ(
+        cudaSuccess, cudaMemcpy(order0_output.data(), d_output, query_bytes, cudaMemcpyDeviceToHost)
+    );
+
+    gwn::gwn_status const build_order1_status =
+        gwn::gwn_build_bvh4_lbvh_taylor<1, float, std::int64_t>(
+            geometry.accessor(), bvh.accessor()
+        );
+    ASSERT_TRUE(build_order1_status.is_ok()) << build_order1_status.message();
+    ASSERT_TRUE(bvh.accessor().template has_taylor_order<1>());
+
+    gwn::gwn_status const order1_query_status =
+        gwn::gwn_compute_winding_number_batch_bvh_taylor<1, float, std::int64_t>(
+            geometry.accessor(), bvh.accessor(),
+            cuda::std::span<float const>(d_query_x, query_x.size()),
+            cuda::std::span<float const>(d_query_y, query_y.size()),
+            cuda::std::span<float const>(d_query_z, query_z.size()),
+            cuda::std::span<float>(d_output, query_x.size()), k_accuracy_scale
+        );
+    ASSERT_TRUE(order1_query_status.is_ok()) << order1_query_status.message();
+    ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+
+    std::vector<float> order1_output(query_x.size(), 0.0f);
+    ASSERT_EQ(
+        cudaSuccess, cudaMemcpy(order1_output.data(), d_output, query_bytes, cudaMemcpyDeviceToHost)
+    );
+    cleanup();
+
+    for (std::size_t query_id = 0; query_id < query_x.size(); ++query_id) {
+        EXPECT_NEAR(order0_output[query_id], reference_output[query_id], k_order0_epsilon);
+        EXPECT_NEAR(order1_output[query_id], reference_output[query_id], k_order1_epsilon);
+    }
+}

@@ -216,6 +216,187 @@ template <class Real, class Index> struct gwn_winding_number_batch_bvh_exact_fun
     }
 };
 
+template <int Order, class Real, class Index> struct gwn_taylor_nodes_getter;
+
+template <class Real, class Index> struct gwn_taylor_nodes_getter<0, Real, Index> {
+    using span_type = cuda::std::span<gwn_bvh4_taylor_node_soa<0, Real> const>;
+
+    [[nodiscard]] __host__ __device__ static span_type
+    get(gwn_bvh_accessor<Real, Index> const &bvh) {
+        return bvh.taylor_order0_nodes;
+    }
+};
+
+template <class Real, class Index> struct gwn_taylor_nodes_getter<1, Real, Index> {
+    using span_type = cuda::std::span<gwn_bvh4_taylor_node_soa<1, Real> const>;
+
+    [[nodiscard]] __host__ __device__ static span_type
+    get(gwn_bvh_accessor<Real, Index> const &bvh) {
+        return bvh.taylor_order1_nodes;
+    }
+};
+
+template <class Real, class Index> struct gwn_taylor_nodes_getter<2, Real, Index> {
+    using span_type = cuda::std::span<gwn_bvh4_taylor_node_soa<2, Real> const>;
+
+    [[nodiscard]] __host__ __device__ static span_type
+    get(gwn_bvh_accessor<Real, Index> const &bvh) {
+        return bvh.taylor_order2_nodes;
+    }
+};
+
+template <int Order, class Real, class Index>
+[[nodiscard]] __host__ __device__ typename gwn_taylor_nodes_getter<Order, Real, Index>::span_type
+gwn_get_taylor_nodes(gwn_bvh_accessor<Real, Index> const &bvh) {
+    return gwn_taylor_nodes_getter<Order, Real, Index>::get(bvh);
+}
+
+template <int Order, class Real, class Index>
+__device__ inline Real gwn_winding_number_point_bvh_taylor(
+    gwn_geometry_accessor<Real, Index> const &geometry, gwn_bvh_accessor<Real, Index> const &bvh,
+    Real const qx, Real const qy, Real const qz, Real const accuracy_scale
+) noexcept {
+    static_assert(
+        Order == 0 || Order == 1,
+        "gwn_winding_number_point_bvh_taylor currently supports Order 0 and Order 1."
+    );
+
+    if (!geometry.is_valid() || !bvh.is_valid() || !bvh.template has_taylor_order<Order>())
+        return gwn_winding_number_point_bvh_exact(geometry, bvh, qx, qy, qz);
+
+    auto const taylor_nodes = gwn_get_taylor_nodes<Order>(bvh);
+    if (taylor_nodes.size() != bvh.nodes.size())
+        return gwn_winding_number_point_bvh_exact(geometry, bvh, qx, qy, qz);
+
+    constexpr Real k_pi = Real(3.141592653589793238462643383279502884L);
+    constexpr int k_stack_capacity = 128;
+    Index stack[k_stack_capacity];
+    int stack_size = 0;
+
+    Real omega_sum = Real(0);
+    Real const accuracy_scale2 = accuracy_scale * accuracy_scale;
+    if (bvh.root_kind == gwn_bvh_child_kind::k_leaf) {
+        for (Index primitive_offset = 0; primitive_offset < bvh.root_count; ++primitive_offset) {
+            Index const primitive_index =
+                bvh.primitive_indices[static_cast<std::size_t>(bvh.root_index + primitive_offset)];
+            omega_sum += gwn_triangle_solid_angle_from_primitive<Real, Index>(
+                geometry, primitive_index, gwn_vec3<Real>(qx, qy, qz)
+            );
+        }
+        return omega_sum / (Real(4) * k_pi);
+    }
+
+    if (bvh.root_kind != gwn_bvh_child_kind::k_internal)
+        return Real(0);
+
+    stack[stack_size++] = bvh.root_index;
+    while (stack_size > 0) {
+        Index const node_index = stack[--stack_size];
+        if (node_index < Index(0) || static_cast<std::size_t>(node_index) >= bvh.nodes.size())
+            continue;
+
+        gwn_bvh4_node_soa<Real, Index> const &node =
+            bvh.nodes[static_cast<std::size_t>(node_index)];
+        auto const &taylor = taylor_nodes[static_cast<std::size_t>(node_index)];
+        GWN_PRAGMA_UNROLL
+        for (int child_slot = 0; child_slot < 4; ++child_slot) {
+            auto const child_kind = static_cast<gwn_bvh_child_kind>(node.child_kind[child_slot]);
+            if (child_kind == gwn_bvh_child_kind::k_invalid)
+                continue;
+
+            if (child_kind != gwn_bvh_child_kind::k_internal &&
+                child_kind != gwn_bvh_child_kind::k_leaf) {
+                continue;
+            }
+
+            Real const qrx = qx - taylor.child_average_x[child_slot];
+            Real const qry = qy - taylor.child_average_y[child_slot];
+            Real const qrz = qz - taylor.child_average_z[child_slot];
+            Real const qlength2 = qrx * qrx + qry * qry + qrz * qrz;
+
+            bool descend = !(qlength2 > Real(0));
+            if (!descend)
+                descend = qlength2 <= taylor.child_max_p_dist2[child_slot] * accuracy_scale2;
+
+            if (!descend) {
+                Real const qlength_m2 = Real(1) / qlength2;
+                Real const qlength_m1 = sqrt(qlength_m2);
+
+                Real const qnx = qrx * qlength_m1;
+                Real const qny = qry * qlength_m1;
+                Real const qnz = qrz * qlength_m1;
+                Real omega_approx = -qlength_m2 * (qnx * taylor.child_n_x[child_slot] +
+                                                   qny * taylor.child_n_y[child_slot] +
+                                                   qnz * taylor.child_n_z[child_slot]);
+
+                if constexpr (Order >= 1) {
+                    Real const qxx = qnx * qnx;
+                    Real const qyy = qny * qny;
+                    Real const qzz = qnz * qnz;
+                    Real const omega_1 =
+                        qlength_m2 * qlength_m1 *
+                        ((taylor.child_nij_xx[child_slot] + taylor.child_nij_yy[child_slot] +
+                          taylor.child_nij_zz[child_slot]) -
+                         Real(3) * (qxx * taylor.child_nij_xx[child_slot] +
+                                    qyy * taylor.child_nij_yy[child_slot] +
+                                    qzz * taylor.child_nij_zz[child_slot] +
+                                    qnx * qny * taylor.child_nxy_nyx[child_slot] +
+                                    qnx * qnz * taylor.child_nzx_nxz[child_slot] +
+                                    qny * qnz * taylor.child_nyz_nzy[child_slot]));
+                    omega_approx += omega_1;
+                }
+
+                if (isfinite(omega_approx)) {
+                    omega_sum += omega_approx;
+                    continue;
+                }
+                descend = true;
+            }
+
+            if (child_kind == gwn_bvh_child_kind::k_internal) {
+                if (stack_size < k_stack_capacity)
+                    stack[stack_size++] = node.child_index[child_slot];
+                continue;
+            }
+
+            Index const begin = node.child_index[child_slot];
+            Index const count = node.child_count[child_slot];
+            gwn_vec3<Real> const query(qx, qy, qz);
+            for (Index primitive_offset = 0; primitive_offset < count; ++primitive_offset) {
+                Index const sorted_primitive_index = begin + primitive_offset;
+                if (sorted_primitive_index < Index(0) ||
+                    static_cast<std::size_t>(sorted_primitive_index) >=
+                        bvh.primitive_indices.size()) {
+                    continue;
+                }
+                Index const primitive_index =
+                    bvh.primitive_indices[static_cast<std::size_t>(sorted_primitive_index)];
+                omega_sum += gwn_triangle_solid_angle_from_primitive<Real, Index>(
+                    geometry, primitive_index, query
+                );
+            }
+        }
+    }
+
+    return omega_sum / (Real(4) * k_pi);
+}
+
+template <int Order, class Real, class Index> struct gwn_winding_number_batch_bvh_taylor_functor {
+    gwn_geometry_accessor<Real, Index> geometry{};
+    gwn_bvh_accessor<Real, Index> bvh{};
+    cuda::std::span<Real const> query_x{};
+    cuda::std::span<Real const> query_y{};
+    cuda::std::span<Real const> query_z{};
+    cuda::std::span<Real> output{};
+    Real accuracy_scale{};
+
+    __device__ void operator()(std::size_t const query_id) const {
+        output[query_id] = gwn_winding_number_point_bvh_taylor<Order>(
+            geometry, bvh, query_x[query_id], query_y[query_id], query_z[query_id], accuracy_scale
+        );
+    }
+};
+
 template <class Real, class Index>
 [[nodiscard]] inline gwn_winding_number_batch_functor<Real, Index>
 gwn_make_winding_number_batch_functor(
@@ -237,6 +418,19 @@ gwn_make_winding_number_batch_bvh_exact_functor(
 ) {
     return gwn_winding_number_batch_bvh_exact_functor<Real, Index>{geometry, bvh,     query_x,
                                                                    query_y,  query_z, output};
+}
+
+template <int Order, class Real, class Index>
+[[nodiscard]] inline gwn_winding_number_batch_bvh_taylor_functor<Order, Real, Index>
+gwn_make_winding_number_batch_bvh_taylor_functor(
+    gwn_geometry_accessor<Real, Index> const &geometry, gwn_bvh_accessor<Real, Index> const &bvh,
+    cuda::std::span<Real const> const query_x, cuda::std::span<Real const> const query_y,
+    cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output,
+    Real const accuracy_scale
+) {
+    return gwn_winding_number_batch_bvh_taylor_functor<Order, Real, Index>{
+        geometry, bvh, query_x, query_y, query_z, output, accuracy_scale
+    };
 }
 
 } // namespace detail
@@ -304,6 +498,47 @@ gwn_status gwn_compute_winding_number_batch_bvh_exact(
         output.size(),
         detail::gwn_make_winding_number_batch_bvh_exact_functor<Real, Index>(
             geometry, bvh, query_x, query_y, query_z, output
+        ),
+        stream
+    );
+}
+
+template <int Order, class Real, class Index = std::int64_t>
+gwn_status gwn_compute_winding_number_batch_bvh_taylor(
+    gwn_geometry_accessor<Real, Index> const &geometry, gwn_bvh_accessor<Real, Index> const &bvh,
+    cuda::std::span<Real const> const query_x, cuda::std::span<Real const> const query_y,
+    cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output,
+    Real const accuracy_scale = Real(2), cudaStream_t const stream = gwn_default_stream()
+) noexcept {
+    static_assert(
+        Order == 0 || Order == 1,
+        "gwn_compute_winding_number_batch_bvh_taylor currently supports Order 0 and Order 1."
+    );
+
+    if (!geometry.is_valid())
+        return gwn_status::invalid_argument("Geometry accessor contains mismatched span lengths.");
+    if (!bvh.is_valid())
+        return gwn_status::invalid_argument("BVH accessor is invalid.");
+    if (!bvh.template has_taylor_order<Order>())
+        return gwn_status::invalid_argument("BVH accessor is missing requested Taylor-order data.");
+    if (query_x.size() != query_y.size() || query_x.size() != query_z.size())
+        return gwn_status::invalid_argument("Query SoA spans must have identical lengths.");
+    if (query_x.size() != output.size())
+        return gwn_status::invalid_argument("Output span size must match query count.");
+    if (!gwn_span_has_storage(query_x) || !gwn_span_has_storage(query_y) ||
+        !gwn_span_has_storage(query_z) || !gwn_span_has_storage(output)) {
+        return gwn_status::invalid_argument(
+            "Query/output spans must use non-null storage when non-empty."
+        );
+    }
+    if (output.empty())
+        return gwn_status::ok();
+
+    constexpr int k_block_size = detail::k_gwn_default_block_size;
+    return detail::gwn_launch_linear_kernel<k_block_size>(
+        output.size(),
+        detail::gwn_make_winding_number_batch_bvh_taylor_functor<Order, Real, Index>(
+            geometry, bvh, query_x, query_y, query_z, output, accuracy_scale
         ),
         stream
     );

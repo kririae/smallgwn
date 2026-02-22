@@ -4,9 +4,12 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <functional>
+#include <limits>
 #include <vector>
 
 #include <thrust/device_ptr.h>
@@ -465,6 +468,458 @@ gwn_status gwn_build_bvh4_lbvh(
     return gwn_status::internal_error("Unhandled std::exception in gwn_build_bvh4_lbvh.");
 } catch (...) {
     return gwn_status::internal_error("Unhandled unknown exception in gwn_build_bvh4_lbvh.");
+}
+
+namespace detail {
+
+template <int Order, class Real> struct gwn_host_taylor_moment;
+
+template <class Real> struct gwn_host_taylor_moment<0, Real> {
+    Real area = Real(0);
+    Real area_p_x = Real(0);
+    Real area_p_y = Real(0);
+    Real area_p_z = Real(0);
+    Real average_x = Real(0);
+    Real average_y = Real(0);
+    Real average_z = Real(0);
+    Real n_x = Real(0);
+    Real n_y = Real(0);
+    Real n_z = Real(0);
+    Real max_p_dist2 = Real(0);
+};
+
+template <class Real> struct gwn_host_taylor_moment<1, Real> : gwn_host_taylor_moment<0, Real> {
+    Real nij_xx = Real(0);
+    Real nij_yy = Real(0);
+    Real nij_zz = Real(0);
+    Real nxy = Real(0);
+    Real nyx = Real(0);
+    Real nyz = Real(0);
+    Real nzy = Real(0);
+    Real nzx = Real(0);
+    Real nxz = Real(0);
+};
+
+template <class Real>
+[[nodiscard]] inline Real gwn_bounds_max_p_dist2(
+    gwn_aabb<Real> const &bounds, Real const average_x, Real const average_y, Real const average_z
+) {
+    Real const dx = std::max(average_x - bounds.min_x, bounds.max_x - average_x);
+    Real const dy = std::max(average_y - bounds.min_y, bounds.max_y - average_y);
+    Real const dz = std::max(average_z - bounds.min_z, bounds.max_z - average_z);
+    return dx * dx + dy * dy + dz * dz;
+}
+
+template <int Order, class Real>
+inline void
+gwn_zero_taylor_child(gwn_bvh4_taylor_node_soa<Order, Real> &node, int const child_slot) {
+    node.child_max_p_dist2[child_slot] = Real(0);
+    node.child_average_x[child_slot] = Real(0);
+    node.child_average_y[child_slot] = Real(0);
+    node.child_average_z[child_slot] = Real(0);
+    node.child_n_x[child_slot] = Real(0);
+    node.child_n_y[child_slot] = Real(0);
+    node.child_n_z[child_slot] = Real(0);
+    if constexpr (Order >= 1) {
+        node.child_nij_xx[child_slot] = Real(0);
+        node.child_nij_yy[child_slot] = Real(0);
+        node.child_nij_zz[child_slot] = Real(0);
+        node.child_nxy_nyx[child_slot] = Real(0);
+        node.child_nyz_nzy[child_slot] = Real(0);
+        node.child_nzx_nxz[child_slot] = Real(0);
+    }
+}
+
+template <int Order, class Real>
+inline void gwn_write_taylor_child(
+    gwn_bvh4_taylor_node_soa<Order, Real> &node, int const child_slot,
+    gwn_host_taylor_moment<Order, Real> const &moment
+) {
+    node.child_max_p_dist2[child_slot] = moment.max_p_dist2;
+    node.child_average_x[child_slot] = moment.average_x;
+    node.child_average_y[child_slot] = moment.average_y;
+    node.child_average_z[child_slot] = moment.average_z;
+    node.child_n_x[child_slot] = moment.n_x;
+    node.child_n_y[child_slot] = moment.n_y;
+    node.child_n_z[child_slot] = moment.n_z;
+    if constexpr (Order >= 1) {
+        node.child_nij_xx[child_slot] = moment.nij_xx;
+        node.child_nij_yy[child_slot] = moment.nij_yy;
+        node.child_nij_zz[child_slot] = moment.nij_zz;
+        node.child_nxy_nyx[child_slot] = moment.nxy + moment.nyx;
+        node.child_nyz_nzy[child_slot] = moment.nyz + moment.nzy;
+        node.child_nzx_nxz[child_slot] = moment.nzx + moment.nxz;
+    }
+}
+
+template <class T>
+gwn_status gwn_copy_device_span_to_host(
+    std::vector<T> &host, cuda::std::span<T const> const device, cudaStream_t const stream
+) noexcept {
+    host.resize(device.size());
+    if (host.empty())
+        return gwn_status::ok();
+    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemcpyAsync(
+        host.data(), device.data(), host.size() * sizeof(T), cudaMemcpyDeviceToHost, stream
+    )));
+    return gwn_cuda_to_status(cudaStreamSynchronize(stream));
+}
+
+template <class T>
+gwn_status gwn_upload_host_to_device_span(
+    cuda::std::span<T const> &device, std::vector<T> const &host, cudaStream_t const stream
+) noexcept {
+    GWN_RETURN_ON_ERROR(gwn_allocate_span(device, host.size(), stream));
+    if (host.empty())
+        return gwn_status::ok();
+
+    auto cleanup_device = gwn_make_scope_exit([&]() noexcept {
+        (void)gwn_cuda_free(const_cast<T *>(device.data()), stream);
+        device = {};
+    });
+    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemcpyAsync(
+        const_cast<T *>(device.data()), host.data(), host.size() * sizeof(T),
+        cudaMemcpyHostToDevice, stream
+    )));
+    cleanup_device.release();
+    return gwn_status::ok();
+}
+
+} // namespace detail
+
+template <int Order, class Real, class Index>
+gwn_status gwn_build_bvh4_lbvh_taylor(
+    gwn_geometry_accessor<Real, Index> const &geometry, gwn_bvh_accessor<Real, Index> &bvh,
+    cudaStream_t const stream = gwn_default_stream()
+) noexcept try {
+    static_assert(
+        Order == 0 || Order == 1,
+        "gwn_build_bvh4_lbvh_taylor currently supports Order 0 and Order 1."
+    );
+
+    GWN_RETURN_ON_ERROR(gwn_build_bvh4_lbvh(geometry, bvh, stream));
+
+    detail::gwn_release_bvh_span(bvh.taylor_order2_nodes, stream);
+    detail::gwn_release_bvh_span(bvh.taylor_order1_nodes, stream);
+    detail::gwn_release_bvh_span(bvh.taylor_order0_nodes, stream);
+
+    if (!bvh.has_internal_root())
+        return gwn_status::ok();
+
+    using moment_type = detail::gwn_host_taylor_moment<Order, Real>;
+    using taylor_node_type = gwn_bvh4_taylor_node_soa<Order, Real>;
+
+    std::vector<Real> vertex_x{};
+    std::vector<Real> vertex_y{};
+    std::vector<Real> vertex_z{};
+    std::vector<Index> tri_i0{};
+    std::vector<Index> tri_i1{};
+    std::vector<Index> tri_i2{};
+    std::vector<Index> sorted_primitive_indices{};
+    std::vector<gwn_bvh4_node_soa<Real, Index>> host_nodes{};
+    GWN_RETURN_ON_ERROR(detail::gwn_copy_device_span_to_host(vertex_x, geometry.vertex_x, stream));
+    GWN_RETURN_ON_ERROR(detail::gwn_copy_device_span_to_host(vertex_y, geometry.vertex_y, stream));
+    GWN_RETURN_ON_ERROR(detail::gwn_copy_device_span_to_host(vertex_z, geometry.vertex_z, stream));
+    GWN_RETURN_ON_ERROR(detail::gwn_copy_device_span_to_host(tri_i0, geometry.tri_i0, stream));
+    GWN_RETURN_ON_ERROR(detail::gwn_copy_device_span_to_host(tri_i1, geometry.tri_i1, stream));
+    GWN_RETURN_ON_ERROR(detail::gwn_copy_device_span_to_host(tri_i2, geometry.tri_i2, stream));
+    GWN_RETURN_ON_ERROR(
+        detail::gwn_copy_device_span_to_host(
+            sorted_primitive_indices, bvh.primitive_indices, stream
+        )
+    );
+    GWN_RETURN_ON_ERROR(detail::gwn_copy_device_span_to_host(host_nodes, bvh.nodes, stream));
+
+    std::size_t const primitive_count = tri_i0.size();
+    std::vector<gwn_aabb<Real>> primitive_bounds(primitive_count);
+    std::vector<moment_type> primitive_moments(primitive_count);
+
+    auto const invalid_bounds =
+        gwn_aabb<Real>{Real(0), Real(0), Real(0), Real(0), Real(0), Real(0)};
+    for (std::size_t primitive_id = 0; primitive_id < primitive_count; ++primitive_id) {
+        moment_type moment{};
+        primitive_bounds[primitive_id] = invalid_bounds;
+
+        Index const ia = tri_i0[primitive_id];
+        Index const ib = tri_i1[primitive_id];
+        Index const ic = tri_i2[primitive_id];
+        if (ia < Index(0) || ib < Index(0) || ic < Index(0))
+            continue;
+
+        std::size_t const a_index = static_cast<std::size_t>(ia);
+        std::size_t const b_index = static_cast<std::size_t>(ib);
+        std::size_t const c_index = static_cast<std::size_t>(ic);
+        if (a_index >= vertex_x.size() || b_index >= vertex_x.size() || c_index >= vertex_x.size())
+            continue;
+
+        Real const ax = vertex_x[a_index];
+        Real const ay = vertex_y[a_index];
+        Real const az = vertex_z[a_index];
+        Real const bx = vertex_x[b_index];
+        Real const by = vertex_y[b_index];
+        Real const bz = vertex_z[b_index];
+        Real const cx = vertex_x[c_index];
+        Real const cy = vertex_y[c_index];
+        Real const cz = vertex_z[c_index];
+
+        gwn_aabb<Real> const bounds{
+            std::min(ax, std::min(bx, cx)), std::min(ay, std::min(by, cy)),
+            std::min(az, std::min(bz, cz)), std::max(ax, std::max(bx, cx)),
+            std::max(ay, std::max(by, cy)), std::max(az, std::max(bz, cz)),
+        };
+        primitive_bounds[primitive_id] = bounds;
+
+        Real const abx = bx - ax;
+        Real const aby = by - ay;
+        Real const abz = bz - az;
+        Real const acx = cx - ax;
+        Real const acy = cy - ay;
+        Real const acz = cz - az;
+
+        moment.n_x = Real(0.5) * (aby * acz - abz * acy);
+        moment.n_y = Real(0.5) * (abz * acx - abx * acz);
+        moment.n_z = Real(0.5) * (abx * acy - aby * acx);
+
+        Real const area2 =
+            moment.n_x * moment.n_x + moment.n_y * moment.n_y + moment.n_z * moment.n_z;
+        moment.area = std::sqrt(std::max(area2, Real(0)));
+        moment.average_x = (ax + bx + cx) / Real(3);
+        moment.average_y = (ay + by + cy) / Real(3);
+        moment.average_z = (az + bz + cz) / Real(3);
+        moment.area_p_x = moment.average_x * moment.area;
+        moment.area_p_y = moment.average_y * moment.area;
+        moment.area_p_z = moment.average_z * moment.area;
+        moment.max_p_dist2 = detail::gwn_bounds_max_p_dist2(
+            bounds, moment.average_x, moment.average_y, moment.average_z
+        );
+
+        primitive_moments[primitive_id] = moment;
+    }
+
+    auto compute_leaf_moment = [&](Index const begin_index, Index const count) {
+        moment_type leaf{};
+        bool has_primitive = false;
+        gwn_aabb<Real> leaf_bounds = invalid_bounds;
+
+        for (Index primitive_offset = 0; primitive_offset < count; ++primitive_offset) {
+            Index const sorted_slot = begin_index + primitive_offset;
+            if (sorted_slot < Index(0))
+                continue;
+            std::size_t const sorted_slot_u = static_cast<std::size_t>(sorted_slot);
+            if (sorted_slot_u >= sorted_primitive_indices.size())
+                continue;
+
+            Index const primitive_index = sorted_primitive_indices[sorted_slot_u];
+            if (primitive_index < Index(0))
+                continue;
+            std::size_t const primitive_index_u = static_cast<std::size_t>(primitive_index);
+            if (primitive_index_u >= primitive_moments.size())
+                continue;
+
+            moment_type const &primitive = primitive_moments[primitive_index_u];
+            gwn_aabb<Real> const &primitive_bounds_current = primitive_bounds[primitive_index_u];
+            if (!has_primitive) {
+                leaf_bounds = primitive_bounds_current;
+                has_primitive = true;
+            } else {
+                leaf_bounds = detail::gwn_aabb_union(leaf_bounds, primitive_bounds_current);
+            }
+
+            leaf.area += primitive.area;
+            leaf.area_p_x += primitive.area_p_x;
+            leaf.area_p_y += primitive.area_p_y;
+            leaf.area_p_z += primitive.area_p_z;
+            leaf.n_x += primitive.n_x;
+            leaf.n_y += primitive.n_y;
+            leaf.n_z += primitive.n_z;
+        }
+
+        if (!has_primitive)
+            return leaf;
+
+        if (leaf.area > Real(0)) {
+            leaf.average_x = leaf.area_p_x / leaf.area;
+            leaf.average_y = leaf.area_p_y / leaf.area;
+            leaf.average_z = leaf.area_p_z / leaf.area;
+        } else {
+            leaf.average_x = (leaf_bounds.min_x + leaf_bounds.max_x) * Real(0.5);
+            leaf.average_y = (leaf_bounds.min_y + leaf_bounds.max_y) * Real(0.5);
+            leaf.average_z = (leaf_bounds.min_z + leaf_bounds.max_z) * Real(0.5);
+        }
+
+        leaf.max_p_dist2 = detail::gwn_bounds_max_p_dist2(
+            leaf_bounds, leaf.average_x, leaf.average_y, leaf.average_z
+        );
+
+        if constexpr (Order >= 1) {
+            for (Index primitive_offset = 0; primitive_offset < count; ++primitive_offset) {
+                Index const sorted_slot = begin_index + primitive_offset;
+                if (sorted_slot < Index(0))
+                    continue;
+                std::size_t const sorted_slot_u = static_cast<std::size_t>(sorted_slot);
+                if (sorted_slot_u >= sorted_primitive_indices.size())
+                    continue;
+
+                Index const primitive_index = sorted_primitive_indices[sorted_slot_u];
+                if (primitive_index < Index(0))
+                    continue;
+                std::size_t const primitive_index_u = static_cast<std::size_t>(primitive_index);
+                if (primitive_index_u >= primitive_moments.size())
+                    continue;
+
+                moment_type const &primitive = primitive_moments[primitive_index_u];
+                Real const dx = primitive.average_x - leaf.average_x;
+                Real const dy = primitive.average_y - leaf.average_y;
+                Real const dz = primitive.average_z - leaf.average_z;
+
+                leaf.nij_xx += primitive.nij_xx + primitive.n_x * dx;
+                leaf.nij_yy += primitive.nij_yy + primitive.n_y * dy;
+                leaf.nij_zz += primitive.nij_zz + primitive.n_z * dz;
+                leaf.nxy += primitive.nxy + primitive.n_x * dy;
+                leaf.nyx += primitive.nyx + primitive.n_y * dx;
+                leaf.nyz += primitive.nyz + primitive.n_y * dz;
+                leaf.nzy += primitive.nzy + primitive.n_z * dy;
+                leaf.nzx += primitive.nzx + primitive.n_z * dx;
+                leaf.nxz += primitive.nxz + primitive.n_x * dz;
+            }
+        }
+
+        return leaf;
+    };
+
+    std::vector<taylor_node_type> host_taylor_nodes(host_nodes.size());
+    std::vector<moment_type> node_moments(host_nodes.size());
+    std::vector<std::uint8_t> node_ready(host_nodes.size(), std::uint8_t(0));
+
+    std::function<moment_type(Index)> compute_internal_moment;
+    compute_internal_moment = [&](Index const node_index) -> moment_type {
+        if (node_index < Index(0))
+            return moment_type{};
+
+        std::size_t const node_index_u = static_cast<std::size_t>(node_index);
+        if (node_index_u >= host_nodes.size())
+            return moment_type{};
+        if (node_ready[node_index_u] != 0)
+            return node_moments[node_index_u];
+
+        gwn_bvh4_node_soa<Real, Index> const &node = host_nodes[node_index_u];
+        taylor_node_type &taylor_node = host_taylor_nodes[node_index_u];
+
+        std::array<moment_type, 4> child_moments{};
+        std::array<gwn_aabb<Real>, 4> child_bounds{};
+        std::array<bool, 4> child_valid{};
+        child_valid.fill(false);
+
+        bool has_child = false;
+        gwn_aabb<Real> merged_bounds = invalid_bounds;
+        moment_type parent{};
+
+        for (int child_slot = 0; child_slot < 4; ++child_slot) {
+            auto const child_kind = static_cast<gwn_bvh_child_kind>(node.child_kind[child_slot]);
+            if (child_kind == gwn_bvh_child_kind::k_invalid) {
+                detail::gwn_zero_taylor_child<Order>(taylor_node, child_slot);
+                continue;
+            }
+
+            gwn_aabb<Real> const bounds{
+                node.child_min_x[child_slot], node.child_min_y[child_slot],
+                node.child_min_z[child_slot], node.child_max_x[child_slot],
+                node.child_max_y[child_slot], node.child_max_z[child_slot],
+            };
+            child_bounds[child_slot] = bounds;
+
+            moment_type child_moment{};
+            if (child_kind == gwn_bvh_child_kind::k_internal) {
+                child_moment = compute_internal_moment(node.child_index[child_slot]);
+            } else if (child_kind == gwn_bvh_child_kind::k_leaf) {
+                child_moment =
+                    compute_leaf_moment(node.child_index[child_slot], node.child_count[child_slot]);
+            } else {
+                detail::gwn_zero_taylor_child<Order>(taylor_node, child_slot);
+                continue;
+            }
+
+            child_moments[child_slot] = child_moment;
+            child_valid[child_slot] = true;
+            detail::gwn_write_taylor_child<Order>(taylor_node, child_slot, child_moment);
+
+            if (!has_child) {
+                merged_bounds = bounds;
+                has_child = true;
+            } else {
+                merged_bounds = detail::gwn_aabb_union(merged_bounds, bounds);
+            }
+
+            parent.area += child_moment.area;
+            parent.area_p_x += child_moment.area_p_x;
+            parent.area_p_y += child_moment.area_p_y;
+            parent.area_p_z += child_moment.area_p_z;
+            parent.n_x += child_moment.n_x;
+            parent.n_y += child_moment.n_y;
+            parent.n_z += child_moment.n_z;
+        }
+
+        if (!has_child) {
+            node_moments[node_index_u] = parent;
+            node_ready[node_index_u] = std::uint8_t(1);
+            return parent;
+        }
+
+        if (parent.area > Real(0)) {
+            parent.average_x = parent.area_p_x / parent.area;
+            parent.average_y = parent.area_p_y / parent.area;
+            parent.average_z = parent.area_p_z / parent.area;
+        } else {
+            parent.average_x = (merged_bounds.min_x + merged_bounds.max_x) * Real(0.5);
+            parent.average_y = (merged_bounds.min_y + merged_bounds.max_y) * Real(0.5);
+            parent.average_z = (merged_bounds.min_z + merged_bounds.max_z) * Real(0.5);
+        }
+
+        parent.max_p_dist2 = detail::gwn_bounds_max_p_dist2(
+            merged_bounds, parent.average_x, parent.average_y, parent.average_z
+        );
+
+        if constexpr (Order >= 1) {
+            for (int child_slot = 0; child_slot < 4; ++child_slot) {
+                if (!child_valid[child_slot])
+                    continue;
+
+                moment_type const &child = child_moments[child_slot];
+                Real const dx = child.average_x - parent.average_x;
+                Real const dy = child.average_y - parent.average_y;
+                Real const dz = child.average_z - parent.average_z;
+
+                parent.nij_xx += child.nij_xx + child.n_x * dx;
+                parent.nij_yy += child.nij_yy + child.n_y * dy;
+                parent.nij_zz += child.nij_zz + child.n_z * dz;
+                parent.nxy += child.nxy + child.n_x * dy;
+                parent.nyx += child.nyx + child.n_y * dx;
+                parent.nyz += child.nyz + child.n_y * dz;
+                parent.nzy += child.nzy + child.n_z * dy;
+                parent.nzx += child.nzx + child.n_z * dx;
+                parent.nxz += child.nxz + child.n_x * dz;
+            }
+        }
+
+        node_moments[node_index_u] = parent;
+        node_ready[node_index_u] = std::uint8_t(1);
+        return parent;
+    };
+
+    (void)compute_internal_moment(bvh.root_index);
+    if constexpr (Order == 0) {
+        return detail::gwn_upload_host_to_device_span(
+            bvh.taylor_order0_nodes, host_taylor_nodes, stream
+        );
+    } else {
+        return detail::gwn_upload_host_to_device_span(
+            bvh.taylor_order1_nodes, host_taylor_nodes, stream
+        );
+    }
+} catch (std::exception const &) {
+    return gwn_status::internal_error("Unhandled std::exception in gwn_build_bvh4_lbvh_taylor.");
+} catch (...) {
+    return gwn_status::internal_error("Unhandled unknown exception in gwn_build_bvh4_lbvh_taylor.");
 }
 
 } // namespace gwn
