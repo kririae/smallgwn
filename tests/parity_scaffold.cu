@@ -2,8 +2,8 @@
 
 #include <gwn/gwn.cuh>
 
-#include "UT_SolidAngle.h"
 #include "reference_cpu.hpp"
+#include "reference_hdk/UT_SolidAngle.h"
 
 #include <array>
 #include <cmath>

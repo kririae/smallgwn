@@ -41,9 +41,16 @@ if(SMALLGWN_BUILD_TESTS)
 
     find_package(GTest QUIET)
     if(GTest_FOUND)
-        add_executable(smallgwn_parity_scaffold tests/parity_scaffold.cu)
+        add_executable(smallgwn_parity_scaffold
+            tests/parity_scaffold.cu
+            tests/reference_hdk/UT_Array.cpp
+            tests/reference_hdk/UT_SolidAngle.cpp
+        )
         target_link_libraries(smallgwn_parity_scaffold PRIVATE gwn::smallgwn GTest::gtest GTest::gtest_main TBB::tbb)
-        target_include_directories(smallgwn_parity_scaffold PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+        target_include_directories(smallgwn_parity_scaffold PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/reference_hdk"
+        )
         add_test(NAME smallgwn_parity_scaffold COMMAND smallgwn_parity_scaffold)
     else()
         message(STATUS "GTest not found; parity scaffold target is skipped.")
