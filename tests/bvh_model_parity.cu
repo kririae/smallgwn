@@ -70,6 +70,20 @@ struct HostMesh {
     return std::nullopt;
 }
 
+[[nodiscard]] std::vector<std::filesystem::path>
+collect_obj_model_paths(std::filesystem::path const &model_dir) {
+    std::vector<std::filesystem::path> model_paths{};
+    for (auto const &entry : std::filesystem::directory_iterator(model_dir)) {
+        if (!entry.is_regular_file())
+            continue;
+        std::filesystem::path const path = entry.path();
+        if (path.extension() == ".obj")
+            model_paths.push_back(path);
+    }
+    std::sort(model_paths.begin(), model_paths.end());
+    return model_paths;
+}
+
 [[nodiscard]] std::string_view trim_left(std::string_view const line) noexcept {
     std::size_t start = 0;
     while (start < line.size() &&
@@ -204,6 +218,69 @@ std::array<std::vector<Real>, 3> make_query_soa(HostMesh const &mesh) {
         soa[1].push_back(query[1]);
         soa[2].push_back(query[2]);
     }
+    return soa;
+}
+
+std::array<std::vector<Real>, 3> make_integration_query_soa(HostMesh const &mesh) {
+    Real min_x = std::numeric_limits<Real>::max();
+    Real min_y = std::numeric_limits<Real>::max();
+    Real min_z = std::numeric_limits<Real>::max();
+    Real max_x = std::numeric_limits<Real>::lowest();
+    Real max_y = std::numeric_limits<Real>::lowest();
+    Real max_z = std::numeric_limits<Real>::lowest();
+
+    for (std::size_t i = 0; i < mesh.vertex_x.size(); ++i) {
+        min_x = std::min(min_x, mesh.vertex_x[i]);
+        min_y = std::min(min_y, mesh.vertex_y[i]);
+        min_z = std::min(min_z, mesh.vertex_z[i]);
+        max_x = std::max(max_x, mesh.vertex_x[i]);
+        max_y = std::max(max_y, mesh.vertex_y[i]);
+        max_z = std::max(max_z, mesh.vertex_z[i]);
+    }
+
+    Real const center_x = (min_x + max_x) * Real(0.5);
+    Real const center_y = (min_y + max_y) * Real(0.5);
+    Real const center_z = (min_z + max_z) * Real(0.5);
+    Real const extent_x = std::max(max_x - min_x, Real(1e-2));
+    Real const extent_y = std::max(max_y - min_y, Real(1e-2));
+    Real const extent_z = std::max(max_z - min_z, Real(1e-2));
+
+    std::array<std::vector<Real>, 3> soa{};
+    auto append_query = [&](Real const x, Real const y, Real const z) {
+        soa[0].push_back(x);
+        soa[1].push_back(y);
+        soa[2].push_back(z);
+    };
+
+    constexpr std::array<Real, 3> k_lattice_scale = {Real(-0.61), Real(0.13), Real(0.77)};
+    for (Real const sx : k_lattice_scale) {
+        for (Real const sy : k_lattice_scale) {
+            for (Real const sz : k_lattice_scale) {
+                append_query(
+                    center_x + sx * extent_x, center_y + sy * extent_y, center_z + sz * extent_z
+                );
+            }
+        }
+    }
+
+    constexpr std::array<Real, 2> k_far_scale = {Real(-2.5), Real(2.5)};
+    for (Real const scale : k_far_scale) {
+        append_query(center_x + scale * extent_x, center_y, center_z);
+        append_query(center_x, center_y + scale * extent_y, center_z);
+        append_query(center_x, center_y, center_z + scale * extent_z);
+    }
+
+    constexpr std::array<Real, 2> k_corner_scale = {Real(-1.8), Real(1.8)};
+    for (Real const sx : k_corner_scale) {
+        for (Real const sy : k_corner_scale) {
+            for (Real const sz : k_corner_scale) {
+                append_query(
+                    center_x + sx * extent_x, center_y + sy * extent_y, center_z + sz * extent_z
+                );
+            }
+        }
+    }
+
     return soa;
 }
 
@@ -423,6 +500,165 @@ TEST(smallgwn_bvh_models, bvh_exact_batch_matches_cpu_on_common_models) {
         for (std::size_t i = 0; i < query_count; ++i)
             EXPECT_NEAR(gpu_output[i], reference_output[i], Real(5e-4)) << "query index: " << i;
     }
+}
+
+TEST(smallgwn_bvh_models, integration_exact_and_taylor_consistency_on_common_models) {
+    std::optional<std::filesystem::path> const model_dir = find_model_data_dir();
+    if (!model_dir.has_value()) {
+        GTEST_SKIP() << "Model directory not found. Set SMALLGWN_MODEL_DATA_DIR or "
+                        "clone models to /tmp/common-3d-test-models/data.";
+    }
+
+    std::vector<std::filesystem::path> const model_paths = collect_obj_model_paths(*model_dir);
+    if (model_paths.empty())
+        GTEST_SKIP() << "No .obj models found in " << model_dir->string();
+
+    constexpr Real k_order0_epsilon = Real(5e-2);
+    constexpr Real k_order1_epsilon = Real(3e-2);
+    constexpr Real k_accuracy_scale = Real(2);
+
+    std::size_t tested_model_count = 0;
+    for (std::filesystem::path const &model_path : model_paths) {
+        SCOPED_TRACE(model_path.string());
+        std::optional<HostMesh> const maybe_mesh = load_obj_mesh(model_path);
+        if (!maybe_mesh.has_value())
+            continue;
+        HostMesh const &mesh = *maybe_mesh;
+        auto const query_soa = make_integration_query_soa(mesh);
+        std::size_t const query_count = query_soa[0].size();
+        if (query_count == 0)
+            continue;
+
+        gwn::gwn_geometry_object<Real, Index> geometry;
+        gwn::gwn_status const upload_status = geometry.upload(
+            cuda::std::span<Real const>(mesh.vertex_x.data(), mesh.vertex_x.size()),
+            cuda::std::span<Real const>(mesh.vertex_y.data(), mesh.vertex_y.size()),
+            cuda::std::span<Real const>(mesh.vertex_z.data(), mesh.vertex_z.size()),
+            cuda::std::span<Index const>(mesh.tri_i0.data(), mesh.tri_i0.size()),
+            cuda::std::span<Index const>(mesh.tri_i1.data(), mesh.tri_i1.size()),
+            cuda::std::span<Index const>(mesh.tri_i2.data(), mesh.tri_i2.size())
+        );
+        if (!upload_status.is_ok() && upload_status.error() == gwn::gwn_error::cuda_runtime_error &&
+            is_cuda_runtime_unavailable_message(upload_status.message())) {
+            GTEST_SKIP() << "CUDA runtime unavailable: " << upload_status.message();
+        }
+        ASSERT_TRUE(upload_status.is_ok()) << status_to_debug_string(upload_status);
+
+        gwn::gwn_bvh_object<Real, Index> bvh;
+        gwn::gwn_status const exact_build_status =
+            gwn::gwn_build_bvh4_lbvh<Real, Index>(geometry.accessor(), bvh.accessor());
+        ASSERT_TRUE(exact_build_status.is_ok()) << status_to_debug_string(exact_build_status);
+        ASSERT_TRUE(bvh.has_bvh());
+        assert_bvh_structure(bvh.accessor(), mesh.tri_i0.size());
+
+        Real *d_query_x = nullptr;
+        Real *d_query_y = nullptr;
+        Real *d_query_z = nullptr;
+        Real *d_output = nullptr;
+        auto cleanup = gwn::gwn_make_scope_exit([&]() noexcept {
+            if (d_output != nullptr)
+                (void)gwn::gwn_cuda_free(d_output);
+            if (d_query_z != nullptr)
+                (void)gwn::gwn_cuda_free(d_query_z);
+            if (d_query_y != nullptr)
+                (void)gwn::gwn_cuda_free(d_query_y);
+            if (d_query_x != nullptr)
+                (void)gwn::gwn_cuda_free(d_query_x);
+        });
+
+        std::size_t const query_bytes = query_count * sizeof(Real);
+        ASSERT_TRUE(
+            gwn::gwn_cuda_malloc(reinterpret_cast<void **>(&d_query_x), query_bytes).is_ok()
+        );
+        ASSERT_TRUE(
+            gwn::gwn_cuda_malloc(reinterpret_cast<void **>(&d_query_y), query_bytes).is_ok()
+        );
+        ASSERT_TRUE(
+            gwn::gwn_cuda_malloc(reinterpret_cast<void **>(&d_query_z), query_bytes).is_ok()
+        );
+        ASSERT_TRUE(
+            gwn::gwn_cuda_malloc(reinterpret_cast<void **>(&d_output), query_bytes).is_ok()
+        );
+
+        ASSERT_EQ(
+            cudaSuccess,
+            cudaMemcpy(d_query_x, query_soa[0].data(), query_bytes, cudaMemcpyHostToDevice)
+        );
+        ASSERT_EQ(
+            cudaSuccess,
+            cudaMemcpy(d_query_y, query_soa[1].data(), query_bytes, cudaMemcpyHostToDevice)
+        );
+        ASSERT_EQ(
+            cudaSuccess,
+            cudaMemcpy(d_query_z, query_soa[2].data(), query_bytes, cudaMemcpyHostToDevice)
+        );
+
+        gwn::gwn_status const exact_query_status =
+            gwn::gwn_compute_winding_number_batch_bvh_exact<Real, Index>(
+                geometry.accessor(), bvh.accessor(),
+                cuda::std::span<Real const>(d_query_x, query_count),
+                cuda::std::span<Real const>(d_query_y, query_count),
+                cuda::std::span<Real const>(d_query_z, query_count),
+                cuda::std::span<Real>(d_output, query_count)
+            );
+        ASSERT_TRUE(exact_query_status.is_ok()) << status_to_debug_string(exact_query_status);
+        ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+        std::vector<Real> exact_output(query_count, Real(0));
+        ASSERT_EQ(
+            cudaSuccess,
+            cudaMemcpy(exact_output.data(), d_output, query_bytes, cudaMemcpyDeviceToHost)
+        );
+
+        gwn::gwn_status const order0_build_status =
+            gwn::gwn_build_bvh4_lbvh_taylor<0, Real, Index>(geometry.accessor(), bvh.accessor());
+        ASSERT_TRUE(order0_build_status.is_ok()) << status_to_debug_string(order0_build_status);
+        ASSERT_TRUE(bvh.accessor().template has_taylor_order<0>());
+        gwn::gwn_status const order0_query_status =
+            gwn::gwn_compute_winding_number_batch_bvh_taylor<0, Real, Index>(
+                geometry.accessor(), bvh.accessor(),
+                cuda::std::span<Real const>(d_query_x, query_count),
+                cuda::std::span<Real const>(d_query_y, query_count),
+                cuda::std::span<Real const>(d_query_z, query_count),
+                cuda::std::span<Real>(d_output, query_count), k_accuracy_scale
+            );
+        ASSERT_TRUE(order0_query_status.is_ok()) << status_to_debug_string(order0_query_status);
+        ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+        std::vector<Real> order0_output(query_count, Real(0));
+        ASSERT_EQ(
+            cudaSuccess,
+            cudaMemcpy(order0_output.data(), d_output, query_bytes, cudaMemcpyDeviceToHost)
+        );
+
+        gwn::gwn_status const order1_build_status =
+            gwn::gwn_build_bvh4_lbvh_taylor<1, Real, Index>(geometry.accessor(), bvh.accessor());
+        ASSERT_TRUE(order1_build_status.is_ok()) << status_to_debug_string(order1_build_status);
+        ASSERT_TRUE(bvh.accessor().template has_taylor_order<1>());
+        gwn::gwn_status const order1_query_status =
+            gwn::gwn_compute_winding_number_batch_bvh_taylor<1, Real, Index>(
+                geometry.accessor(), bvh.accessor(),
+                cuda::std::span<Real const>(d_query_x, query_count),
+                cuda::std::span<Real const>(d_query_y, query_count),
+                cuda::std::span<Real const>(d_query_z, query_count),
+                cuda::std::span<Real>(d_output, query_count), k_accuracy_scale
+            );
+        ASSERT_TRUE(order1_query_status.is_ok()) << status_to_debug_string(order1_query_status);
+        ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+        std::vector<Real> order1_output(query_count, Real(0));
+        ASSERT_EQ(
+            cudaSuccess,
+            cudaMemcpy(order1_output.data(), d_output, query_bytes, cudaMemcpyDeviceToHost)
+        );
+
+        ++tested_model_count;
+        for (std::size_t query_id = 0; query_id < query_count; ++query_id) {
+            EXPECT_NEAR(order0_output[query_id], exact_output[query_id], k_order0_epsilon)
+                << "query index: " << query_id;
+            EXPECT_NEAR(order1_output[query_id], exact_output[query_id], k_order1_epsilon)
+                << "query index: " << query_id;
+        }
+    }
+
+    ASSERT_GT(tested_model_count, 0u) << "No valid OBJ models were exercised.";
 }
 
 } // namespace
