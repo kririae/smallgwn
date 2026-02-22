@@ -63,6 +63,15 @@ if(SMALLGWN_BUILD_TESTS)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests"
         )
         add_test(NAME smallgwn_bvh_model_parity COMMAND smallgwn_bvh_model_parity)
+
+        add_executable(gwn_correctness_models
+            tests/gwn_correctness_models.cu
+        )
+        target_link_libraries(gwn_correctness_models PRIVATE gwn::smallgwn GTest::gtest GTest::gtest_main TBB::tbb)
+        target_include_directories(gwn_correctness_models PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests"
+        )
+        add_test(NAME gwn_correctness_models COMMAND gwn_correctness_models)
     else()
         message(STATUS "GTest not found; parity scaffold target is skipped.")
     endif()
