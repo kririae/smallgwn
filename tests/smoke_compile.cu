@@ -25,6 +25,12 @@ int main() {
   const gwn::gwn_status valid_result =
       gwn::gwn_compute_winding_number_batch<real_type, index_type>(
           accessor, query_x, query_y, query_z, output);
+  if (!valid_result.is_ok()) {
+    return 1;
+  }
 
-  return valid_result.is_ok() ? 0 : 1;
+  const gwn::gwn_status bvh_missing_result =
+      gwn::gwn_compute_winding_number_batch_bvh_exact<real_type, index_type>(
+          accessor, query_x, query_y, query_z, output);
+  return bvh_missing_result.is_ok() ? 1 : 0;
 }

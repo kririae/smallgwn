@@ -1,5 +1,6 @@
 #pragma once
 
+#include "gwn_bvh.cuh"
 #include "gwn_utils.hpp"
 
 #include <cuda_runtime_api.h>
@@ -24,6 +25,7 @@ struct gwn_geometry_accessor {
   cuda::std::span<const Index> tri_i0{};
   cuda::std::span<const Index> tri_i1{};
   cuda::std::span<const Index> tri_i2{};
+  gwn_bvh_accessor<Real, Index> bvh{};
 
   __host__ __device__ constexpr std::size_t vertex_count() const noexcept {
     return vertex_x.size();
@@ -37,7 +39,15 @@ struct gwn_geometry_accessor {
            vertex_x.size() == vertex_z.size() &&
            tri_i0.size() == tri_i1.size() && tri_i0.size() == tri_i2.size();
   }
+
+  __host__ __device__ constexpr bool has_bvh() const noexcept {
+    return bvh.is_valid();
+  }
 };
+
+template <class Real, class Index>
+gwn_status gwn_build_bvh4_lbvh(gwn_geometry_accessor<Real, Index>& accessor,
+                               cudaStream_t stream = 0) noexcept;
 
 namespace detail {
 
@@ -51,8 +61,7 @@ gwn_status gwn_upload_span(cuda::std::span<const T>& dst,
   }
 
   void* device_ptr = nullptr;
-  gwn_status status = gwn_cuda_to_status(
-      cudaMallocAsync(&device_ptr, src.size_bytes(), stream));
+  gwn_status status = gwn_cuda_malloc(&device_ptr, src.size_bytes(), stream);
   if (!status.is_ok()) {
     return status;
   }
@@ -61,13 +70,13 @@ gwn_status gwn_upload_span(cuda::std::span<const T>& dst,
                                               src.size_bytes(),
                                               cudaMemcpyHostToDevice, stream));
   if (!status.is_ok()) {
-    (void)cudaFreeAsync(device_ptr, stream);
+    (void)gwn_cuda_free(device_ptr, stream);
     return status;
   }
 
   status = gwn_cuda_to_status(cudaStreamSynchronize(stream));
   if (!status.is_ok()) {
-    (void)cudaFreeAsync(device_ptr, stream);
+    (void)gwn_cuda_free(device_ptr, stream);
     return status;
   }
 
@@ -76,17 +85,73 @@ gwn_status gwn_upload_span(cuda::std::span<const T>& dst,
 }
 
 template <class T>
+gwn_status gwn_allocate_span(cuda::std::span<const T>& dst,
+                             const std::size_t count,
+                             const cudaStream_t stream) {
+  if (dst.data() != nullptr) {
+    (void)gwn_cuda_free(const_cast<T*>(dst.data()), stream);
+    dst = {};
+  }
+
+  if (count == 0) {
+    return gwn_status::ok();
+  }
+
+  void* raw_ptr = nullptr;
+  gwn_status status = gwn_cuda_malloc(&raw_ptr, count * sizeof(T), stream);
+  if (!status.is_ok()) {
+    return status;
+  }
+
+  dst = cuda::std::span<const T>(static_cast<const T*>(raw_ptr), count);
+  return gwn_status::ok();
+}
+
+template <class T>
+gwn_status gwn_copy_device_to_span(cuda::std::span<const T>& dst,
+                                   const T* src,
+                                   const std::size_t count,
+                                   const cudaStream_t stream) {
+  gwn_status status = gwn_allocate_span(dst, count, stream);
+  if (!status.is_ok() || count == 0) {
+    return status;
+  }
+
+  status = gwn_cuda_to_status(
+      cudaMemcpyAsync(const_cast<T*>(dst.data()), src, count * sizeof(T),
+                      cudaMemcpyDeviceToDevice, stream));
+  if (!status.is_ok()) {
+    (void)gwn_cuda_free(const_cast<T*>(dst.data()), stream);
+    dst = {};
+    return status;
+  }
+
+  return gwn_cuda_to_status(cudaStreamSynchronize(stream));
+}
+
+template <class T>
 void gwn_release_span(cuda::std::span<const T>& span_view,
                       const cudaStream_t stream) noexcept {
   if (span_view.data() != nullptr) {
-    (void)cudaFreeAsync(const_cast<T*>(span_view.data()), stream);
+    (void)gwn_cuda_free(const_cast<T*>(span_view.data()), stream);
     span_view = {};
   }
 }
 
 template <class Real, class Index>
+void gwn_release_bvh(gwn_bvh_accessor<Real, Index>& bvh,
+                     const cudaStream_t stream) noexcept {
+  gwn_release_span(bvh.primitive_indices, stream);
+  gwn_release_span(bvh.nodes, stream);
+  bvh.root_kind = gwn_bvh_child_kind::k_invalid;
+  bvh.root_index = 0;
+  bvh.root_count = 0;
+}
+
+template <class Real, class Index>
 void gwn_release_accessor(gwn_geometry_accessor<Real, Index>& accessor,
                           const cudaStream_t stream) noexcept {
+  gwn_release_bvh(accessor.bvh, stream);
   gwn_release_span(accessor.tri_i2, stream);
   gwn_release_span(accessor.tri_i1, stream);
   gwn_release_span(accessor.tri_i0, stream);
@@ -200,6 +265,12 @@ class gwn_geometry_object final : public gwn_noncopyable {
     detail::gwn_release_accessor(accessor_, stream);
   }
 
+  void clear_bvh(const cudaStream_t stream = 0) noexcept {
+    detail::gwn_release_bvh(accessor_.bvh, stream);
+  }
+
+  gwn_status build_bvh(const cudaStream_t stream = 0) noexcept;
+
   [[nodiscard]] const accessor_type& accessor() const noexcept {
     return accessor_;
   }
@@ -209,6 +280,11 @@ class gwn_geometry_object final : public gwn_noncopyable {
   [[nodiscard]] std::size_t triangle_count() const noexcept {
     return accessor_.triangle_count();
   }
+  [[nodiscard]] const gwn_bvh_accessor<Real, Index>& bvh_accessor()
+      const noexcept {
+    return accessor_.bvh;
+  }
+  [[nodiscard]] bool has_bvh() const noexcept { return accessor_.has_bvh(); }
 
   friend void swap(gwn_geometry_object& lhs,
                    gwn_geometry_object& rhs) noexcept {
@@ -219,5 +295,11 @@ class gwn_geometry_object final : public gwn_noncopyable {
  private:
   accessor_type accessor_{};
 };
+
+template <class Real, class Index>
+gwn_status gwn_geometry_object<Real, Index>::build_bvh(
+    const cudaStream_t stream) noexcept {
+  return gwn_build_bvh4_lbvh<Real, Index>(accessor_, stream);
+}
 
 }  // namespace gwn
