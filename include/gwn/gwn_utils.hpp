@@ -88,66 +88,59 @@ inline gwn_status gwn_cuda_to_status(
   return gwn_status::cuda_runtime_error(cuda_result, loc);
 }
 
-inline bool gwn_supports_stream_ordered_allocator() noexcept {
-#if CUDART_VERSION >= 11020
-  int device = 0;
-  if (cudaGetDevice(&device) != cudaSuccess) {
-    return false;
-  }
-
-  int supported = 0;
-  if (cudaDeviceGetAttribute(&supported, cudaDevAttrMemoryPoolsSupported,
-                             device) != cudaSuccess) {
-    return false;
-  }
-  return supported != 0;
-#else
-  return false;
-#endif
+[[nodiscard]] inline cudaStream_t gwn_default_stream() noexcept {
+  return cudaStreamLegacy;
 }
 
-inline bool gwn_is_async_allocator_unavailable(const cudaError_t result) {
-  return result == cudaErrorNotSupported || result == cudaErrorOperatingSystem;
+inline bool gwn_should_fallback_from_async_alloc(
+    const cudaError_t result) noexcept {
+  return result == cudaErrorNotSupported ||
+         result == cudaErrorOperatingSystem ||
+         result == cudaErrorSystemNotReady;
 }
 
-inline gwn_status gwn_cuda_malloc(void** ptr,
-                                  const std::size_t bytes,
-                                  const cudaStream_t stream = 0) noexcept {
+inline bool gwn_should_fallback_from_async_free(
+    const cudaError_t result) noexcept {
+  return gwn_should_fallback_from_async_alloc(result) ||
+         result == cudaErrorInvalidValue;
+}
+
+inline gwn_status gwn_cuda_malloc(
+    void** ptr,
+    const std::size_t bytes,
+    const cudaStream_t stream = gwn_default_stream()) noexcept {
   if (bytes == 0) {
     *ptr = nullptr;
     return gwn_status::ok();
   }
 
-  if (gwn_supports_stream_ordered_allocator()) {
-    const cudaError_t async_result = cudaMallocAsync(ptr, bytes, stream);
-    if (async_result == cudaSuccess) {
-      return gwn_status::ok();
-    }
-    if (!gwn_is_async_allocator_unavailable(async_result)) {
-      return gwn_cuda_to_status(async_result);
-    }
-    (void)cudaGetLastError();
+  const cudaError_t async_result = cudaMallocAsync(ptr, bytes, stream);
+  if (async_result == cudaSuccess) {
+    return gwn_status::ok();
   }
+  if (!gwn_should_fallback_from_async_alloc(async_result)) {
+    return gwn_cuda_to_status(async_result);
+  }
+  (void)cudaGetLastError();
 
   return gwn_cuda_to_status(cudaMalloc(ptr, bytes));
 }
 
-inline gwn_status gwn_cuda_free(void* ptr,
-                                const cudaStream_t stream = 0) noexcept {
+inline gwn_status gwn_cuda_free(
+    void* ptr,
+    const cudaStream_t stream = gwn_default_stream()) noexcept {
   if (ptr == nullptr) {
     return gwn_status::ok();
   }
 
-  if (gwn_supports_stream_ordered_allocator()) {
-    const cudaError_t async_result = cudaFreeAsync(ptr, stream);
-    if (async_result == cudaSuccess) {
-      return gwn_status::ok();
-    }
-    if (!gwn_is_async_allocator_unavailable(async_result)) {
-      return gwn_cuda_to_status(async_result);
-    }
-    (void)cudaGetLastError();
+  const cudaError_t async_result = cudaFreeAsync(ptr, stream);
+  if (async_result == cudaSuccess) {
+    return gwn_status::ok();
   }
+  if (!gwn_should_fallback_from_async_free(async_result)) {
+    return gwn_cuda_to_status(async_result);
+  }
+  (void)cudaGetLastError();
 
   return gwn_cuda_to_status(cudaFree(ptr));
 }

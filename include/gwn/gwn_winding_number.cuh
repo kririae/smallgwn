@@ -228,7 +228,7 @@ gwn_status gwn_compute_winding_number_batch(
     const cuda::std::span<const Real> query_y,
     const cuda::std::span<const Real> query_z,
     const cuda::std::span<Real> output,
-    const cudaStream_t stream = 0) noexcept {
+    const cudaStream_t stream = gwn_default_stream()) noexcept {
   if (!geometry.is_valid()) {
     return gwn_status::invalid_argument(
         "Geometry accessor contains mismatched span lengths.");
@@ -289,7 +289,7 @@ gwn_status gwn_compute_winding_number_batch_bvh_exact(
     const cuda::std::span<const Real> query_y,
     const cuda::std::span<const Real> query_z,
     const cuda::std::span<Real> output,
-    const cudaStream_t stream = 0) noexcept {
+    const cudaStream_t stream = gwn_default_stream()) noexcept {
   if (!geometry.is_valid()) {
     return gwn_status::invalid_argument(
         "Geometry accessor contains mismatched span lengths.");

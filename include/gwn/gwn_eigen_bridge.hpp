@@ -16,10 +16,11 @@ template <class Real = float,
           class Index = std::int64_t,
           class DerivedV,
           class DerivedF>
-gwn_status gwn_upload_from_eigen(gwn_geometry_object<Real, Index>& object,
-                                 const Eigen::MatrixBase<DerivedV>& vertices,
-                                 const Eigen::MatrixBase<DerivedF>& triangles,
-                                 const cudaStream_t stream = 0) {
+gwn_status gwn_upload_from_eigen(
+    gwn_geometry_object<Real, Index>& object,
+    const Eigen::MatrixBase<DerivedV>& vertices,
+    const Eigen::MatrixBase<DerivedF>& triangles,
+    const cudaStream_t stream = gwn_default_stream()) {
   if (vertices.cols() != 3 || triangles.cols() != 3) {
     return gwn_status::invalid_argument(
         "Eigen inputs must be Nx3 vertices and Mx3 triangles.");
