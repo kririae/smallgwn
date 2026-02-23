@@ -58,13 +58,20 @@ These instructions apply to the `smallgwn/` project tree.
   - AABB tree: `gwn_bvh_aabb_accessor<Width,...>` / `gwn_bvh_aabb_tree_object<Width,...>`
   - Moment tree: `gwn_bvh_moment_accessor<Width,...>` / `gwn_bvh_moment_tree_object<Width,...>`
 - `include/gwn/gwn_bvh_build.cuh` keeps public build APIs, while internal build passes/functors live in flat `include/gwn/detail/` headers.
+- Build/refit orchestration is split into detail pipeline headers:
+  - `gwn_bvh_pipeline_topology.cuh`
+  - `gwn_bvh_pipeline_aabb.cuh`
+  - `gwn_bvh_pipeline_moment.cuh`
+  - `gwn_bvh_pipeline_orchestrator.cuh`
+  - shared helpers in `gwn_bvh_pipeline_common.cuh`
+- Internal pipeline entrypoints use `_impl` suffix (e.g. `gwn_build_bvh_topology_lbvh_impl`) to avoid public/internal naming collisions.
 - Public BVH build/refit entrypoints are object-based (`gwn_geometry_object` + BVH object types); accessor-based build/refit APIs are internal-only under `gwn::detail`.
 - No `bvh4_*` convenience wrappers — use `gwn_build_bvh_topology_lbvh<4,...>` directly; the `gwn_bvh_object` / `gwn_bvh_aabb_object` / `gwn_bvh_moment_object` aliases already fix Width=4.
 - Public object-based APIs are plain `noexcept` (no `try`/`catch`); exception translation is done once in the `detail` layer.
 - LBVH topology build is pass-composed (all internal under `gwn::detail`):
   - binary LBVH pass (`gwn_build_binary_lbvh_topology` in `detail/gwn_bvh_build_lbvh.cuh`)
   - collapse pass (`gwn_collapse_binary_lbvh_topology` in `detail/gwn_bvh_build_lbvh.cuh`)
-  - exposed detail entry: `detail::gwn_build_bvh_topology_lbvh<Width,...>`
+  - exposed detail entry: `detail::gwn_build_bvh_topology_lbvh_impl<Width,...>`
 - Generic async refit kernels/traits live in `include/gwn/detail/gwn_bvh_refit_async.cuh`.
 - LBVH build path uses CUB for scene reduction and radix sort (NO Thrust in runtime build path).
 - Taylor build currently supports `Order=0/1`:
