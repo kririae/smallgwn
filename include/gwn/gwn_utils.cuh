@@ -36,7 +36,7 @@ public:
 class gwn_stream_mixin {
 public:
     gwn_stream_mixin() noexcept = default;
-    explicit gwn_stream_mixin(cudaStream_t const stream) noexcept : stream_(stream) {}
+    explicit gwn_stream_mixin(cudaStream_t const stream) noexcept : stream_{stream} {}
 
     [[nodiscard]] cudaStream_t stream() const noexcept { return stream_; }
     void set_stream(cudaStream_t const stream) noexcept { stream_ = stream; }
@@ -47,16 +47,17 @@ public:
     }
 
 private:
-    cudaStream_t stream_ = gwn_default_stream();
+    cudaStream_t stream_{gwn_default_stream()};
 };
 
-/// \brief Returns true when span data pointer is valid for its size.
+/// \brief Check whether a span has valid storage (non-null data for non-empty spans).
 template <class T>
 [[nodiscard]] __host__ __device__ constexpr bool
 gwn_span_has_storage(cuda::std::span<T const> const span) noexcept {
     return span.size() == 0 || span.data() != nullptr;
 }
 
+/// \overload
 template <class T>
 [[nodiscard]] __host__ __device__ constexpr bool
 gwn_span_has_storage(cuda::std::span<T> const span) noexcept {
@@ -71,28 +72,37 @@ enum class gwn_error {
     internal_error,
 };
 
-/// \brief Error-code object used by public APIs.
-/// \remark Message storage is owned by `std::string`.
+/// \brief Lightweight error-code object returned by public APIs.
+///
+/// \details Factory methods may allocate for diagnostic messages and are therefore
+///          not `noexcept`.  Public API entry points should catch escaping exceptions
+///          from the error path via existing top-level `try/catch` blocks.
 class gwn_status {
 public:
     gwn_status() noexcept = default;
 
+    /// \brief Construct a success status (no message, no location).
     [[nodiscard]] static gwn_status ok() noexcept { return gwn_status(); }
 
-    [[nodiscard]] static gwn_status invalid_argument(std::string message) noexcept {
+    /// \brief Construct an invalid-argument error with a diagnostic message.
+    [[nodiscard]] static gwn_status invalid_argument(std::string message) {
         return gwn_status(gwn_error::invalid_argument, std::move(message));
     }
 
-    [[nodiscard]] static gwn_status
-    internal_error(std::string message = "Internal error.") noexcept {
+    /// \brief Construct an internal-error status with an optional diagnostic message.
+    [[nodiscard]] static gwn_status internal_error(std::string message = "Internal error.") {
         return gwn_status(gwn_error::internal_error, std::move(message));
     }
 
+    /// \brief Construct a CUDA runtime error status from a `cudaError_t`.
+    ///
+    /// \details The error name and description are appended to \p message
+    ///          using `cudaGetErrorName` / `cudaGetErrorString`.
     [[nodiscard]] static gwn_status cuda_runtime_error(
         cudaError_t const cuda_result,
         std::source_location const loc = std::source_location::current(),
         std::string message = "CUDA API call failed."
-    ) noexcept {
+    ) {
         char const *const error_name = cudaGetErrorName(cuda_result);
         char const *const error_message = cudaGetErrorString(cuda_result);
         message += std::format(
@@ -103,29 +113,36 @@ public:
         return gwn_status(gwn_error::cuda_runtime_error, std::move(message), loc);
     }
 
+    /// \brief Return `true` when the status represents success.
     [[nodiscard]] bool is_ok() const noexcept { return error_ == gwn_error::success; }
+
+    /// \brief Return the error category.
     [[nodiscard]] gwn_error error() const noexcept { return error_; }
+
+    /// \brief Return the captured source location (meaningful only for CUDA errors).
     [[nodiscard]] std::source_location location() const noexcept { return location_; }
+
+    /// \brief Return `true` when a non-default source location is present.
     [[nodiscard]] bool has_location() const noexcept { return location_.line() != 0; }
+
+    /// \brief Return the diagnostic message string.
     [[nodiscard]] std::string const &message() const noexcept { return message_; }
 
 private:
-    gwn_status(gwn_error const error_code, std::string message) noexcept
-        : error_(error_code), message_(std::move(message)) {}
+    gwn_status(gwn_error const error_code, std::string message)
+        : error_{error_code}, message_{std::move(message)} {}
 
-    gwn_status(
-        gwn_error const error_code, std::string message, std::source_location const loc
-    ) noexcept
-        : error_(error_code), location_(loc), message_(std::move(message)) {}
+    gwn_status(gwn_error const error_code, std::string message, std::source_location const loc)
+        : error_{error_code}, location_{loc}, message_{std::move(message)} {}
 
-    gwn_error error_ = gwn_error::success;
+    gwn_error error_{gwn_error::success};
     std::source_location location_{};
     std::string message_{};
 };
 
-/// \brief Scope guard used for deterministic cleanup in status-based code.
+/// \brief RAII scope guard for deterministic cleanup in status-based code.
 ///
-/// \remark Callback must be `noexcept` to preserve cleanup safety.
+/// \tparam Callback  Callable type; must be nothrow-invocable.
 template <class Callback> class gwn_scope_exit {
 public:
     static_assert(
@@ -155,11 +172,10 @@ public:
 
 private:
     Callback callback_;
-    bool is_active_ = true;
+    bool is_active_{true};
 };
 
-/// \brief Helper for creating `gwn_scope_exit` with template argument
-/// deduction.
+/// \brief Construct a `gwn_scope_exit` with class template argument deduction.
 template <class Callback>
 [[nodiscard]] auto gwn_make_scope_exit(Callback &&callback)
     -> gwn_scope_exit<std::decay_t<Callback>> {
@@ -187,7 +203,7 @@ template <class Callback>
 #define GWN_PRAGMA_UNROLL _Pragma("unroll")
 #endif
 
-/// \brief Throw `std::runtime_error` if `status` is not success.
+/// \brief Throw `std::runtime_error` with diagnostic details if \p status is not success.
 inline void gwn_throw_if_error(gwn_status const &status) {
     if (status.is_ok())
         return;
@@ -200,10 +216,10 @@ inline void gwn_throw_if_error(gwn_status const &status) {
     throw std::runtime_error(out);
 }
 
-/// \brief Convert CUDA runtime result to `gwn_status`.
+/// \brief Translate a `cudaError_t` into a `gwn_status`.
 inline gwn_status gwn_cuda_to_status(
     cudaError_t const cuda_result, std::source_location const loc = std::source_location::current()
-) noexcept {
+) {
     if (cuda_result == cudaSuccess)
         return gwn_status::ok();
     return gwn_status::cuda_runtime_error(cuda_result, loc);
@@ -211,12 +227,13 @@ inline gwn_status gwn_cuda_to_status(
 
 [[nodiscard]] inline cudaStream_t gwn_default_stream() noexcept { return cudaStreamLegacy; }
 
-/// \brief Allocate device memory from CUDA stream-ordered allocator only.
-/// \remark Uses `cudaMallocAsync` only; no synchronous fallback path.
-/// \remark `bytes == 0` returns success with `*ptr = nullptr`.
+/// \brief Allocate device memory via the CUDA stream-ordered allocator.
+///
+/// \remark No synchronous fallback path (`cudaMallocAsync` only).
+/// \remark Zero-byte requests succeed with `*ptr = nullptr`.
 inline gwn_status gwn_cuda_malloc(
     void **ptr, std::size_t const bytes, cudaStream_t const stream = gwn_default_stream()
-) noexcept {
+) {
     if (bytes == 0) {
         *ptr = nullptr;
         return gwn_status::ok();
@@ -225,29 +242,33 @@ inline gwn_status gwn_cuda_malloc(
     return gwn_cuda_to_status(cudaMallocAsync(ptr, bytes, stream));
 }
 
-/// \brief Free device memory through CUDA stream-ordered allocator only.
-/// \remark Uses `cudaFreeAsync` only; no synchronous fallback path.
-/// \remark `ptr == nullptr` is treated as success.
-inline gwn_status
-gwn_cuda_free(void *ptr, cudaStream_t const stream = gwn_default_stream()) noexcept {
+/// \brief Free device memory via the CUDA stream-ordered allocator.
+///
+/// \remark No synchronous fallback path (`cudaFreeAsync` only).
+/// \remark Null pointer is treated as a no-op success.
+inline gwn_status gwn_cuda_free(void *ptr, cudaStream_t const stream = gwn_default_stream()) {
     if (ptr == nullptr)
         return gwn_status::ok();
 
     return gwn_cuda_to_status(cudaFreeAsync(ptr, stream));
 }
 
-/// \brief RAII device buffer using CUDA stream-ordered allocation.
+/// \brief RAII device buffer backed by the CUDA stream-ordered allocator.
 ///
-/// \remark Allocation and release use `cudaMallocAsync` / `cudaFreeAsync` only.
+/// \tparam T  Element type (trivially copyable assumed by memset/memcpy).
+///
+/// \details Allocation and deallocation use `cudaMallocAsync` / `cudaFreeAsync`
+///          exclusively.  The buffer remembers its bound stream and releases on
+///          that stream by default.
+///
 /// \remark `resize()` does not preserve old contents.
-/// \remark Assignment uses copy-and-swap; copy construction remains disabled.
-/// \remark `clear()` and destructor release on the currently bound stream.
+/// \remark Move-assignment uses copy-and-swap; copy construction is deleted.
 template <class T> class gwn_device_array final : public gwn_noncopyable {
 public:
     using value_type = T;
 
     gwn_device_array() = default;
-    explicit gwn_device_array(cudaStream_t const stream) noexcept : stream_(stream) {}
+    explicit gwn_device_array(cudaStream_t const stream) noexcept : stream_{stream} {}
 
     gwn_device_array(gwn_device_array &&other) noexcept { swap(*this, other); }
 
@@ -257,13 +278,18 @@ public:
     }
 
     ~gwn_device_array() {
-        gwn_status const status = clear();
-        if (!status.is_ok())
-            GWN_HANDLE_STATUS_FAIL(status);
+        try {
+            gwn_status const status = clear();
+            if (!status.is_ok())
+                GWN_HANDLE_STATUS_FAIL(status);
+        } catch (...) {
+            // Suppress: CUDA free failure + error message allocation failure.
+        }
     }
 
+    /// \brief Resize the buffer (contents are not preserved).
     [[nodiscard]] gwn_status
-    resize(std::size_t const count, cudaStream_t const stream = gwn_default_stream()) noexcept {
+    resize(std::size_t const count, cudaStream_t const stream = gwn_default_stream()) {
         if (count == size_) {
             stream_ = stream;
             return gwn_status::ok();
@@ -295,9 +321,11 @@ public:
         return gwn_status::ok();
     }
 
-    [[nodiscard]] gwn_status clear() noexcept { return clear(stream_); }
+    /// \brief Release device memory on the currently bound stream.
+    [[nodiscard]] gwn_status clear() { return clear(stream_); }
 
-    [[nodiscard]] gwn_status clear(cudaStream_t const stream) noexcept {
+    /// \brief Release device memory on the given \p stream and rebind.
+    [[nodiscard]] gwn_status clear(cudaStream_t const stream) {
         stream_ = stream;
         if (data_ == nullptr) {
             size_ = 0;
@@ -312,18 +340,23 @@ public:
         return gwn_status::ok();
     }
 
+    /// \brief Return the currently bound stream.
     [[nodiscard]] cudaStream_t stream() const noexcept { return stream_; }
+
+    /// \brief Rebind to a different stream without releasing memory.
     void set_stream(cudaStream_t const stream) noexcept { stream_ = stream; }
 
-    [[nodiscard]] gwn_status zero(cudaStream_t const stream = gwn_default_stream()) noexcept {
+    /// \brief Zero-fill the buffer asynchronously on \p stream.
+    [[nodiscard]] gwn_status zero(cudaStream_t const stream = gwn_default_stream()) {
         if (empty())
             return gwn_status::ok();
         return gwn_cuda_to_status(cudaMemsetAsync(data_, 0, size_ * sizeof(T), stream));
     }
 
+    /// \brief Upload host data into the buffer (resizes to match \p src).
     [[nodiscard]] gwn_status copy_from_host(
         cuda::std::span<T const> const src, cudaStream_t const stream = gwn_default_stream()
-    ) noexcept {
+    ) {
         GWN_RETURN_ON_ERROR(resize(src.size(), stream));
         if (src.empty())
             return gwn_status::ok();
@@ -333,9 +366,10 @@ public:
         );
     }
 
+    /// \brief Download buffer contents into host span \p dst (sizes must match).
     [[nodiscard]] gwn_status copy_to_host(
         cuda::std::span<T> const dst, cudaStream_t const stream = gwn_default_stream()
-    ) const noexcept {
+    ) const {
         if (dst.size() != size_)
             return gwn_status::invalid_argument(
                 "gwn_device_array::copy_to_host destination size mismatch."
@@ -352,15 +386,21 @@ public:
         );
     }
 
+    /// \brief Pointer to device storage (may be null when empty).
     [[nodiscard]] T *data() noexcept { return data_; }
+    /// \overload
     [[nodiscard]] T const *data() const noexcept { return data_; }
+
+    /// \brief Number of elements.
     [[nodiscard]] std::size_t size() const noexcept { return size_; }
+
+    /// \brief Return `true` when the buffer holds no elements.
     [[nodiscard]] bool empty() const noexcept { return size_ == 0; }
 
-    [[nodiscard]] cuda::std::span<T> span() noexcept { return cuda::std::span<T>(data_, size_); }
-    [[nodiscard]] cuda::std::span<T const> span() const noexcept {
-        return cuda::std::span<T const>(data_, size_);
-    }
+    /// \brief Return a device span over the buffer contents.
+    [[nodiscard]] cuda::std::span<T> span() noexcept { return {data_, size_}; }
+    /// \overload
+    [[nodiscard]] cuda::std::span<T const> span() const noexcept { return {data_, size_}; }
 
     friend void swap(gwn_device_array &lhs, gwn_device_array &rhs) noexcept {
         using std::swap;
@@ -370,9 +410,9 @@ public:
     }
 
 private:
-    T *data_ = nullptr;
-    std::size_t size_ = 0;
-    cudaStream_t stream_ = gwn_default_stream();
+    T *data_{nullptr};
+    std::size_t size_{0};
+    cudaStream_t stream_{gwn_default_stream()};
 };
 
 } // namespace gwn

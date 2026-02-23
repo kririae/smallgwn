@@ -49,7 +49,6 @@ if(SMALLGWN_BUILD_TESTS)
             tests/reference_hdk/UT_SolidAngle.cpp
         )
         target_link_libraries(smallgwn_parity_scaffold PRIVATE gwn::smallgwn GTest::gtest GTest::gtest_main TBB::tbb)
-        target_compile_definitions(smallgwn_parity_scaffold PRIVATE GWN_ENABLE_TAYLOR_LEVELWISE_REFERENCE)
         target_include_directories(smallgwn_parity_scaffold PRIVATE
             "${CMAKE_CURRENT_SOURCE_DIR}/tests"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/reference_hdk"
@@ -60,7 +59,6 @@ if(SMALLGWN_BUILD_TESTS)
             tests/bvh_model_parity.cu
         )
         target_link_libraries(smallgwn_bvh_model_parity PRIVATE gwn::smallgwn GTest::gtest GTest::gtest_main TBB::tbb)
-        target_compile_definitions(smallgwn_bvh_model_parity PRIVATE GWN_ENABLE_TAYLOR_LEVELWISE_REFERENCE)
         target_include_directories(smallgwn_bvh_model_parity PRIVATE
             "${CMAKE_CURRENT_SOURCE_DIR}/tests"
         )
@@ -70,7 +68,6 @@ if(SMALLGWN_BUILD_TESTS)
             tests/gwn_correctness_models.cu
         )
         target_link_libraries(gwn_correctness_models PRIVATE gwn::smallgwn GTest::gtest GTest::gtest_main TBB::tbb)
-        target_compile_definitions(gwn_correctness_models PRIVATE GWN_ENABLE_TAYLOR_LEVELWISE_REFERENCE)
         target_include_directories(gwn_correctness_models PRIVATE
             "${CMAKE_CURRENT_SOURCE_DIR}/tests"
         )
