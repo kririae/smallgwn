@@ -172,7 +172,7 @@ gwn_status gwn_bvh_topology_build_collapse_binary_lbvh(
     cuda::std::span<gwn_binary_node<Index> const> const binary_nodes,
     cuda::std::span<Index const> const binary_internal_parent,
     gwn_bvh_topology_accessor<Width, Real, Index> &staging_topology,
-    cudaStream_t const stream = gwn_default_stream()
+    Index const root_internal_index, cudaStream_t const stream = gwn_default_stream()
 ) {
     static_assert(
         (Width & (Width - 1)) == 0, "BVH collapse currently requires power-of-two Width."
@@ -183,9 +183,10 @@ gwn_status gwn_bvh_topology_build_collapse_binary_lbvh(
         return gwn_status::ok();
     if (binary_internal_parent.size() != binary_internal_count)
         return gwn_status::internal_error("Binary topology collapse input size mismatch.");
+    if (!gwn_index_in_bounds(root_internal_index, binary_internal_count))
+        return gwn_status::internal_error("Binary topology collapse root index is invalid.");
 
     constexpr int k_block_size = k_gwn_default_block_size;
-    Index const root_internal_index = Index(0);
 
     gwn_device_array<std::uint8_t> collapse_internal_is_wide_root{};
     gwn_device_array<Index> collapse_internal_wide_node_id{};
@@ -217,6 +218,7 @@ gwn_status gwn_bvh_topology_build_collapse_binary_lbvh(
     });
     unsigned int *collapse_wide_count = static_cast<unsigned int *>(collapse_wide_count_raw);
     unsigned int const collapse_wide_count_init = 1u;
+    std::size_t const root_internal_index_u = static_cast<std::size_t>(root_internal_index);
     GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemcpyAsync(
         collapse_wide_count, &collapse_wide_count_init, sizeof(unsigned int),
         cudaMemcpyHostToDevice, stream
@@ -225,12 +227,12 @@ gwn_status gwn_bvh_topology_build_collapse_binary_lbvh(
     Index const collapse_root_wide_node_id = Index(0);
     Index const collapse_root_binary_root = root_internal_index;
     GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemcpyAsync(
-        collapse_internal_is_wide_root_span.data(), &collapse_root_is_wide, sizeof(std::uint8_t),
-        cudaMemcpyHostToDevice, stream
+        collapse_internal_is_wide_root_span.data() + root_internal_index_u, &collapse_root_is_wide,
+        sizeof(std::uint8_t), cudaMemcpyHostToDevice, stream
     )));
     GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemcpyAsync(
-        collapse_internal_wide_node_id_span.data(), &collapse_root_wide_node_id, sizeof(Index),
-        cudaMemcpyHostToDevice, stream
+        collapse_internal_wide_node_id_span.data() + root_internal_index_u,
+        &collapse_root_wide_node_id, sizeof(Index), cudaMemcpyHostToDevice, stream
     )));
     GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemcpyAsync(
         collapse_wide_node_binary_root_span.data(), &collapse_root_binary_root, sizeof(Index),

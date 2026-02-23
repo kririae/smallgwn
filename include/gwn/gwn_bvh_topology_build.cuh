@@ -43,4 +43,35 @@ gwn_status gwn_bvh_topology_build_lbvh(
     return gwn_status::ok();
 }
 
+/// \brief Build a wide BVH topology from triangle geometry using an H-PLOC
+///        agglomerative builder.
+///
+/// Computes Morton order for primitives, then performs a GPU-parallel
+/// hierarchical PLOC merge to produce a binary tree that is collapsed into
+/// a \p Width -ary topology stored in \p topology.
+///
+/// On success the bound stream of \p topology is updated to \p stream.
+///
+/// \tparam Width  BVH node fan-out (e.g. 4 for a 4-wide BVH).
+/// \tparam Real   Floating-point type (\c float or \c double).
+/// \tparam Index  Integer index type.
+///
+/// \param[in]     geometry  Uploaded triangle mesh (vertices + indices).
+/// \param[in,out] topology  Destination topology object.
+/// \param[in]     stream    CUDA stream for all asynchronous work.
+///
+/// \return \c gwn_status::ok() on success, or an error status on failure.
+template <int Width, class Real, class Index>
+gwn_status gwn_bvh_topology_build_hploc(
+    gwn_geometry_object<Real, Index> const &geometry,
+    gwn_bvh_topology_object<Width, Real, Index> &topology,
+    cudaStream_t const stream = gwn_default_stream()
+) noexcept {
+    GWN_RETURN_ON_ERROR((detail::gwn_bvh_topology_build_hploc_impl<Width, Real, Index>(
+        geometry.accessor(), topology.accessor(), stream
+    )));
+    topology.set_stream(stream);
+    return gwn_status::ok();
+}
+
 } // namespace gwn

@@ -65,6 +65,12 @@ These instructions apply to the `smallgwn/` project tree.
   - topology build: `include/gwn/gwn_bvh_topology_build.cuh`
   - payload refit: `include/gwn/gwn_bvh_refit.cuh`
   - composed workflows: `include/gwn/gwn_bvh_facade.cuh`
+- Topology build currently exposes both:
+  - `gwn_bvh_topology_build_lbvh`
+  - `gwn_bvh_topology_build_hploc`
+- Facade build currently exposes both LBVH and H-PLOC variants:
+  - `gwn_bvh_facade_build_topology_aabb_{lbvh,hploc}`
+  - `gwn_bvh_facade_build_topology_aabb_moment_{lbvh,hploc}`
 - Internal implementation remains under flat `include/gwn/detail/` headers.
 - Detail entrypoints use `_impl` suffix (e.g. `gwn_bvh_topology_build_lbvh_impl`) to avoid public/internal naming collisions.
 - Public BVH entrypoints are object-based (`gwn_geometry_object` + BVH object types); accessor-based routines are internal-only under `gwn::detail`.
@@ -78,6 +84,9 @@ These instructions apply to the `smallgwn/` project tree.
   - exposed detail entry: `detail::gwn_bvh_topology_build_lbvh_impl<Width,...>`
 - Generic async refit kernels/traits live in `include/gwn/detail/gwn_bvh_refit_async.cuh`.
 - LBVH build path uses CUB for scene reduction and radix sort (NO Thrust in runtime build path).
+- `detail/gwn_bvh_topology_build_hploc.cuh` contains H-PLOC kernel/pipeline scaffolding; the experimental
+  GPU kernel path is currently disabled by `k_gwn_hploc_enable_experimental_kernel=false`, and
+  the H-PLOC host entry currently falls back to binary LBVH construction for production stability.
 - Taylor build currently supports `Order=0/1`:
   - Production path uses fully GPU async upward propagation with atomics through `gwn_bvh_refit_moment`.
   - Async Taylor temporary buffers (parent/slot/arity/arrivals/pending moments) use `gwn_device_array`.
@@ -103,6 +112,7 @@ These instructions apply to the `smallgwn/` project tree.
   - `tests/unit_stream_mixin.cu`
   - `tests/unit_geometry.cu`
   - `tests/unit_bvh_topology.cu`
+    - includes H-PLOC topology build coverage (`hploc_*` cases)
   - `tests/unit_bvh_taylor.cu`
   - `tests/unit_winding_exact.cu`
   - `tests/unit_winding_taylor.cu`
@@ -116,6 +126,7 @@ These instructions apply to the `smallgwn/` project tree.
 - `tests/reference_hdk/*`: Vendored HDK reference sources for parity/regression checks (keep under `tests/`, not public).
 - Benchmark executable:
   - `smallgwn_benchmark` from `benchmarks/benchmark_main.cu`
+  - Topology builder selection via `--builder <lbvh|hploc>` (recorded in CSV as `topology_builder`)
   - Measures: `topology_build_lbvh`, `refit_aabb`, `refit_moment_o0`, `refit_moment_o1`,
     `facade_o0`, `facade_o1`, `query_taylor_o0`, `query_taylor_o1`
   - Output: console summary + CSV rows (`--csv <path>`)
