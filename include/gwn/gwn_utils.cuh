@@ -60,8 +60,8 @@ gwn_span_has_storage(cuda::std::span<T const> const span) noexcept {
 
 /// \overload
 template <class T>
-[[nodiscard]] __host__ __device__ constexpr bool
-gwn_span_has_storage(cuda::std::span<T> const span) noexcept {
+[[nodiscard]] __host__ __device__ constexpr bool gwn_span_has_storage(cuda::std::span<T> const span
+) noexcept {
     return span.size() == 0 || span.data() != nullptr;
 }
 
@@ -183,8 +183,7 @@ public:
         std::is_nothrow_invocable_v<Callback &>, "gwn_scope_exit callback must be noexcept."
     );
 
-    explicit gwn_scope_exit(
-        Callback callback
+    explicit gwn_scope_exit(Callback callback
     ) noexcept(std::is_nothrow_move_constructible_v<Callback>)
         : callback_(std::move(callback)) {}
 
@@ -211,8 +210,8 @@ private:
 
 /// \brief Construct a `gwn_scope_exit` with class template argument deduction.
 template <class Callback>
-[[nodiscard]] auto gwn_make_scope_exit(Callback &&callback)
-    -> gwn_scope_exit<std::decay_t<Callback>> {
+[[nodiscard]] auto gwn_make_scope_exit(Callback &&callback
+) -> gwn_scope_exit<std::decay_t<Callback>> {
     return gwn_scope_exit<std::decay_t<Callback>>(std::forward<Callback>(callback));
 }
 
@@ -323,14 +322,14 @@ public:
 
     /// \brief Resize the buffer (contents are not preserved).
     ///
-    /// \remark When \p count equals the current size, only the bound stream is updated;
-    ///         no allocation or deallocation occurs.
+    /// \remark When \p count equals the current size, the operation is a no-op;
+    ///         the bound stream is preserved unchanged.
     /// \remark When reallocation happens, new storage is allocated on \p stream while
     ///         old storage is released on the previously bound stream.
     [[nodiscard]] gwn_status
     resize(std::size_t const count, cudaStream_t const stream = gwn_default_stream()) noexcept {
         if (count == size_) {
-            stream_ = stream;
+            // No-op: size unchanged, stream binding preserved
             return gwn_status::ok();
         }
         if (count == 0)
@@ -482,7 +481,7 @@ template <class T>
 template <class T>
 gwn_status gwn_allocate_span(
     cuda::std::span<T const> &dst, std::size_t const count, cudaStream_t const stream
-) {
+) noexcept {
     if (dst.data() != nullptr || dst.size() != 0)
         return gwn_status::invalid_argument("gwn_allocate_span expects an empty destination span.");
     if (count == 0) {
@@ -510,7 +509,7 @@ template <class T>
 gwn_status gwn_copy_h2d(
     cuda::std::span<T const> const dst_device, cuda::std::span<T const> const src_host,
     cudaStream_t const stream
-) {
+) noexcept {
     if (dst_device.size() != src_host.size())
         return gwn_status::invalid_argument("gwn_copy_h2d span size mismatch.");
     if (src_host.empty())
@@ -526,7 +525,7 @@ template <class T>
 gwn_status gwn_copy_d2h(
     cuda::std::span<T> const dst_host, cuda::std::span<T const> const src_device,
     cudaStream_t const stream
-) {
+) noexcept {
     if (dst_host.size() != src_device.size())
         return gwn_status::invalid_argument("gwn_copy_d2h span size mismatch.");
     if (src_device.empty())
@@ -541,7 +540,7 @@ template <class T>
 gwn_status gwn_copy_d2d(
     cuda::std::span<T const> const dst_device, cuda::std::span<T const> const src_device,
     cudaStream_t const stream
-) {
+) noexcept {
     if (dst_device.size() != src_device.size())
         return gwn_status::invalid_argument("gwn_copy_d2d span size mismatch.");
     if (src_device.empty())

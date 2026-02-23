@@ -295,8 +295,11 @@ __device__ inline Real gwn_winding_number_point_bvh_taylor(
     Real const accuracy_scale2 = accuracy_scale * accuracy_scale;
     if (bvh.root_kind == gwn_bvh_child_kind::k_leaf) {
         for (Index primitive_offset = 0; primitive_offset < bvh.root_count; ++primitive_offset) {
+            Index const sorted_primitive_index = bvh.root_index + primitive_offset;
+            if (!gwn_index_in_bounds(sorted_primitive_index, bvh.primitive_indices.size()))
+                continue;
             Index const primitive_index =
-                bvh.primitive_indices[static_cast<std::size_t>(bvh.root_index + primitive_offset)];
+                bvh.primitive_indices[static_cast<std::size_t>(sorted_primitive_index)];
             omega_sum += gwn_triangle_solid_angle_from_primitive<Real, Index>(
                 geometry, primitive_index, gwn_vec3<Real>(qx, qy, qz)
             );
@@ -578,8 +581,7 @@ gwn_status gwn_compute_winding_number_batch_bvh_taylor(
     if (!data_tree.is_valid_for(bvh))
         return gwn_status::invalid_argument("BVH data tree is invalid for the given topology.");
     if (!data_tree.template has_taylor_order<Order>())
-        return gwn_status::invalid_argument(
-            "BVH data tree is missing requested Taylor-order data."
+        return gwn_status::invalid_argument("BVH data tree is missing requested Taylor-order data."
         );
     if (query_x.size() != query_y.size() || query_x.size() != query_z.size())
         return gwn_status::invalid_argument("Query SoA spans must have identical lengths.");
