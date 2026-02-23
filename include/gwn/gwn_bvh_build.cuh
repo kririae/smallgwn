@@ -1306,97 +1306,165 @@ __device__ inline gwn_device_taylor_moment<Order, Real> gwn_compute_leaf_taylor_
     return leaf;
 }
 
-template <int Order, class Real, class Index> struct gwn_build_taylor_level_functor {
-    using moment_type = gwn_device_taylor_moment<Order, Real>;
-
-    gwn_geometry_accessor<Real, Index> geometry{};
+template <class Real, class Index> struct gwn_prepare_taylor_async_topology_functor {
     gwn_bvh_accessor<Real, Index> bvh{};
-    cuda::std::span<moment_type> node_moments{};
-    cuda::std::span<std::uint8_t const> node_ready_curr{};
-    cuda::std::span<std::uint8_t> node_ready_next{};
-    cuda::std::span<gwn_bvh4_taylor_node_soa<Order, Real>> taylor_nodes{};
-    unsigned int *progress_counter = nullptr;
+    cuda::std::span<Index> internal_parent{};
+    cuda::std::span<std::uint8_t> internal_parent_slot{};
+    cuda::std::span<std::uint8_t> internal_arity{};
+    unsigned int *error_flag = nullptr;
+
+    __device__ inline void gwn_mark_error() const noexcept {
+        if (error_flag != nullptr)
+            atomicExch(error_flag, 1u);
+    }
 
     __device__ void operator()(std::size_t const node_id) const {
-        if (node_id >= bvh.nodes.size())
-            return;
-
-        if (node_ready_curr[node_id] != 0) {
-            node_ready_next[node_id] = std::uint8_t(1);
+        if (node_id >= bvh.nodes.size() || node_id >= internal_parent.size() ||
+            node_id >= internal_parent_slot.size() || node_id >= internal_arity.size()) {
+            gwn_mark_error();
             return;
         }
 
         gwn_bvh4_node_soa<Real, Index> const &node = bvh.nodes[node_id];
-        moment_type child_moments[4]{};
-        bool child_valid[4] = {false, false, false, false};
-        bool has_child = false;
-        gwn_aabb<Real> merged_bounds{};
-        bool can_resolve = true;
-
+        std::uint8_t node_arity = 0;
         GWN_PRAGMA_UNROLL
         for (int child_slot = 0; child_slot < 4; ++child_slot) {
             auto const kind = static_cast<gwn_bvh_child_kind>(node.child_kind[child_slot]);
             if (kind == gwn_bvh_child_kind::k_invalid)
                 continue;
 
-            moment_type child{};
-            if (kind == gwn_bvh_child_kind::k_internal) {
-                Index const child_index = node.child_index[child_slot];
-                if (child_index < Index(0)) {
-                    can_resolve = false;
-                    break;
-                }
-                std::size_t const child_index_u = static_cast<std::size_t>(child_index);
-                if (child_index_u >= bvh.nodes.size() || node_ready_curr[child_index_u] == 0) {
-                    can_resolve = false;
-                    break;
-                }
-                child = node_moments[child_index_u];
-            } else if (kind == gwn_bvh_child_kind::k_leaf) {
-                child = gwn_compute_leaf_taylor_moment<Order>(
-                    geometry, bvh, node.child_index[child_slot], node.child_count[child_slot]
-                );
-            } else {
+            if (kind != gwn_bvh_child_kind::k_internal && kind != gwn_bvh_child_kind::k_leaf) {
+                gwn_mark_error();
                 continue;
             }
 
-            child_moments[child_slot] = child;
-            child_valid[child_slot] = true;
+            ++node_arity;
+            if (kind == gwn_bvh_child_kind::k_internal) {
+                Index const child_index = node.child_index[child_slot];
+                if (child_index < Index(0) ||
+                    static_cast<std::size_t>(child_index) >= bvh.nodes.size()) {
+                    gwn_mark_error();
+                    continue;
+                }
+                std::size_t const child_index_u = static_cast<std::size_t>(child_index);
+                internal_parent[child_index_u] = static_cast<Index>(node_id);
+                internal_parent_slot[child_index_u] = static_cast<std::uint8_t>(child_slot);
+                continue;
+            }
 
-            gwn_aabb<Real> const bounds{
+            Index const leaf_begin = node.child_index[child_slot];
+            Index const leaf_count = node.child_count[child_slot];
+            if (leaf_begin < Index(0) || leaf_count < Index(0)) {
+                gwn_mark_error();
+                continue;
+            }
+            std::size_t const leaf_begin_u = static_cast<std::size_t>(leaf_begin);
+            std::size_t const leaf_count_u = static_cast<std::size_t>(leaf_count);
+            if (leaf_begin_u > bvh.primitive_indices.size() ||
+                leaf_count_u > (bvh.primitive_indices.size() - leaf_begin_u)) {
+                gwn_mark_error();
+                continue;
+            }
+        }
+
+        internal_arity[node_id] = node_arity;
+        if (node_arity == 0)
+            gwn_mark_error();
+    }
+};
+
+template <int Order, class Real, class Index> struct gwn_build_taylor_async_from_leaves_functor {
+    using moment_type = gwn_device_taylor_moment<Order, Real>;
+
+    gwn_geometry_accessor<Real, Index> geometry{};
+    gwn_bvh_accessor<Real, Index> bvh{};
+    cuda::std::span<Index const> internal_parent{};
+    cuda::std::span<std::uint8_t const> internal_parent_slot{};
+    cuda::std::span<std::uint8_t const> internal_arity{};
+    cuda::std::span<unsigned int> internal_arrivals{};
+    cuda::std::span<moment_type> pending_child_moments{};
+    cuda::std::span<gwn_bvh4_taylor_node_soa<Order, Real>> taylor_nodes{};
+    unsigned int *error_flag = nullptr;
+
+    __device__ inline void gwn_mark_error() const noexcept {
+        if (error_flag != nullptr)
+            atomicExch(error_flag, 1u);
+    }
+
+    __device__ inline bool
+    gwn_pending_index_is_valid(std::size_t const node_id, int const child_slot) const noexcept {
+        if (child_slot < 0 || child_slot >= 4)
+            return false;
+        if (node_id > (std::numeric_limits<std::size_t>::max() / std::size_t(4)))
+            return false;
+
+        std::size_t const pending_index =
+            node_id * std::size_t(4) + static_cast<std::size_t>(child_slot);
+        return pending_index < pending_child_moments.size();
+    }
+
+    __device__ inline std::size_t
+    gwn_pending_index(std::size_t const node_id, int const child_slot) const noexcept {
+        return node_id * std::size_t(4) + static_cast<std::size_t>(child_slot);
+    }
+
+    __device__ bool
+    gwn_finalize_node(std::size_t const node_id, moment_type &out_parent_moment) const noexcept {
+        if (node_id >= bvh.nodes.size() || node_id >= taylor_nodes.size()) {
+            gwn_mark_error();
+            return false;
+        }
+
+        gwn_bvh4_node_soa<Real, Index> const &node = bvh.nodes[node_id];
+        gwn_bvh4_taylor_node_soa<Order, Real> taylor{};
+        moment_type parent{};
+        bool has_child = false;
+        gwn_aabb<Real> merged_bounds{};
+
+        GWN_PRAGMA_UNROLL
+        for (int child_slot = 0; child_slot < 4; ++child_slot) {
+            auto const kind = static_cast<gwn_bvh_child_kind>(node.child_kind[child_slot]);
+            if (kind == gwn_bvh_child_kind::k_invalid) {
+                gwn_zero_taylor_child<Order>(taylor, child_slot);
+                continue;
+            }
+            if (kind != gwn_bvh_child_kind::k_internal && kind != gwn_bvh_child_kind::k_leaf) {
+                gwn_zero_taylor_child<Order>(taylor, child_slot);
+                gwn_mark_error();
+                continue;
+            }
+            if (!gwn_pending_index_is_valid(node_id, child_slot)) {
+                gwn_zero_taylor_child<Order>(taylor, child_slot);
+                gwn_mark_error();
+                continue;
+            }
+
+            moment_type const child_moment =
+                pending_child_moments[gwn_pending_index(node_id, child_slot)];
+            gwn_write_taylor_child<Order>(taylor, child_slot, child_moment);
+
+            parent.area += child_moment.area;
+            parent.area_p_x += child_moment.area_p_x;
+            parent.area_p_y += child_moment.area_p_y;
+            parent.area_p_z += child_moment.area_p_z;
+            parent.n_x += child_moment.n_x;
+            parent.n_y += child_moment.n_y;
+            parent.n_z += child_moment.n_z;
+
+            gwn_aabb<Real> const child_bounds{
                 node.child_min_x[child_slot], node.child_min_y[child_slot],
                 node.child_min_z[child_slot], node.child_max_x[child_slot],
                 node.child_max_y[child_slot], node.child_max_z[child_slot],
             };
             if (!has_child) {
-                merged_bounds = bounds;
+                merged_bounds = child_bounds;
                 has_child = true;
             } else {
-                merged_bounds = gwn_aabb_union(merged_bounds, bounds);
+                merged_bounds = gwn_aabb_union(merged_bounds, child_bounds);
             }
         }
 
-        if (!can_resolve) {
-            node_ready_next[node_id] = std::uint8_t(0);
-            return;
-        }
-
-        moment_type parent{};
         if (has_child) {
-            GWN_PRAGMA_UNROLL
-            for (int child_slot = 0; child_slot < 4; ++child_slot) {
-                if (!child_valid[child_slot])
-                    continue;
-                moment_type const child = child_moments[child_slot];
-                parent.area += child.area;
-                parent.area_p_x += child.area_p_x;
-                parent.area_p_y += child.area_p_y;
-                parent.area_p_z += child.area_p_z;
-                parent.n_x += child.n_x;
-                parent.n_y += child.n_y;
-                parent.n_z += child.n_z;
-            }
-
             if (parent.area > Real(0)) {
                 parent.average_x = parent.area_p_x / parent.area;
                 parent.average_y = parent.area_p_y / parent.area;
@@ -1413,41 +1481,144 @@ template <int Order, class Real, class Index> struct gwn_build_taylor_level_func
             if constexpr (Order >= 1) {
                 GWN_PRAGMA_UNROLL
                 for (int child_slot = 0; child_slot < 4; ++child_slot) {
-                    if (!child_valid[child_slot])
+                    auto const kind = static_cast<gwn_bvh_child_kind>(node.child_kind[child_slot]);
+                    if (kind == gwn_bvh_child_kind::k_invalid)
                         continue;
-                    moment_type const child = child_moments[child_slot];
-                    Real const dx = child.average_x - parent.average_x;
-                    Real const dy = child.average_y - parent.average_y;
-                    Real const dz = child.average_z - parent.average_z;
+                    if (!gwn_pending_index_is_valid(node_id, child_slot)) {
+                        gwn_mark_error();
+                        continue;
+                    }
+                    moment_type const child_moment =
+                        pending_child_moments[gwn_pending_index(node_id, child_slot)];
+                    Real const dx = child_moment.average_x - parent.average_x;
+                    Real const dy = child_moment.average_y - parent.average_y;
+                    Real const dz = child_moment.average_z - parent.average_z;
 
-                    parent.nij_xx += child.nij_xx + child.n_x * dx;
-                    parent.nij_yy += child.nij_yy + child.n_y * dy;
-                    parent.nij_zz += child.nij_zz + child.n_z * dz;
-                    parent.nxy += child.nxy + child.n_x * dy;
-                    parent.nyx += child.nyx + child.n_y * dx;
-                    parent.nyz += child.nyz + child.n_y * dz;
-                    parent.nzy += child.nzy + child.n_z * dy;
-                    parent.nzx += child.nzx + child.n_z * dx;
-                    parent.nxz += child.nxz + child.n_x * dz;
+                    parent.nij_xx += child_moment.nij_xx + child_moment.n_x * dx;
+                    parent.nij_yy += child_moment.nij_yy + child_moment.n_y * dy;
+                    parent.nij_zz += child_moment.nij_zz + child_moment.n_z * dz;
+                    parent.nxy += child_moment.nxy + child_moment.n_x * dy;
+                    parent.nyx += child_moment.nyx + child_moment.n_y * dx;
+                    parent.nyz += child_moment.nyz + child_moment.n_y * dz;
+                    parent.nzy += child_moment.nzy + child_moment.n_z * dy;
+                    parent.nzx += child_moment.nzx + child_moment.n_z * dx;
+                    parent.nxz += child_moment.nxz + child_moment.n_x * dz;
                 }
             }
         }
 
-        gwn_bvh4_taylor_node_soa<Order, Real> taylor{};
-        GWN_PRAGMA_UNROLL
-        for (int child_slot = 0; child_slot < 4; ++child_slot)
-            if (child_valid[child_slot])
-                gwn_write_taylor_child<Order>(taylor, child_slot, child_moments[child_slot]);
-            else
-                gwn_zero_taylor_child<Order>(taylor, child_slot);
-
         taylor_nodes[node_id] = taylor;
-        node_moments[node_id] = parent;
-        node_ready_next[node_id] = std::uint8_t(1);
-        atomicAdd(progress_counter, 1u);
+        out_parent_moment = parent;
+        return true;
+    }
+
+    __device__ void gwn_propagate_up(
+        Index current_parent, std::uint8_t current_slot, moment_type current_moment
+    ) const noexcept {
+        while (current_parent >= Index(0)) {
+            std::size_t const parent_id = static_cast<std::size_t>(current_parent);
+            if (parent_id >= bvh.nodes.size() || parent_id >= internal_parent.size() ||
+                parent_id >= internal_parent_slot.size() || parent_id >= internal_arity.size() ||
+                parent_id >= internal_arrivals.size() || parent_id >= taylor_nodes.size()) {
+                gwn_mark_error();
+                return;
+            }
+            if (current_slot >= 4) {
+                gwn_mark_error();
+                return;
+            }
+            if (!gwn_pending_index_is_valid(parent_id, static_cast<int>(current_slot))) {
+                gwn_mark_error();
+                return;
+            }
+
+            pending_child_moments[gwn_pending_index(parent_id, static_cast<int>(current_slot))] =
+                current_moment;
+            __threadfence();
+
+            unsigned int const previous_arrivals =
+                atomicAdd(internal_arrivals.data() + parent_id, 1u);
+            unsigned int const next_arrivals = previous_arrivals + 1u;
+            unsigned int const expected_arrivals =
+                static_cast<unsigned int>(internal_arity[parent_id]);
+            if (expected_arrivals == 0u || expected_arrivals > 4u) {
+                gwn_mark_error();
+                return;
+            }
+            if (next_arrivals < expected_arrivals)
+                return;
+            if (next_arrivals > expected_arrivals) {
+                gwn_mark_error();
+                return;
+            }
+
+            __threadfence();
+
+            moment_type parent_moment{};
+            if (!gwn_finalize_node(parent_id, parent_moment))
+                return;
+
+            Index const parent_parent = internal_parent[parent_id];
+            if (parent_parent < Index(0))
+                return;
+
+            std::uint8_t const parent_parent_slot = internal_parent_slot[parent_id];
+            if (parent_parent_slot >= 4) {
+                gwn_mark_error();
+                return;
+            }
+
+            current_parent = parent_parent;
+            current_slot = parent_parent_slot;
+            current_moment = parent_moment;
+        }
+    }
+
+    __device__ void operator()(std::size_t const edge_index) const {
+        if (edge_index > (std::numeric_limits<std::size_t>::max() / std::size_t(4)))
+            return;
+
+        std::size_t const node_id = edge_index >> 2;
+        int const child_slot = static_cast<int>(edge_index & std::size_t(3));
+        if (node_id >= bvh.nodes.size())
+            return;
+
+        gwn_bvh4_node_soa<Real, Index> const &node = bvh.nodes[node_id];
+        auto const child_kind = static_cast<gwn_bvh_child_kind>(node.child_kind[child_slot]);
+        if (child_kind != gwn_bvh_child_kind::k_leaf)
+            return;
+
+        moment_type const leaf_moment = gwn_compute_leaf_taylor_moment_cached<Order>(
+            geometry, bvh, node.child_index[child_slot], node.child_count[child_slot]
+        );
+        gwn_propagate_up(
+            static_cast<Index>(node_id), static_cast<std::uint8_t>(child_slot), leaf_moment
+        );
     }
 };
 
+template <class Index> struct gwn_validate_taylor_async_convergence_functor {
+    cuda::std::span<std::uint8_t const> internal_arity{};
+    cuda::std::span<unsigned int const> internal_arrivals{};
+    unsigned int *error_flag = nullptr;
+
+    __device__ void operator()(std::size_t const node_id) const {
+        if (node_id >= internal_arity.size() || node_id >= internal_arrivals.size()) {
+            if (error_flag != nullptr)
+                atomicExch(error_flag, 1u);
+            return;
+        }
+
+        unsigned int const expected_arrivals = static_cast<unsigned int>(internal_arity[node_id]);
+        if (expected_arrivals == 0u || expected_arrivals > 4u ||
+            internal_arrivals[node_id] != expected_arrivals) {
+            if (error_flag != nullptr)
+                atomicExch(error_flag, 1u);
+        }
+    }
+};
+
+#ifdef GWN_ENABLE_TAYLOR_LEVELWISE_REFERENCE
 template <int Order, class Real, class Index> struct gwn_build_taylor_levelwise_functor {
     using moment_type = gwn_device_taylor_moment<Order, Real>;
 
@@ -1575,10 +1746,11 @@ template <int Order, class Real, class Index> struct gwn_build_taylor_levelwise_
         taylor_nodes[node_id] = taylor;
     }
 };
+#endif
 
 } // namespace detail
 
-/// \brief Build 4-wide LBVH topology and per-node Taylor data (iterative GPU propagation).
+/// \brief Build 4-wide LBVH topology and per-node Taylor data (fully GPU async propagation).
 ///
 /// \remark This rebuilds topology first, then computes the requested Taylor order.
 /// \remark Previously stored data orders are released before writing the requested one.
@@ -1609,6 +1781,11 @@ gwn_status gwn_build_bvh4_lbvh_taylor(
     if (topology.root_index < Index(0) ||
         static_cast<std::size_t>(topology.root_index) >= node_count)
         return gwn_status::internal_error("BVH root index out of range for Taylor construction.");
+    if (node_count > (std::numeric_limits<std::size_t>::max() / std::size_t(4)))
+        return gwn_status::internal_error("Taylor async construction node count overflow.");
+
+    std::size_t const pending_count = node_count * std::size_t(4);
+    constexpr int k_block_size = detail::k_gwn_default_block_size;
 
     cuda::std::span<taylor_node_type const> taylor_nodes_device{};
     GWN_RETURN_ON_ERROR(detail::gwn_allocate_span(taylor_nodes_device, node_count, stream));
@@ -1616,22 +1793,36 @@ gwn_status gwn_build_bvh4_lbvh_taylor(
         detail::gwn_release_bvh_span(taylor_nodes_device, stream);
     });
 
-    cuda::std::span<moment_type const> node_moments_device{};
-    GWN_RETURN_ON_ERROR(detail::gwn_allocate_span(node_moments_device, node_count, stream));
-    auto cleanup_node_moments = gwn_make_scope_exit([&]() noexcept {
-        detail::gwn_release_bvh_span(node_moments_device, stream);
+    cuda::std::span<Index const> internal_parent_device{};
+    GWN_RETURN_ON_ERROR(detail::gwn_allocate_span(internal_parent_device, node_count, stream));
+    auto cleanup_internal_parent = gwn_make_scope_exit([&]() noexcept {
+        detail::gwn_release_bvh_span(internal_parent_device, stream);
     });
 
-    cuda::std::span<std::uint8_t const> node_ready_a_device{};
-    GWN_RETURN_ON_ERROR(detail::gwn_allocate_span(node_ready_a_device, node_count, stream));
-    auto cleanup_node_ready_a = gwn_make_scope_exit([&]() noexcept {
-        detail::gwn_release_bvh_span(node_ready_a_device, stream);
+    cuda::std::span<std::uint8_t const> internal_parent_slot_device{};
+    GWN_RETURN_ON_ERROR(detail::gwn_allocate_span(internal_parent_slot_device, node_count, stream));
+    auto cleanup_internal_parent_slot = gwn_make_scope_exit([&]() noexcept {
+        detail::gwn_release_bvh_span(internal_parent_slot_device, stream);
     });
 
-    cuda::std::span<std::uint8_t const> node_ready_b_device{};
-    GWN_RETURN_ON_ERROR(detail::gwn_allocate_span(node_ready_b_device, node_count, stream));
-    auto cleanup_node_ready_b = gwn_make_scope_exit([&]() noexcept {
-        detail::gwn_release_bvh_span(node_ready_b_device, stream);
+    cuda::std::span<std::uint8_t const> internal_arity_device{};
+    GWN_RETURN_ON_ERROR(detail::gwn_allocate_span(internal_arity_device, node_count, stream));
+    auto cleanup_internal_arity = gwn_make_scope_exit([&]() noexcept {
+        detail::gwn_release_bvh_span(internal_arity_device, stream);
+    });
+
+    cuda::std::span<unsigned int const> internal_arrivals_device{};
+    GWN_RETURN_ON_ERROR(detail::gwn_allocate_span(internal_arrivals_device, node_count, stream));
+    auto cleanup_internal_arrivals = gwn_make_scope_exit([&]() noexcept {
+        detail::gwn_release_bvh_span(internal_arrivals_device, stream);
+    });
+
+    cuda::std::span<moment_type const> pending_child_moments_device{};
+    GWN_RETURN_ON_ERROR(
+        detail::gwn_allocate_span(pending_child_moments_device, pending_count, stream)
+    );
+    auto cleanup_pending_child_moments = gwn_make_scope_exit([&]() noexcept {
+        detail::gwn_release_bvh_span(pending_child_moments_device, stream);
     });
 
     GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemsetAsync(
@@ -1639,83 +1830,99 @@ gwn_status gwn_build_bvh4_lbvh_taylor(
         node_count * sizeof(taylor_node_type), stream
     )));
     GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemsetAsync(
-        const_cast<moment_type *>(node_moments_device.data()), 0, node_count * sizeof(moment_type),
-        stream
+        const_cast<Index *>(internal_parent_device.data()), 0xff, node_count * sizeof(Index), stream
     )));
     GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemsetAsync(
-        const_cast<std::uint8_t *>(node_ready_a_device.data()), 0,
+        const_cast<std::uint8_t *>(internal_parent_slot_device.data()), 0xff,
         node_count * sizeof(std::uint8_t), stream
     )));
     GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemsetAsync(
-        const_cast<std::uint8_t *>(node_ready_b_device.data()), 0,
+        const_cast<std::uint8_t *>(internal_arity_device.data()), 0,
         node_count * sizeof(std::uint8_t), stream
     )));
+    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemsetAsync(
+        const_cast<unsigned int *>(internal_arrivals_device.data()), 0,
+        node_count * sizeof(unsigned int), stream
+    )));
 
-    void *progress_counter_raw = nullptr;
-    GWN_RETURN_ON_ERROR(gwn_cuda_malloc(&progress_counter_raw, sizeof(unsigned int), stream));
-    auto cleanup_progress_counter =
-        gwn_make_scope_exit([&]() noexcept { (void)gwn_cuda_free(progress_counter_raw, stream); });
-    unsigned int *progress_counter = static_cast<unsigned int *>(progress_counter_raw);
+    void *error_flag_raw = nullptr;
+    GWN_RETURN_ON_ERROR(gwn_cuda_malloc(&error_flag_raw, sizeof(unsigned int), stream));
+    auto cleanup_error_flag =
+        gwn_make_scope_exit([&]() noexcept { (void)gwn_cuda_free(error_flag_raw, stream); });
+    unsigned int *error_flag = static_cast<unsigned int *>(error_flag_raw);
+    GWN_RETURN_ON_ERROR(
+        gwn_cuda_to_status(cudaMemsetAsync(error_flag, 0, sizeof(unsigned int), stream))
+    );
 
+    auto const internal_parent = cuda::std::span<Index>(
+        const_cast<Index *>(internal_parent_device.data()), internal_parent_device.size()
+    );
+    auto const internal_parent_slot = cuda::std::span<std::uint8_t>(
+        const_cast<std::uint8_t *>(internal_parent_slot_device.data()),
+        internal_parent_slot_device.size()
+    );
+    auto const internal_arity = cuda::std::span<std::uint8_t>(
+        const_cast<std::uint8_t *>(internal_arity_device.data()), internal_arity_device.size()
+    );
+    auto const internal_arrivals = cuda::std::span<unsigned int>(
+        const_cast<unsigned int *>(internal_arrivals_device.data()), internal_arrivals_device.size()
+    );
+    auto const pending_child_moments = cuda::std::span<moment_type>(
+        const_cast<moment_type *>(pending_child_moments_device.data()),
+        pending_child_moments_device.size()
+    );
     auto const taylor_nodes = cuda::std::span<taylor_node_type>(
-        const_cast<taylor_node_type *>(taylor_nodes_device.data()), node_count
-    );
-    auto const node_moments = cuda::std::span<moment_type>(
-        const_cast<moment_type *>(node_moments_device.data()), node_count
-    );
-    auto node_ready_curr = cuda::std::span<std::uint8_t>(
-        const_cast<std::uint8_t *>(node_ready_a_device.data()), node_count
-    );
-    auto node_ready_next = cuda::std::span<std::uint8_t>(
-        const_cast<std::uint8_t *>(node_ready_b_device.data()), node_count
+        const_cast<taylor_node_type *>(taylor_nodes_device.data()), taylor_nodes_device.size()
     );
 
-    constexpr int k_block_size = detail::k_gwn_default_block_size;
-    std::size_t const root_index = static_cast<std::size_t>(topology.root_index);
+    GWN_RETURN_ON_ERROR(
+        detail::gwn_launch_linear_kernel<k_block_size>(
+            node_count,
+            detail::gwn_prepare_taylor_async_topology_functor<Real, Index>{
+                topology, internal_parent, internal_parent_slot, internal_arity, error_flag
+            },
+            stream
+        )
+    );
+    GWN_RETURN_ON_ERROR(
+        detail::gwn_launch_linear_kernel<k_block_size>(
+            pending_count,
+            detail::gwn_build_taylor_async_from_leaves_functor<Order, Real, Index>{
+                geometry, topology,
+                cuda::std::span<Index const>(internal_parent.data(), internal_parent.size()),
+                cuda::std::span<std::uint8_t const>(
+                    internal_parent_slot.data(), internal_parent_slot.size()
+                ),
+                cuda::std::span<std::uint8_t const>(internal_arity.data(), internal_arity.size()),
+                internal_arrivals, pending_child_moments, taylor_nodes, error_flag
+            },
+            stream
+        )
+    );
+    GWN_RETURN_ON_ERROR(
+        detail::gwn_launch_linear_kernel<k_block_size>(
+            node_count,
+            detail::gwn_validate_taylor_async_convergence_functor<Index>{
+                cuda::std::span<std::uint8_t const>(internal_arity.data(), internal_arity.size()),
+                cuda::std::span<unsigned int const>(
+                    internal_arrivals.data(), internal_arrivals.size()
+                ),
+                error_flag
+            },
+            stream
+        )
+    );
 
-    bool root_ready = false;
-    for (std::size_t iteration = 0; iteration <= node_count; ++iteration) {
-        GWN_RETURN_ON_ERROR(
-            gwn_cuda_to_status(cudaMemsetAsync(progress_counter, 0, sizeof(unsigned int), stream))
+    unsigned int host_error_flag = 0;
+    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemcpyAsync(
+        &host_error_flag, error_flag, sizeof(unsigned int), cudaMemcpyDeviceToHost, stream
+    )));
+    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaStreamSynchronize(stream)));
+    if (host_error_flag != 0) {
+        return gwn_status::internal_error(
+            "Taylor async construction failed topology/propagation validation."
         );
-
-        GWN_RETURN_ON_ERROR(
-            detail::gwn_launch_linear_kernel<k_block_size>(
-                node_count,
-                detail::gwn_build_taylor_level_functor<Order, Real, Index>{
-                    geometry, topology, node_moments,
-                    cuda::std::span<std::uint8_t const>(
-                        node_ready_curr.data(), node_ready_curr.size()
-                    ),
-                    node_ready_next, taylor_nodes, progress_counter
-                },
-                stream
-            )
-        );
-
-        unsigned int host_progress = 0;
-        std::uint8_t host_root_ready = 0;
-        GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemcpyAsync(
-            &host_progress, progress_counter, sizeof(unsigned int), cudaMemcpyDeviceToHost, stream
-        )));
-        GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemcpyAsync(
-            &host_root_ready, node_ready_next.data() + root_index, sizeof(std::uint8_t),
-            cudaMemcpyDeviceToHost, stream
-        )));
-        GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaStreamSynchronize(stream)));
-
-        if (host_root_ready != 0) {
-            root_ready = true;
-            break;
-        }
-        if (host_progress == 0)
-            return gwn_status::internal_error("Taylor BVH construction made no progress on GPU.");
-
-        std::swap(node_ready_curr, node_ready_next);
     }
-
-    if (!root_ready)
-        return gwn_status::internal_error("Taylor BVH construction did not converge on GPU.");
 
     if constexpr (Order == 0)
         data_tree.taylor_order0_nodes = taylor_nodes_device;
@@ -1729,6 +1936,7 @@ gwn_status gwn_build_bvh4_lbvh_taylor(
     return gwn_status::internal_error("Unhandled unknown exception in gwn_build_bvh4_lbvh_taylor.");
 }
 
+#ifdef GWN_ENABLE_TAYLOR_LEVELWISE_REFERENCE
 /// \brief Build 4-wide LBVH topology and Taylor data with host-reconstructed level order.
 ///
 /// \remark This variant computes Taylor nodes from deepest level to root.
@@ -1897,5 +2105,6 @@ gwn_status gwn_build_bvh4_lbvh_taylor_levelwise(
         "Unhandled unknown exception in gwn_build_bvh4_lbvh_taylor_levelwise."
     );
 }
+#endif
 
 } // namespace gwn
