@@ -1,6 +1,6 @@
 #pragma once
 
-#include <gwn/gwn_utils.hpp>
+#include <gwn/gwn_utils.cuh>
 
 #if !__has_include(<Eigen/Core>) || !__has_include(<Eigen/Geometry>)
 #error "reference_cpu.hpp requires Eigen/Core and Eigen/Geometry in the include path."

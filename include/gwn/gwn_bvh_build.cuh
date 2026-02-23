@@ -1807,84 +1807,44 @@ gwn_status gwn_build_bvh4_lbvh_taylor(
         detail::gwn_release_bvh_span(taylor_nodes_device, stream);
     });
 
-    cuda::std::span<Index const> internal_parent_device{};
-    GWN_RETURN_ON_ERROR(detail::gwn_allocate_span(internal_parent_device, node_count, stream));
-    auto cleanup_internal_parent = gwn_make_scope_exit([&]() noexcept {
-        detail::gwn_release_bvh_span(internal_parent_device, stream);
-    });
-
-    cuda::std::span<std::uint8_t const> internal_parent_slot_device{};
-    GWN_RETURN_ON_ERROR(detail::gwn_allocate_span(internal_parent_slot_device, node_count, stream));
-    auto cleanup_internal_parent_slot = gwn_make_scope_exit([&]() noexcept {
-        detail::gwn_release_bvh_span(internal_parent_slot_device, stream);
-    });
-
-    cuda::std::span<std::uint8_t const> internal_arity_device{};
-    GWN_RETURN_ON_ERROR(detail::gwn_allocate_span(internal_arity_device, node_count, stream));
-    auto cleanup_internal_arity = gwn_make_scope_exit([&]() noexcept {
-        detail::gwn_release_bvh_span(internal_arity_device, stream);
-    });
-
-    cuda::std::span<unsigned int const> internal_arrivals_device{};
-    GWN_RETURN_ON_ERROR(detail::gwn_allocate_span(internal_arrivals_device, node_count, stream));
-    auto cleanup_internal_arrivals = gwn_make_scope_exit([&]() noexcept {
-        detail::gwn_release_bvh_span(internal_arrivals_device, stream);
-    });
-
-    cuda::std::span<moment_type const> pending_child_moments_device{};
-    GWN_RETURN_ON_ERROR(
-        detail::gwn_allocate_span(pending_child_moments_device, pending_count, stream)
-    );
-    auto cleanup_pending_child_moments = gwn_make_scope_exit([&]() noexcept {
-        detail::gwn_release_bvh_span(pending_child_moments_device, stream);
-    });
+    gwn_device_array<Index> internal_parent_device{};
+    gwn_device_array<std::uint8_t> internal_parent_slot_device{};
+    gwn_device_array<std::uint8_t> internal_arity_device{};
+    gwn_device_array<unsigned int> internal_arrivals_device{};
+    gwn_device_array<moment_type> pending_child_moments_device{};
+    GWN_RETURN_ON_ERROR(internal_parent_device.resize(node_count, stream));
+    GWN_RETURN_ON_ERROR(internal_parent_slot_device.resize(node_count, stream));
+    GWN_RETURN_ON_ERROR(internal_arity_device.resize(node_count, stream));
+    GWN_RETURN_ON_ERROR(internal_arrivals_device.resize(node_count, stream));
+    GWN_RETURN_ON_ERROR(pending_child_moments_device.resize(pending_count, stream));
 
     GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemsetAsync(
         const_cast<taylor_node_type *>(taylor_nodes_device.data()), 0,
         node_count * sizeof(taylor_node_type), stream
     )));
+    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
+        cudaMemsetAsync(internal_parent_device.data(), 0xff, node_count * sizeof(Index), stream)
+    ));
     GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemsetAsync(
-        const_cast<Index *>(internal_parent_device.data()), 0xff, node_count * sizeof(Index), stream
+        internal_parent_slot_device.data(), 0xff, node_count * sizeof(std::uint8_t), stream
     )));
+    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
+        cudaMemsetAsync(internal_arity_device.data(), 0, node_count * sizeof(std::uint8_t), stream)
+    ));
     GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemsetAsync(
-        const_cast<std::uint8_t *>(internal_parent_slot_device.data()), 0xff,
-        node_count * sizeof(std::uint8_t), stream
-    )));
-    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemsetAsync(
-        const_cast<std::uint8_t *>(internal_arity_device.data()), 0,
-        node_count * sizeof(std::uint8_t), stream
-    )));
-    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemsetAsync(
-        const_cast<unsigned int *>(internal_arrivals_device.data()), 0,
-        node_count * sizeof(unsigned int), stream
+        internal_arrivals_device.data(), 0, node_count * sizeof(unsigned int), stream
     )));
 
-    void *error_flag_raw = nullptr;
-    GWN_RETURN_ON_ERROR(gwn_cuda_malloc(&error_flag_raw, sizeof(unsigned int), stream));
-    auto cleanup_error_flag =
-        gwn_make_scope_exit([&]() noexcept { (void)gwn_cuda_free(error_flag_raw, stream); });
-    unsigned int *error_flag = static_cast<unsigned int *>(error_flag_raw);
-    GWN_RETURN_ON_ERROR(
-        gwn_cuda_to_status(cudaMemsetAsync(error_flag, 0, sizeof(unsigned int), stream))
-    );
+    gwn_device_array<unsigned int> error_flag_device{};
+    GWN_RETURN_ON_ERROR(error_flag_device.resize(1, stream));
+    GWN_RETURN_ON_ERROR(error_flag_device.zero(stream));
+    unsigned int *error_flag = error_flag_device.data();
 
-    auto const internal_parent = cuda::std::span<Index>(
-        const_cast<Index *>(internal_parent_device.data()), internal_parent_device.size()
-    );
-    auto const internal_parent_slot = cuda::std::span<std::uint8_t>(
-        const_cast<std::uint8_t *>(internal_parent_slot_device.data()),
-        internal_parent_slot_device.size()
-    );
-    auto const internal_arity = cuda::std::span<std::uint8_t>(
-        const_cast<std::uint8_t *>(internal_arity_device.data()), internal_arity_device.size()
-    );
-    auto const internal_arrivals = cuda::std::span<unsigned int>(
-        const_cast<unsigned int *>(internal_arrivals_device.data()), internal_arrivals_device.size()
-    );
-    auto const pending_child_moments = cuda::std::span<moment_type>(
-        const_cast<moment_type *>(pending_child_moments_device.data()),
-        pending_child_moments_device.size()
-    );
+    auto const internal_parent = internal_parent_device.span();
+    auto const internal_parent_slot = internal_parent_slot_device.span();
+    auto const internal_arity = internal_arity_device.span();
+    auto const internal_arrivals = internal_arrivals_device.span();
+    auto const pending_child_moments = pending_child_moments_device.span();
     auto const taylor_nodes = cuda::std::span<taylor_node_type>(
         const_cast<taylor_node_type *>(taylor_nodes_device.data()), taylor_nodes_device.size()
     );
@@ -1929,7 +1889,8 @@ gwn_status gwn_build_bvh4_lbvh_taylor(
 
     unsigned int host_error_flag = 0;
     GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemcpyAsync(
-        &host_error_flag, error_flag, sizeof(unsigned int), cudaMemcpyDeviceToHost, stream
+        &host_error_flag, error_flag_device.data(), sizeof(unsigned int), cudaMemcpyDeviceToHost,
+        stream
     )));
     GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaStreamSynchronize(stream)));
     if (host_error_flag != 0) {
@@ -2060,24 +2021,18 @@ gwn_status gwn_build_bvh4_lbvh_taylor_levelwise(
         detail::gwn_release_bvh_span(taylor_nodes_device, stream);
     });
 
-    cuda::std::span<moment_type const> node_moments_device{};
-    GWN_RETURN_ON_ERROR(detail::gwn_allocate_span(node_moments_device, node_count, stream));
-    auto cleanup_node_moments = gwn_make_scope_exit([&]() noexcept {
-        detail::gwn_release_bvh_span(node_moments_device, stream);
-    });
+    gwn_device_array<moment_type> node_moments_device{};
+    GWN_RETURN_ON_ERROR(node_moments_device.resize(node_count, stream));
 
     GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemsetAsync(
         const_cast<taylor_node_type *>(taylor_nodes_device.data()), 0,
         node_count * sizeof(taylor_node_type), stream
     )));
-    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemsetAsync(
-        const_cast<moment_type *>(node_moments_device.data()), 0, node_count * sizeof(moment_type),
-        stream
-    )));
+    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
+        cudaMemsetAsync(node_moments_device.data(), 0, node_count * sizeof(moment_type), stream)
+    ));
 
-    auto const node_moments = cuda::std::span<moment_type>(
-        const_cast<moment_type *>(node_moments_device.data()), node_count
-    );
+    auto const node_moments = node_moments_device.span();
     auto const taylor_nodes = cuda::std::span<taylor_node_type>(
         const_cast<taylor_node_type *>(taylor_nodes_device.data()), node_count
     );

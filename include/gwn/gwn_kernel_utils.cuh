@@ -6,7 +6,7 @@
 #include <cstddef>
 #include <type_traits>
 
-#include "gwn_utils.hpp"
+#include "gwn_utils.cuh"
 
 namespace gwn::detail {
 

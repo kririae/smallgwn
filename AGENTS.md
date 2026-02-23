@@ -16,6 +16,7 @@ These instructions apply to the `smallgwn/` project tree.
 ## File Naming Rules
 - If a header contains CUDA callable annotations (`__device__`, `__global__`, or mixed host/device kernel interfaces), use the `.cuh` extension.
 - Keep pure host-side helpers in `.hpp`.
+- `include/gwn/gwn_utils.cuh` is CUDA-aware and must stay `.cuh`.
 
 ## Naming and API Rules
 - Use `gwn::` namespace and `gwn_` prefix for public symbols.
@@ -32,15 +33,22 @@ These instructions apply to the `smallgwn/` project tree.
 - Prefer TBB for trivially parallel CPU-side batch work.
 - Host owning objects should stay non-copyable and use accessor-centric RAII.
 - Keep stream allocator path only (`cudaMallocAsync`/`cudaFreeAsync`), no legacy fallback path.
+- Stream binding is explicit:
+  - owning objects (`gwn_geometry_object`, `gwn_bvh_topology_object`, `gwn_bvh_data_tree_object`) use `gwn_stream_mixin`;
+  - `clear()`/destructor release on the currently bound stream;
+  - successful stream-parameterized mutations update the bound stream.
+- `gwn_device_array<T>` remembers stream and releases on its bound stream by default.
 
 ## Current BVH/Taylor Design
 - Topology and data are separated:
   - Topology: `gwn_bvh_topology_accessor<Width,...>` / `gwn_bvh_topology_object<Width,...>`
   - Data tree: `gwn_bvh_data_tree_accessor<Width,...>` / `gwn_bvh_data_tree_object<Width,...>`
 - LBVH topology build is GPU-centric (`gwn_build_bvh_lbvh<Width,...>` + `gwn_build_bvh4_lbvh`).
+- LBVH build path uses CUB for scene reduction and radix sort (no Thrust in runtime build path).
 - Taylor build currently supports `Order=0/1`:
   - Production path: `gwn_build_bvh4_lbvh_taylor<Order,...>` uses fully GPU async upward propagation with atomics.
   - Reference path: `gwn_build_bvh4_lbvh_taylor_levelwise<Order,...>` is compiled only when `GWN_ENABLE_TAYLOR_LEVELWISE_REFERENCE` is defined (tests only).
+  - Async Taylor temporary buffers (parent/slot/arity/arrivals/pending moments) use `gwn_device_array`.
 - Winding number query APIs:
   - Exact: `gwn_compute_winding_number_batch_bvh_exact`
   - Taylor: `gwn_compute_winding_number_batch_bvh_taylor<Order,...>`
@@ -56,6 +64,7 @@ These instructions apply to the `smallgwn/` project tree.
   - API compile/smoke sanity for geometry/BVH/taylor entry points.
 - `tests/parity_scaffold.cu`
   - Small synthetic parity checks (CPU exact vs GPU exact/taylor).
+  - Includes stream-binding regression checks for owning objects and `gwn_device_array`.
   - Includes vendored HDK headers for oracle helpers.
 - `tests/bvh_model_parity.cu`
   - Integration tests on OBJ models (exact/taylor consistency, model-level parity, optional benchmark).
@@ -81,3 +90,8 @@ These instructions apply to the `smallgwn/` project tree.
 
 ## Git Commit Style
 - Use Conventional Commits (`feat:`, `fix:`, `refactor:`, `test:`, etc.).
+
+## AGENTS Maintenance Rule
+- Keep this file current with architecture/API/testing changes in `smallgwn/`.
+- When behavior, naming, file layout, stream/memory semantics, or test entrypoints change, update `smallgwn/AGENTS.md` in the same commit.
+- During ongoing development, re-check and refresh this file periodically rather than batching stale updates.

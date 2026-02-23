@@ -5,5 +5,5 @@
 #include "gwn_eigen_bridge.hpp"
 #include "gwn_geometry.cuh"
 #include "gwn_kernel_utils.cuh"
-#include "gwn_utils.hpp"
+#include "gwn_utils.cuh"
 #include "gwn_winding_number.cuh"
