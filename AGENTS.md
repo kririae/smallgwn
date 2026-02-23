@@ -67,7 +67,7 @@ These instructions apply to the `smallgwn/` project tree.
 - Detail entrypoints use `_impl` suffix (e.g. `gwn_bvh_topology_build_lbvh_impl`) to avoid public/internal naming collisions.
 - Public BVH entrypoints are object-based (`gwn_geometry_object` + BVH object types); accessor-based routines are internal-only under `gwn::detail`.
 - No `bvh4_*` convenience wrappers — use `gwn_bvh_topology_build_lbvh<4,...>` directly; the `gwn_bvh_object` / `gwn_bvh_aabb_object` / `gwn_bvh_moment_object` aliases already fix Width=4.  `gwn_bvh_object` is topology-only (does **not** include AABB or moment data).
-- BVH SoA node structs (`gwn_bvh_topology_node_soa`, `gwn_bvh_aabb_node_soa`, `gwn_bvh_taylor_node_soa`) use `alignas(alignof(element_type))` to make tail padding explicit.
+- BVH SoA node structs (`gwn_bvh_topology_node_soa`, `gwn_bvh_aabb_node_soa`, `gwn_bvh_taylor_node_soa`) are 128-byte aligned for `Width=4` to keep node loads cacheline-aligned; non-4 widths keep natural element alignment.
 - Device-side BVH traversal stacks call `__trap()` on overflow rather than silently skipping nodes.
 - Public object-based APIs are plain `noexcept` (no `try`/`catch`); exception translation is done once in the `detail` layer.
 - LBVH topology build is pass-composed (all internal under `gwn::detail`):

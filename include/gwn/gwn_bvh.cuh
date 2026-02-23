@@ -25,9 +25,13 @@ template <class Real> struct gwn_aabb {
     Real max_z;
 };
 
+template <int Width, std::size_t NaturalAlignment>
+inline constexpr std::size_t k_gwn_bvh_node_alignment =
+    (Width == 4) ? std::size_t(128) : NaturalAlignment;
+
 /// \brief Topology-only BVH node (no per-child bounds payload).
 template <int Width, class Index = std::int64_t>
-struct alignas(alignof(Index)) gwn_bvh_topology_node_soa {
+struct alignas(k_gwn_bvh_node_alignment<Width, alignof(Index)>) gwn_bvh_topology_node_soa {
     static_assert(Width >= 2, "BVH node width must be at least 2.");
 
     Index child_index[Width];
@@ -39,7 +43,8 @@ template <class Index = std::int64_t>
 using gwn_bvh4_topology_node_soa = gwn_bvh_topology_node_soa<4, Index>;
 
 /// \brief AABB payload tree node aligned with a topology node.
-template <int Width, class Real> struct alignas(alignof(Real)) gwn_bvh_aabb_node_soa {
+template <int Width, class Real>
+struct alignas(k_gwn_bvh_node_alignment<Width, alignof(Real)>) gwn_bvh_aabb_node_soa {
     static_assert(Width >= 2, "BVH node width must be at least 2.");
 
     Real child_min_x[Width];
@@ -55,7 +60,8 @@ template <class Real> using gwn_bvh4_aabb_node_soa = gwn_bvh_aabb_node_soa<4, Re
 template <int Width, int Order, class Real> struct gwn_bvh_taylor_node_soa;
 
 template <int Width, class Real>
-struct alignas(alignof(Real)) gwn_bvh_taylor_node_soa<Width, 0, Real> {
+struct alignas(k_gwn_bvh_node_alignment<Width, alignof(Real)>)
+    gwn_bvh_taylor_node_soa<Width, 0, Real> {
     Real child_max_p_dist2[Width];
     Real child_average_x[Width];
     Real child_average_y[Width];
@@ -66,7 +72,8 @@ struct alignas(alignof(Real)) gwn_bvh_taylor_node_soa<Width, 0, Real> {
 };
 
 template <int Width, class Real>
-struct alignas(alignof(Real)) gwn_bvh_taylor_node_soa<Width, 1, Real> {
+struct alignas(k_gwn_bvh_node_alignment<Width, alignof(Real)>)
+    gwn_bvh_taylor_node_soa<Width, 1, Real> {
     Real child_max_p_dist2[Width];
     Real child_average_x[Width];
     Real child_average_y[Width];
@@ -83,7 +90,8 @@ struct alignas(alignof(Real)) gwn_bvh_taylor_node_soa<Width, 1, Real> {
 };
 
 template <int Width, class Real>
-struct alignas(alignof(Real)) gwn_bvh_taylor_node_soa<Width, 2, Real> {
+struct alignas(k_gwn_bvh_node_alignment<Width, alignof(Real)>)
+    gwn_bvh_taylor_node_soa<Width, 2, Real> {
     Real child_max_p_dist2[Width];
     Real child_average_x[Width];
     Real child_average_y[Width];
