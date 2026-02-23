@@ -61,7 +61,9 @@ TEST_F(CudaFixture, taylor_order0_build_marks_accessor) {
     gwn::gwn_bvh_aabb_object<Real, Index> aabb;
     gwn::gwn_bvh_moment_object<Real, Index> data;
     gwn::gwn_status const status =
-        gwn::gwn_build_bvh_topology_aabb_moment_lbvh<0, 4, Real, Index>(geometry, bvh, aabb, data);
+        gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<0, 4, Real, Index>(
+            geometry, bvh, aabb, data
+        );
     ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
 
     EXPECT_TRUE(data.accessor().template has_taylor_order<0>());
@@ -82,7 +84,9 @@ TEST_F(CudaFixture, taylor_order1_build_marks_accessor) {
     gwn::gwn_bvh_aabb_object<Real, Index> aabb;
     gwn::gwn_bvh_moment_object<Real, Index> data;
     gwn::gwn_status const status =
-        gwn::gwn_build_bvh_topology_aabb_moment_lbvh<1, 4, Real, Index>(geometry, bvh, aabb, data);
+        gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<1, 4, Real, Index>(
+            geometry, bvh, aabb, data
+        );
     ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
 
     EXPECT_TRUE(data.accessor().template has_taylor_order<1>());
@@ -102,7 +106,9 @@ TEST_F(CudaFixture, taylor_rebuild_order1_marks_accessor) {
     gwn::gwn_bvh_aabb_object<Real, Index> aabb;
     gwn::gwn_bvh_moment_object<Real, Index> data;
     gwn::gwn_status const status =
-        gwn::gwn_build_bvh_topology_aabb_moment_lbvh<1, 4, Real, Index>(geometry, bvh, aabb, data);
+        gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<1, 4, Real, Index>(
+            geometry, bvh, aabb, data
+        );
     ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
 
     EXPECT_TRUE(data.accessor().template has_taylor_order<1>());
@@ -133,7 +139,9 @@ TEST_F(CudaFixture, taylor_order0_nodes_are_finite) {
     gwn::gwn_bvh_aabb_object<Real, Index> aabb;
     gwn::gwn_bvh_moment_object<Real, Index> data;
     gwn::gwn_status const status =
-        gwn::gwn_build_bvh_topology_aabb_moment_lbvh<0, 4, Real, Index>(geometry, bvh, aabb, data);
+        gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<0, 4, Real, Index>(
+            geometry, bvh, aabb, data
+        );
     ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
 
     auto const &data_acc = data.accessor();
@@ -181,10 +189,10 @@ TEST_F(CudaFixture, taylor_data_clear_resets) {
     gwn::gwn_bvh_object<Real, Index> bvh;
     gwn::gwn_bvh_aabb_object<Real, Index> aabb;
     gwn::gwn_bvh_moment_object<Real, Index> data;
-    ASSERT_TRUE(
-        (gwn::gwn_build_bvh_topology_aabb_moment_lbvh<0, 4, Real, Index>(geometry, bvh, aabb, data)
-             .is_ok())
-    );
+    ASSERT_TRUE((gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<0, 4, Real, Index>(
+                     geometry, bvh, aabb, data
+    )
+                     .is_ok()));
     ASSERT_TRUE(data.has_any_data());
 
     data.clear();
@@ -218,7 +226,9 @@ TEST_F(CudaFixture, taylor_single_triangle) {
     gwn::gwn_bvh_aabb_object<Real, Index> aabb;
     gwn::gwn_bvh_moment_object<Real, Index> data;
     gwn::gwn_status const status =
-        gwn::gwn_build_bvh_topology_aabb_moment_lbvh<0, 4, Real, Index>(geometry, bvh, aabb, data);
+        gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<0, 4, Real, Index>(
+            geometry, bvh, aabb, data
+        );
     ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
     ASSERT_TRUE(bvh.has_bvh());
     EXPECT_FALSE(data.accessor().template has_taylor_order<0>());

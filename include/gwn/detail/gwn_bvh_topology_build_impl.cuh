@@ -4,19 +4,19 @@
 
 #include <cstddef>
 
-#include "gwn/detail/gwn_bvh_build_lbvh.cuh"
-#include "gwn/detail/gwn_bvh_pipeline_common.cuh"
+#include "gwn/detail/gwn_bvh_status_helpers.cuh"
+#include "gwn/detail/gwn_bvh_topology_build_lbvh.cuh"
 
 namespace gwn {
 namespace detail {
 
 template <int Width, class Real, class Index>
-gwn_status gwn_build_bvh_topology_lbvh_impl(
+gwn_status gwn_bvh_topology_build_lbvh_impl(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> &topology,
     cudaStream_t const stream = gwn_default_stream()
 ) noexcept {
-    return gwn_try_translate_status("gwn_build_bvh_topology_lbvh_impl", [&]() -> gwn_status {
+    return gwn_try_translate_status("gwn_bvh_topology_build_lbvh_impl", [&]() -> gwn_status {
         static_assert(Width >= 2, "BVH width must be at least 2.");
 
         if (!geometry.is_valid()) {
@@ -46,7 +46,7 @@ gwn_status gwn_build_bvh_topology_lbvh_impl(
             gwn_device_array<Index> sorted_primitive_indices{};
             gwn_device_array<gwn_binary_node<Index>> binary_nodes{};
             gwn_device_array<Index> binary_internal_parent{};
-            GWN_RETURN_ON_ERROR(gwn_build_binary_lbvh_topology(
+            GWN_RETURN_ON_ERROR(gwn_bvh_topology_build_binary_lbvh(
                 geometry, sorted_primitive_indices, binary_nodes, binary_internal_parent, stream
             ));
 
@@ -68,7 +68,7 @@ gwn_status gwn_build_bvh_topology_lbvh_impl(
                 return gwn_status::ok();
             }
 
-            GWN_RETURN_ON_ERROR((gwn_collapse_binary_lbvh_topology<Width, Real, Index>(
+            GWN_RETURN_ON_ERROR((gwn_bvh_topology_build_collapse_binary_lbvh<Width, Real, Index>(
                 cuda::std::span<gwn_binary_node<Index> const>(
                     binary_nodes.data(), binary_nodes.size()
                 ),

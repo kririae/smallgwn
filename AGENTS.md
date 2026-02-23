@@ -39,7 +39,8 @@ These instructions apply to the `smallgwn/` project tree.
   - owning objects (`gwn_geometry_object`, `gwn_bvh_topology_object`, `gwn_bvh_aabb_object`, `gwn_bvh_moment_object`) use `gwn_stream_mixin`;
   - `clear()`/destructor release on the currently bound stream;
   - successful stream-parameterized mutations update the bound stream;
-  - object-first build/refit overloads in `gwn_bvh_build.cuh` must update bound stream on success.
+  - object-first build/refit/facade overloads in `gwn_bvh_topology_build.cuh`, `gwn_bvh_refit.cuh`,
+    and `gwn_bvh_facade.cuh` must update bound stream on success.
 - **Memory Allocation**: Keep stream allocator path ONLY (`cudaMallocAsync`/`cudaFreeAsync`). Never use legacy synchronous fallback paths. `gwn_device_array<T>` remembers stream and releases on its bound stream by default.
   - All `gwn_device_array` methods (`resize`, `clear`, `zero`, `copy_from_host`, `copy_to_host`) and free helpers (`gwn_cuda_free`, `gwn_free_span`, etc.) are `noexcept`.
   - `resize(count, stream)` rebinds the bound stream even when `count` matches the current size (no alloc/free occurs in that case).
@@ -57,27 +58,25 @@ These instructions apply to the `smallgwn/` project tree.
   - Topology: `gwn_bvh_topology_accessor<Width,...>` / `gwn_bvh_topology_object<Width,...>`
   - AABB tree: `gwn_bvh_aabb_accessor<Width,...>` / `gwn_bvh_aabb_tree_object<Width,...>`
   - Moment tree: `gwn_bvh_moment_accessor<Width,...>` / `gwn_bvh_moment_tree_object<Width,...>`
-- `include/gwn/gwn_bvh_build.cuh` keeps public build APIs, while internal build passes/functors live in flat `include/gwn/detail/` headers.
-- Build/refit orchestration is split into detail pipeline headers:
-  - `gwn_bvh_pipeline_topology.cuh`
-  - `gwn_bvh_pipeline_aabb.cuh`
-  - `gwn_bvh_pipeline_moment.cuh`
-  - `gwn_bvh_pipeline_orchestrator.cuh`
-  - shared helpers in `gwn_bvh_pipeline_common.cuh`
-- Internal pipeline entrypoints use `_impl` suffix (e.g. `gwn_build_bvh_topology_lbvh_impl`) to avoid public/internal naming collisions.
-- Public BVH build/refit entrypoints are object-based (`gwn_geometry_object` + BVH object types); accessor-based build/refit APIs are internal-only under `gwn::detail`.
-- No `bvh4_*` convenience wrappers — use `gwn_build_bvh_topology_lbvh<4,...>` directly; the `gwn_bvh_object` / `gwn_bvh_aabb_object` / `gwn_bvh_moment_object` aliases already fix Width=4.
+- Public BVH API is split by responsibility:
+  - topology build: `include/gwn/gwn_bvh_topology_build.cuh`
+  - payload refit: `include/gwn/gwn_bvh_refit.cuh`
+  - composed workflows: `include/gwn/gwn_bvh_facade.cuh`
+- Internal implementation remains under flat `include/gwn/detail/` headers.
+- Detail entrypoints use `_impl` suffix (e.g. `gwn_bvh_topology_build_lbvh_impl`) to avoid public/internal naming collisions.
+- Public BVH entrypoints are object-based (`gwn_geometry_object` + BVH object types); accessor-based routines are internal-only under `gwn::detail`.
+- No `bvh4_*` convenience wrappers — use `gwn_bvh_topology_build_lbvh<4,...>` directly; the `gwn_bvh_object` / `gwn_bvh_aabb_object` / `gwn_bvh_moment_object` aliases already fix Width=4.
 - Public object-based APIs are plain `noexcept` (no `try`/`catch`); exception translation is done once in the `detail` layer.
 - LBVH topology build is pass-composed (all internal under `gwn::detail`):
-  - binary LBVH pass (`gwn_build_binary_lbvh_topology` in `detail/gwn_bvh_build_lbvh.cuh`)
-  - collapse pass (`gwn_collapse_binary_lbvh_topology` in `detail/gwn_bvh_build_lbvh.cuh`)
-  - exposed detail entry: `detail::gwn_build_bvh_topology_lbvh_impl<Width,...>`
+  - binary LBVH pass (`gwn_bvh_topology_build_binary_lbvh` in `detail/gwn_bvh_topology_build_lbvh.cuh`)
+  - collapse pass (`gwn_bvh_topology_build_collapse_binary_lbvh` in `detail/gwn_bvh_topology_build_lbvh.cuh`)
+  - exposed detail entry: `detail::gwn_bvh_topology_build_lbvh_impl<Width,...>`
 - Generic async refit kernels/traits live in `include/gwn/detail/gwn_bvh_refit_async.cuh`.
 - LBVH build path uses CUB for scene reduction and radix sort (NO Thrust in runtime build path).
 - Taylor build currently supports `Order=0/1`:
-  - Production path uses fully GPU async upward propagation with atomics through `gwn_refit_bvh_moment`.
+  - Production path uses fully GPU async upward propagation with atomics through `gwn_bvh_refit_moment`.
   - Async Taylor temporary buffers (parent/slot/arity/arrivals/pending moments) use `gwn_device_array`.
-  - Each `gwn_refit_bvh_moment<Order,...>` call replaces the entire moment accessor (full replace, not merge). To maintain multiple Taylor orders simultaneously, use separate moment objects.
+  - Each `gwn_bvh_refit_moment<Order,...>` call replaces the entire moment accessor (full replace, not merge). To maintain multiple Taylor orders simultaneously, use separate moment objects.
 - Winding number query APIs:
   - Exact: `gwn_compute_winding_number_batch_bvh_exact`
   - Taylor: `gwn_compute_winding_number_batch_bvh_taylor<Order,...>`

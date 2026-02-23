@@ -372,7 +372,7 @@ TEST(smallgwn_integration_correctness, voxel_order1_rebuild_consistency) {
         gwn::gwn_bvh_object<Real, Index> bvh_iterative;
         gwn::gwn_bvh_aabb_object<Real, Index> aabb_iterative;
         gwn::gwn_bvh_moment_object<Real, Index> data_iterative;
-        ASSERT_TRUE((gwn::gwn_build_bvh_topology_aabb_moment_lbvh<1, 4, Real, Index>(
+        ASSERT_TRUE((gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<1, 4, Real, Index>(
                          geometry, bvh_iterative, aabb_iterative, data_iterative
         )
                          .is_ok()));
@@ -380,7 +380,7 @@ TEST(smallgwn_integration_correctness, voxel_order1_rebuild_consistency) {
         gwn::gwn_bvh_object<Real, Index> bvh_levelwise;
         gwn::gwn_bvh_aabb_object<Real, Index> aabb_levelwise;
         gwn::gwn_bvh_moment_object<Real, Index> data_levelwise;
-        ASSERT_TRUE((gwn::gwn_build_bvh_topology_aabb_moment_lbvh<1, 4, Real, Index>(
+        ASSERT_TRUE((gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<1, 4, Real, Index>(
                          geometry, bvh_levelwise, aabb_levelwise, data_levelwise
         )
                          .is_ok()));
@@ -594,7 +594,7 @@ TEST(smallgwn_integration_correctness, voxel_exact_and_taylor_match_cpu_on_small
         // Exact.
         gwn::gwn_bvh_object<Real, Index> bvh_exact;
         ASSERT_TRUE(
-            (gwn::gwn_build_bvh_topology_lbvh<4, Real, Index>(geometry, bvh_exact)
+            (gwn::gwn_bvh_topology_build_lbvh<4, Real, Index>(geometry, bvh_exact)
                  .is_ok()));
         ASSERT_TRUE((gwn::gwn_compute_winding_number_batch_bvh_exact<Real, Index>(
                         geometry.accessor(), bvh_exact.accessor(),
@@ -609,7 +609,7 @@ TEST(smallgwn_integration_correctness, voxel_exact_and_taylor_match_cpu_on_small
         gwn::gwn_bvh_object<Real, Index> bvh_order0;
         gwn::gwn_bvh_aabb_object<Real, Index> aabb_order0;
         gwn::gwn_bvh_moment_object<Real, Index> data_order0;
-        ASSERT_TRUE((gwn::gwn_build_bvh_topology_aabb_moment_lbvh<0, 4, Real, Index>(geometry, bvh_order0, aabb_order0, data_order0)
+        ASSERT_TRUE((gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<0, 4, Real, Index>(geometry, bvh_order0, aabb_order0, data_order0)
                         .is_ok()));
         ASSERT_TRUE((gwn::gwn_compute_winding_number_batch_bvh_taylor<0, Real, Index>(
                         geometry.accessor(), bvh_order0.accessor(), data_order0.accessor(),
@@ -624,7 +624,7 @@ TEST(smallgwn_integration_correctness, voxel_exact_and_taylor_match_cpu_on_small
         gwn::gwn_bvh_object<Real, Index> bvh_order1_iter;
         gwn::gwn_bvh_aabb_object<Real, Index> aabb_order1_iter;
         gwn::gwn_bvh_moment_object<Real, Index> data_order1_iter;
-        ASSERT_TRUE((gwn::gwn_build_bvh_topology_aabb_moment_lbvh<1, 4, Real, Index>(geometry, bvh_order1_iter, aabb_order1_iter, data_order1_iter)
+        ASSERT_TRUE((gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<1, 4, Real, Index>(geometry, bvh_order1_iter, aabb_order1_iter, data_order1_iter)
                         .is_ok()));
         ASSERT_TRUE((gwn::gwn_compute_winding_number_batch_bvh_taylor<1, Real, Index>(
                         geometry.accessor(), bvh_order1_iter.accessor(),
@@ -641,7 +641,7 @@ TEST(smallgwn_integration_correctness, voxel_exact_and_taylor_match_cpu_on_small
         gwn::gwn_bvh_object<Real, Index> bvh_order1_lw;
         gwn::gwn_bvh_aabb_object<Real, Index> aabb_order1_lw;
         gwn::gwn_bvh_moment_object<Real, Index> data_order1_lw;
-        ASSERT_TRUE((gwn::gwn_build_bvh_topology_aabb_moment_lbvh<1, 4, Real, Index>(geometry, bvh_order1_lw, aabb_order1_lw, data_order1_lw)
+        ASSERT_TRUE((gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<1, 4, Real, Index>(geometry, bvh_order1_lw, aabb_order1_lw, data_order1_lw)
                         .is_ok()));
         ASSERT_TRUE((gwn::gwn_compute_winding_number_batch_bvh_taylor<1, Real, Index>(
                         geometry.accessor(), bvh_order1_lw.accessor(),

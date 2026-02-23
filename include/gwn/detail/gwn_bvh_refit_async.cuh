@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <limits>
 
-#include "gwn/detail/gwn_bvh_build_common.cuh"
+#include "gwn/detail/gwn_bvh_topology_build_common.cuh"
 #include "gwn/gwn_kernel_utils.cuh"
 
 namespace gwn {

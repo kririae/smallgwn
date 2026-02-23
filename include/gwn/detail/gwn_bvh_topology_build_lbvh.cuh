@@ -9,9 +9,9 @@
 
 #include <cub/device/device_radix_sort.cuh>
 
-#include "gwn/detail/gwn_bvh_build_collapse.cuh"
-#include "gwn/detail/gwn_bvh_build_common.cuh"
-#include "gwn/detail/gwn_bvh_build_topology.cuh"
+#include "gwn/detail/gwn_bvh_topology_build_binary.cuh"
+#include "gwn/detail/gwn_bvh_topology_build_collapse.cuh"
+#include "gwn/detail/gwn_bvh_topology_build_common.cuh"
 #include "gwn/gwn_bvh.cuh"
 #include "gwn/gwn_geometry.cuh"
 #include "gwn/gwn_kernel_utils.cuh"
@@ -20,7 +20,7 @@ namespace gwn {
 namespace detail {
 
 template <class Real, class Index>
-gwn_status gwn_build_binary_lbvh_topology(
+gwn_status gwn_bvh_topology_build_binary_lbvh(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_device_array<Index> &sorted_primitive_indices,
     gwn_device_array<gwn_binary_node<Index>> &binary_nodes,
@@ -168,7 +168,7 @@ gwn_status gwn_build_binary_lbvh_topology(
 }
 
 template <int Width, class Real, class Index>
-gwn_status gwn_collapse_binary_lbvh_topology(
+gwn_status gwn_bvh_topology_build_collapse_binary_lbvh(
     cuda::std::span<gwn_binary_node<Index> const> const binary_nodes,
     cuda::std::span<Index const> const binary_internal_parent,
     gwn_bvh_topology_accessor<Width, Real, Index> &staging_topology,

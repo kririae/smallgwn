@@ -55,11 +55,11 @@ void setup_octahedron_taylor(TaylorTestContext &ctx, int order) {
 
     gwn::gwn_status build_status;
     if (order == 0)
-        build_status = gwn::gwn_build_bvh_topology_aabb_moment_lbvh<0, 4, Real, Index>(
+        build_status = gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<0, 4, Real, Index>(
             ctx.geometry, ctx.bvh, ctx.aabb, ctx.data
         );
     else
-        build_status = gwn::gwn_build_bvh_topology_aabb_moment_lbvh<1, 4, Real, Index>(
+        build_status = gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<1, 4, Real, Index>(
             ctx.geometry, ctx.bvh, ctx.aabb, ctx.data
         );
 
@@ -173,7 +173,7 @@ TEST_F(CudaFixture, order1_more_accurate_than_order0) {
     gwn::gwn_bvh_object<Real, Index> bvh0;
     gwn::gwn_bvh_aabb_object<Real, Index> aabb0;
     gwn::gwn_bvh_moment_object<Real, Index> data0;
-    ASSERT_TRUE((gwn::gwn_build_bvh_topology_aabb_moment_lbvh<0, 4, Real, Index>(
+    ASSERT_TRUE((gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<0, 4, Real, Index>(
                      geometry, bvh0, aabb0, data0
     )
                      .is_ok()));
@@ -182,7 +182,7 @@ TEST_F(CudaFixture, order1_more_accurate_than_order0) {
     gwn::gwn_bvh_object<Real, Index> bvh1;
     gwn::gwn_bvh_aabb_object<Real, Index> aabb1;
     gwn::gwn_bvh_moment_object<Real, Index> data1;
-    ASSERT_TRUE((gwn::gwn_build_bvh_topology_aabb_moment_lbvh<1, 4, Real, Index>(
+    ASSERT_TRUE((gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<1, 4, Real, Index>(
                      geometry, bvh1, aabb1, data1
     )
                      .is_ok()));
@@ -265,7 +265,7 @@ TEST_F(CudaFixture, repeated_build_matches_order1) {
     gwn::gwn_bvh_object<Real, Index> bvh_a;
     gwn::gwn_bvh_aabb_object<Real, Index> aabb_a;
     gwn::gwn_bvh_moment_object<Real, Index> data_a;
-    ASSERT_TRUE((gwn::gwn_build_bvh_topology_aabb_moment_lbvh<1, 4, Real, Index>(
+    ASSERT_TRUE((gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<1, 4, Real, Index>(
                      geometry, bvh_a, aabb_a, data_a
     )
                      .is_ok()));
@@ -274,7 +274,7 @@ TEST_F(CudaFixture, repeated_build_matches_order1) {
     gwn::gwn_bvh_object<Real, Index> bvh_b;
     gwn::gwn_bvh_aabb_object<Real, Index> aabb_b;
     gwn::gwn_bvh_moment_object<Real, Index> data_b;
-    ASSERT_TRUE((gwn::gwn_build_bvh_topology_aabb_moment_lbvh<1, 4, Real, Index>(
+    ASSERT_TRUE((gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<1, 4, Real, Index>(
                      geometry, bvh_b, aabb_b, data_b
     )
                      .is_ok()));

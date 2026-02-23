@@ -157,7 +157,7 @@ TEST_F(CudaFixture, bvh_exact_matches_cpu_reference) {
     ASSERT_TRUE(upload_status.is_ok());
 
     gwn::gwn_bvh_object<Real, Index> bvh;
-    ASSERT_TRUE((gwn::gwn_build_bvh_topology_lbvh<4, Real, Index>(geometry, bvh).is_ok()));
+    ASSERT_TRUE((gwn::gwn_bvh_topology_build_lbvh<4, Real, Index>(geometry, bvh).is_ok()));
 
     gwn::gwn_device_array<Real> d_qx, d_qy, d_qz, d_out;
     ASSERT_TRUE(d_qx.resize(qx.size()).is_ok());

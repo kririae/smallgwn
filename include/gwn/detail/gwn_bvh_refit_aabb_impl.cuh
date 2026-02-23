@@ -4,20 +4,20 @@
 
 #include <cstddef>
 
-#include "gwn/detail/gwn_bvh_pipeline_common.cuh"
 #include "gwn/detail/gwn_bvh_refit_async.cuh"
+#include "gwn/detail/gwn_bvh_status_helpers.cuh"
 
 namespace gwn {
 namespace detail {
 
 template <int Width, class Real, class Index>
-gwn_status gwn_refit_bvh_aabb_impl(
+gwn_status gwn_bvh_refit_aabb_impl(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &topology,
     gwn_bvh_aabb_accessor<Width, Real, Index> &aabb_tree,
     cudaStream_t const stream = gwn_default_stream()
 ) noexcept {
-    return gwn_try_translate_status("gwn_refit_bvh_aabb_impl", [&]() -> gwn_status {
+    return gwn_try_translate_status("gwn_bvh_refit_aabb_impl", [&]() -> gwn_status {
         if (!geometry.is_valid())
             return gwn_status::invalid_argument("Geometry accessor is invalid for AABB refit.");
         if (!topology.is_valid())

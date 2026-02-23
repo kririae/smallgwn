@@ -4,23 +4,23 @@
 
 #include <cstddef>
 
-#include "gwn/detail/gwn_bvh_pipeline_common.cuh"
 #include "gwn/detail/gwn_bvh_refit_async.cuh"
+#include "gwn/detail/gwn_bvh_status_helpers.cuh"
 
 namespace gwn {
 namespace detail {
 
 template <int Order, int Width, class Real, class Index>
-gwn_status gwn_refit_bvh_moment_impl(
+gwn_status gwn_bvh_refit_moment_impl(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &topology,
     gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree,
     gwn_bvh_moment_accessor<Width, Real, Index> &moment_tree,
     cudaStream_t const stream = gwn_default_stream()
 ) noexcept {
-    return gwn_try_translate_status("gwn_refit_bvh_moment_impl", [&]() -> gwn_status {
+    return gwn_try_translate_status("gwn_bvh_refit_moment_impl", [&]() -> gwn_status {
         static_assert(
-            Order == 0 || Order == 1, "gwn_refit_bvh_moment currently supports Order 0 and Order 1."
+            Order == 0 || Order == 1, "gwn_bvh_refit_moment currently supports Order 0 and Order 1."
         );
 
         if (!geometry.is_valid())

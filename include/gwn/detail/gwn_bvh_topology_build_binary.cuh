@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "gwn/detail/gwn_bvh_build_common.cuh"
+#include "gwn/detail/gwn_bvh_topology_build_common.cuh"
 
 namespace gwn {
 namespace detail {
