@@ -155,7 +155,7 @@ __device__ inline Real gwn_winding_number_point_bvh_exact(
         if (node_index < Index(0) || static_cast<std::size_t>(node_index) >= bvh.nodes.size())
             continue;
 
-        gwn_bvh_node_soa<Width, Real, Index> const &node =
+        gwn_bvh_topology_node_soa<Width, Index> const &node =
             bvh.nodes[static_cast<std::size_t>(node_index)];
         GWN_PRAGMA_UNROLL
         for (int child_slot = 0; child_slot < Width; ++child_slot) {
@@ -231,7 +231,7 @@ struct gwn_taylor_nodes_getter<0, Width, Real, Index> {
     using span_type = cuda::std::span<gwn_bvh_taylor_node_soa<Width, 0, Real> const>;
 
     [[nodiscard]] __host__ __device__ static span_type
-    get(gwn_bvh_data_tree_accessor<Width, Real, Index> const &data_tree) {
+    get(gwn_bvh_moment_tree_accessor<Width, Real, Index> const &data_tree) {
         return data_tree.taylor_order0_nodes;
     }
 };
@@ -241,7 +241,7 @@ struct gwn_taylor_nodes_getter<1, Width, Real, Index> {
     using span_type = cuda::std::span<gwn_bvh_taylor_node_soa<Width, 1, Real> const>;
 
     [[nodiscard]] __host__ __device__ static span_type
-    get(gwn_bvh_data_tree_accessor<Width, Real, Index> const &data_tree) {
+    get(gwn_bvh_moment_tree_accessor<Width, Real, Index> const &data_tree) {
         return data_tree.taylor_order1_nodes;
     }
 };
@@ -251,7 +251,7 @@ struct gwn_taylor_nodes_getter<2, Width, Real, Index> {
     using span_type = cuda::std::span<gwn_bvh_taylor_node_soa<Width, 2, Real> const>;
 
     [[nodiscard]] __host__ __device__ static span_type
-    get(gwn_bvh_data_tree_accessor<Width, Real, Index> const &data_tree) {
+    get(gwn_bvh_moment_tree_accessor<Width, Real, Index> const &data_tree) {
         return data_tree.taylor_order2_nodes;
     }
 };
@@ -259,7 +259,7 @@ struct gwn_taylor_nodes_getter<2, Width, Real, Index> {
 template <int Order, int Width, class Real, class Index>
 [[nodiscard]] __host__ __device__
     typename gwn_taylor_nodes_getter<Order, Width, Real, Index>::span_type
-    gwn_get_taylor_nodes(gwn_bvh_data_tree_accessor<Width, Real, Index> const &data_tree) {
+    gwn_get_taylor_nodes(gwn_bvh_moment_tree_accessor<Width, Real, Index> const &data_tree) {
     return gwn_taylor_nodes_getter<Order, Width, Real, Index>::get(data_tree);
 }
 
@@ -267,7 +267,8 @@ template <int Order, int Width, class Real, class Index>
 __device__ inline Real gwn_winding_number_point_bvh_taylor(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
-    gwn_bvh_data_tree_accessor<Width, Real, Index> const &data_tree, Real const qx, Real const qy,
+    gwn_bvh_moment_tree_accessor<Width, Real, Index> const &data_tree, Real const qx,
+    Real const qy,
     Real const qz, Real const accuracy_scale
 ) noexcept {
     static_assert(
@@ -311,7 +312,7 @@ __device__ inline Real gwn_winding_number_point_bvh_taylor(
         if (node_index < Index(0) || static_cast<std::size_t>(node_index) >= bvh.nodes.size())
             continue;
 
-        gwn_bvh_node_soa<Width, Real, Index> const &node =
+        gwn_bvh_topology_node_soa<Width, Index> const &node =
             bvh.nodes[static_cast<std::size_t>(node_index)];
         auto const &taylor = taylor_nodes[static_cast<std::size_t>(node_index)];
         GWN_PRAGMA_UNROLL
@@ -401,7 +402,7 @@ template <int Order, int Width, class Real, class Index>
 struct gwn_winding_number_batch_bvh_taylor_functor {
     gwn_geometry_accessor<Real, Index> geometry{};
     gwn_bvh_topology_accessor<Width, Real, Index> bvh{};
-    gwn_bvh_data_tree_accessor<Width, Real, Index> data_tree{};
+    gwn_bvh_moment_tree_accessor<Width, Real, Index> data_tree{};
     cuda::std::span<Real const> query_x{};
     cuda::std::span<Real const> query_y{};
     cuda::std::span<Real const> query_z{};
@@ -443,10 +444,10 @@ gwn_make_winding_number_batch_bvh_exact_functor(
 
 template <int Order, int Width, class Real, class Index>
 [[nodiscard]] inline gwn_winding_number_batch_bvh_taylor_functor<Order, Width, Real, Index>
-gwn_make_winding_number_batch_bvh_taylor_functor(
+    gwn_make_winding_number_batch_bvh_taylor_functor(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
-    gwn_bvh_data_tree_accessor<Width, Real, Index> const &data_tree,
+    gwn_bvh_moment_tree_accessor<Width, Real, Index> const &data_tree,
     cuda::std::span<Real const> const query_x, cuda::std::span<Real const> const query_y,
     cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output,
     Real const accuracy_scale
@@ -551,7 +552,7 @@ template <int Order, int Width, class Real, class Index = std::int64_t>
 gwn_status gwn_compute_winding_number_batch_bvh_taylor(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
-    gwn_bvh_data_tree_accessor<Width, Real, Index> const &data_tree,
+    gwn_bvh_moment_tree_accessor<Width, Real, Index> const &data_tree,
     cuda::std::span<Real const> const query_x, cuda::std::span<Real const> const query_y,
     cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output,
     Real const accuracy_scale = Real(2), cudaStream_t const stream = gwn_default_stream()
@@ -598,7 +599,8 @@ gwn_status gwn_compute_winding_number_batch_bvh_taylor(
 template <int Order, class Real, class Index = std::int64_t>
 gwn_status gwn_compute_winding_number_batch_bvh_taylor(
     gwn_geometry_accessor<Real, Index> const &geometry, gwn_bvh_accessor<Real, Index> const &bvh,
-    gwn_bvh_data4_accessor<Real, Index> const &data_tree, cuda::std::span<Real const> const query_x,
+    gwn_bvh_moment4_accessor<Real, Index> const &data_tree,
+    cuda::std::span<Real const> const query_x,
     cuda::std::span<Real const> const query_y, cuda::std::span<Real const> const query_z,
     cuda::std::span<Real> const output, Real const accuracy_scale = Real(2),
     cudaStream_t const stream = gwn_default_stream()

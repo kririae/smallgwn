@@ -62,27 +62,19 @@ template <int Width, class Index> struct gwn_collapse_summarize_pass_functor {
     }
 };
 
-template <int Width, class Real, class Index> struct gwn_collapse_emit_nodes_pass_functor {
+template <int Width, class Index> struct gwn_collapse_emit_nodes_pass_functor {
     static_assert(Width >= 2, "BVH width must be at least 2.");
     static constexpr int k_stack_capacity = Width * 2 + 8;
 
     cuda::std::span<gwn_binary_node<Index> const> binary_nodes{};
-    cuda::std::span<gwn_aabb<Real> const> sorted_leaf_aabbs{};
-    cuda::std::span<gwn_aabb<Real> const> internal_bounds{};
     cuda::std::span<std::uint8_t const> internal_is_wide_root{};
     cuda::std::span<Index const> internal_wide_node_id{};
     cuda::std::span<Index const> wide_node_binary_root{};
-    cuda::std::span<gwn_bvh_node_soa<Width, Real, Index>> output_nodes{};
+    cuda::std::span<gwn_bvh_topology_node_soa<Width, Index>> output_nodes{};
     unsigned int *overflow_flag{};
 
     __device__ static void
-    gwn_set_invalid_child(gwn_bvh_node_soa<Width, Real, Index> &node, int const slot) {
-        node.child_min_x[slot] = Real(0);
-        node.child_min_y[slot] = Real(0);
-        node.child_min_z[slot] = Real(0);
-        node.child_max_x[slot] = Real(0);
-        node.child_max_y[slot] = Real(0);
-        node.child_max_z[slot] = Real(0);
+    gwn_set_invalid_child(gwn_bvh_topology_node_soa<Width, Index> &node, int const slot) {
         node.child_index[slot] = Index(0);
         node.child_count[slot] = Index(0);
         node.child_kind[slot] = static_cast<std::uint8_t>(gwn_bvh_child_kind::k_invalid);
@@ -92,7 +84,7 @@ template <int Width, class Real, class Index> struct gwn_collapse_emit_nodes_pas
         if (wide_node_id_u >= output_nodes.size() || wide_node_id_u >= wide_node_binary_root.size())
             return;
 
-        gwn_bvh_node_soa<Width, Real, Index> output_node{};
+        gwn_bvh_topology_node_soa<Width, Index> output_node{};
         Index const binary_root = wide_node_binary_root[wide_node_id_u];
         if (binary_root < Index(0) ||
             static_cast<std::size_t>(binary_root) >= binary_nodes.size()) {
@@ -125,22 +117,7 @@ template <int Width, class Real, class Index> struct gwn_collapse_emit_nodes_pas
             }
 
             if (kind == gwn_bvh_child_kind::k_leaf) {
-                if (ref.index < Index(0) ||
-                    static_cast<std::size_t>(ref.index) >= sorted_leaf_aabbs.size()) {
-                    gwn_set_invalid_child(output_node, written_children++);
-                    if (overflow_flag != nullptr)
-                        atomicExch(overflow_flag, 1u);
-                    continue;
-                }
-                gwn_aabb<Real> const bounds =
-                    sorted_leaf_aabbs[static_cast<std::size_t>(ref.index)];
                 int const slot = written_children++;
-                output_node.child_min_x[slot] = bounds.min_x;
-                output_node.child_min_y[slot] = bounds.min_y;
-                output_node.child_min_z[slot] = bounds.min_z;
-                output_node.child_max_x[slot] = bounds.max_x;
-                output_node.child_max_y[slot] = bounds.max_y;
-                output_node.child_max_z[slot] = bounds.max_z;
                 output_node.child_index[slot] = ref.index;
                 output_node.child_count[slot] = Index(1);
                 output_node.child_kind[slot] =
@@ -162,8 +139,7 @@ template <int Width, class Real, class Index> struct gwn_collapse_emit_nodes_pas
                                             (internal_is_wide_root[internal_index_u] != 0);
 
             if (is_child_wide_root) {
-                if (internal_index_u >= internal_bounds.size() ||
-                    internal_index_u >= internal_wide_node_id.size()) {
+                if (internal_index_u >= internal_wide_node_id.size()) {
                     gwn_set_invalid_child(output_node, written_children++);
                     if (overflow_flag != nullptr)
                         atomicExch(overflow_flag, 1u);
@@ -179,14 +155,7 @@ template <int Width, class Real, class Index> struct gwn_collapse_emit_nodes_pas
                     continue;
                 }
 
-                gwn_aabb<Real> const bounds = internal_bounds[internal_index_u];
                 int const slot = written_children++;
-                output_node.child_min_x[slot] = bounds.min_x;
-                output_node.child_min_y[slot] = bounds.min_y;
-                output_node.child_min_z[slot] = bounds.min_z;
-                output_node.child_max_x[slot] = bounds.max_x;
-                output_node.child_max_y[slot] = bounds.max_y;
-                output_node.child_max_z[slot] = bounds.max_z;
                 output_node.child_index[slot] = child_wide_id;
                 output_node.child_count[slot] = Index(0);
                 output_node.child_kind[slot] =

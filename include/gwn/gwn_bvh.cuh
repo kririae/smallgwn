@@ -25,7 +25,20 @@ template <class Real> struct gwn_aabb {
     Real max_z;
 };
 
-template <int Width, class Real, class Index = std::int64_t> struct gwn_bvh_node_soa {
+/// \brief Topology-only BVH node (no per-child bounds payload).
+template <int Width, class Index = std::int64_t> struct gwn_bvh_topology_node_soa {
+    static_assert(Width >= 2, "BVH node width must be at least 2.");
+
+    Index child_index[Width];
+    Index child_count[Width];
+    std::uint8_t child_kind[Width];
+};
+
+template <class Index = std::int64_t>
+using gwn_bvh4_topology_node_soa = gwn_bvh_topology_node_soa<4, Index>;
+
+/// \brief AABB payload tree node aligned with a topology node.
+template <int Width, class Real> struct gwn_bvh_aabb_node_soa {
     static_assert(Width >= 2, "BVH node width must be at least 2.");
 
     Real child_min_x[Width];
@@ -34,13 +47,9 @@ template <int Width, class Real, class Index = std::int64_t> struct gwn_bvh_node
     Real child_max_x[Width];
     Real child_max_y[Width];
     Real child_max_z[Width];
-    Index child_index[Width];
-    Index child_count[Width];
-    std::uint8_t child_kind[Width];
 };
 
-template <class Real, class Index = std::int64_t>
-using gwn_bvh4_node_soa = gwn_bvh_node_soa<4, Real, Index>;
+template <class Real> using gwn_bvh4_aabb_node_soa = gwn_bvh_aabb_node_soa<4, Real>;
 
 template <int Width, int Order, class Real> struct gwn_bvh_taylor_node_soa;
 
@@ -102,15 +111,14 @@ using gwn_bvh4_taylor_node_soa = gwn_bvh_taylor_node_soa<4, Order, Real>;
 /// \brief Topology tree accessor for a fixed-width BVH.
 ///
 /// \remark This tree stores only hierarchy and primitive indirection.
-/// Taylor/moment data is stored separately in `gwn_bvh_data_tree_accessor`.
-template <int Width, class Real, class Index = std::int64_t> struct gwn_bvh_topology_accessor {
+template <int Width, class Real, class Index = std::int64_t> struct gwn_bvh_topology_tree_accessor {
     static_assert(Width >= 2, "BVH accessor width must be at least 2.");
 
     using real_type = Real;
     using index_type = Index;
     static constexpr int k_width = Width;
 
-    cuda::std::span<gwn_bvh_node_soa<Width, Real, Index> const> nodes{};
+    cuda::std::span<gwn_bvh_topology_node_soa<Width, Index> const> nodes{};
     cuda::std::span<Index const> primitive_indices{};
     gwn_bvh_child_kind root_kind = gwn_bvh_child_kind::k_invalid;
     Index root_index = 0;
@@ -145,10 +153,33 @@ template <int Width, class Real, class Index = std::int64_t> struct gwn_bvh_topo
     }
 };
 
-/// \brief Data tree accessor storing per-node Taylor moments for a topology tree.
-///
-/// \remark A non-empty Taylor order must match the topology node count.
-template <int Width, class Real, class Index = std::int64_t> struct gwn_bvh_data_tree_accessor {
+/// \brief AABB payload tree accessor aligned to a topology tree.
+template <int Width, class Real, class Index = std::int64_t> struct gwn_bvh_aabb_tree_accessor {
+    static_assert(Width >= 2, "BVH accessor width must be at least 2.");
+
+    using real_type = Real;
+    using index_type = Index;
+    static constexpr int k_width = Width;
+
+    cuda::std::span<gwn_bvh_aabb_node_soa<Width, Real> const> nodes{};
+
+    [[nodiscard]] __host__ __device__ constexpr bool empty() const noexcept {
+        return nodes.empty();
+    }
+
+    [[nodiscard]] __host__ __device__ constexpr bool is_valid_for(
+        gwn_bvh_topology_tree_accessor<Width, Real, Index> const &topology
+    ) const noexcept {
+        if (!topology.is_valid())
+            return false;
+        if (topology.has_leaf_root())
+            return empty();
+        return gwn_span_has_storage(nodes) && nodes.size() == topology.nodes.size();
+    }
+};
+
+/// \brief Moment payload tree accessor storing Taylor data aligned to topology.
+template <int Width, class Real, class Index = std::int64_t> struct gwn_bvh_moment_tree_accessor {
     static_assert(Width >= 2, "BVH accessor width must be at least 2.");
 
     using real_type = Real;
@@ -175,8 +206,9 @@ template <int Width, class Real, class Index = std::int64_t> struct gwn_bvh_data
                taylor_order2_nodes.empty();
     }
 
-    [[nodiscard]] __host__ __device__ constexpr bool
-    is_valid_for(gwn_bvh_topology_accessor<Width, Real, Index> const &topology) const noexcept {
+    [[nodiscard]] __host__ __device__ constexpr bool is_valid_for(
+        gwn_bvh_topology_tree_accessor<Width, Real, Index> const &topology
+    ) const noexcept {
         auto const validate_taylor = [&](auto const taylor_nodes) constexpr {
             return taylor_nodes.empty() || (gwn_span_has_storage(taylor_nodes) &&
                                             taylor_nodes.size() == topology.nodes.size());
@@ -184,7 +216,6 @@ template <int Width, class Real, class Index = std::int64_t> struct gwn_bvh_data
 
         if (!topology.is_valid())
             return false;
-
         if (topology.has_leaf_root())
             return empty();
 
@@ -194,83 +225,91 @@ template <int Width, class Real, class Index = std::int64_t> struct gwn_bvh_data
 };
 
 template <int Width, class Real, class Index = std::int64_t>
-using gwn_bvh_data_accessor = gwn_bvh_data_tree_accessor<Width, Real, Index>;
+using gwn_bvh_topology_accessor = gwn_bvh_topology_tree_accessor<Width, Real, Index>;
+
+template <int Width, class Real, class Index = std::int64_t>
+using gwn_bvh_aabb_accessor = gwn_bvh_aabb_tree_accessor<Width, Real, Index>;
+
+template <int Width, class Real, class Index = std::int64_t>
+using gwn_bvh_moment_accessor = gwn_bvh_moment_tree_accessor<Width, Real, Index>;
 
 template <class Real, class Index = std::int64_t>
-using gwn_bvh_accessor = gwn_bvh_topology_accessor<4, Real, Index>;
+using gwn_bvh_accessor = gwn_bvh_topology_tree_accessor<4, Real, Index>;
 
 template <class Real, class Index = std::int64_t>
-using gwn_bvh_data4_accessor = gwn_bvh_data_tree_accessor<4, Real, Index>;
+using gwn_bvh_aabb4_accessor = gwn_bvh_aabb_tree_accessor<4, Real, Index>;
+
+template <class Real, class Index = std::int64_t>
+using gwn_bvh_moment4_accessor = gwn_bvh_moment_tree_accessor<4, Real, Index>;
 
 namespace detail {
 
-template <class T>
-void gwn_release_bvh_span(cuda::std::span<T const> &span_view, cudaStream_t const stream) noexcept {
-    if (span_view.data() != nullptr) {
-        gwn_status const status = gwn_cuda_free(const_cast<T *>(span_view.data()), stream);
-        if (!status.is_ok())
-            GWN_HANDLE_STATUS_FAIL(status);
-        span_view = {};
-    }
+template <int Width, class Real, class Index>
+void gwn_release_bvh_topology_tree_accessor(
+    gwn_bvh_topology_tree_accessor<Width, Real, Index> &tree, cudaStream_t const stream
+) noexcept {
+    gwn_free_span(tree.primitive_indices, stream);
+    gwn_free_span(tree.nodes, stream);
+    tree.root_kind = gwn_bvh_child_kind::k_invalid;
+    tree.root_index = 0;
+    tree.root_count = 0;
 }
 
 template <int Width, class Real, class Index>
-void gwn_release_bvh_topology_accessor(
-    gwn_bvh_topology_accessor<Width, Real, Index> &bvh, cudaStream_t const stream
+void gwn_release_bvh_aabb_tree_accessor(
+    gwn_bvh_aabb_tree_accessor<Width, Real, Index> &tree, cudaStream_t const stream
 ) noexcept {
-    gwn_release_bvh_span(bvh.primitive_indices, stream);
-    gwn_release_bvh_span(bvh.nodes, stream);
-    bvh.root_kind = gwn_bvh_child_kind::k_invalid;
-    bvh.root_index = 0;
-    bvh.root_count = 0;
+    gwn_free_span(tree.nodes, stream);
 }
 
 template <int Width, class Real, class Index>
-void gwn_release_bvh_data_accessor(
-    gwn_bvh_data_tree_accessor<Width, Real, Index> &data_tree, cudaStream_t const stream
+void gwn_release_bvh_moment_tree_accessor(
+    gwn_bvh_moment_tree_accessor<Width, Real, Index> &tree, cudaStream_t const stream
 ) noexcept {
-    gwn_release_bvh_span(data_tree.taylor_order2_nodes, stream);
-    gwn_release_bvh_span(data_tree.taylor_order1_nodes, stream);
-    gwn_release_bvh_span(data_tree.taylor_order0_nodes, stream);
+    gwn_free_span(tree.taylor_order2_nodes, stream);
+    gwn_free_span(tree.taylor_order1_nodes, stream);
+    gwn_free_span(tree.taylor_order0_nodes, stream);
 }
 
 } // namespace detail
 
 /// \brief Owning host-side RAII wrapper for a topology tree accessor.
-///
-/// \remark `clear()` and destructor release memory on the currently bound stream.
 template <int Width, class Real = float, class Index = std::int64_t>
-class gwn_bvh_topology_object final : public gwn_noncopyable, public gwn_stream_mixin {
+class gwn_bvh_topology_tree_object final : public gwn_noncopyable, public gwn_stream_mixin {
 public:
     static_assert(Width >= 2, "BVH object width must be at least 2.");
 
     using real_type = Real;
     using index_type = Index;
-    using accessor_type = gwn_bvh_topology_accessor<Width, Real, Index>;
+    using accessor_type = gwn_bvh_topology_tree_accessor<Width, Real, Index>;
 
-    gwn_bvh_topology_object() = default;
+    gwn_bvh_topology_tree_object() = default;
 
-    gwn_bvh_topology_object(gwn_bvh_topology_object &&other) noexcept { swap(*this, other); }
+    gwn_bvh_topology_tree_object(gwn_bvh_topology_tree_object &&other) noexcept {
+        swap(*this, other);
+    }
 
-    gwn_bvh_topology_object &operator=(gwn_bvh_topology_object other) noexcept {
+    gwn_bvh_topology_tree_object &operator=(gwn_bvh_topology_tree_object other) noexcept {
         swap(*this, other);
         return *this;
     }
 
-    ~gwn_bvh_topology_object() { clear(); }
+    ~gwn_bvh_topology_tree_object() { clear(); }
 
-    void clear() noexcept { detail::gwn_release_bvh_topology_accessor(accessor_, stream()); }
+    void clear() noexcept { detail::gwn_release_bvh_topology_tree_accessor(accessor_, stream()); }
 
     void clear(cudaStream_t const clear_stream) noexcept {
         set_stream(clear_stream);
-        detail::gwn_release_bvh_topology_accessor(accessor_, stream());
+        detail::gwn_release_bvh_topology_tree_accessor(accessor_, stream());
     }
 
     [[nodiscard]] accessor_type &accessor() noexcept { return accessor_; }
     [[nodiscard]] accessor_type const &accessor() const noexcept { return accessor_; }
-    [[nodiscard]] bool has_bvh() const noexcept { return accessor_.is_valid(); }
+    [[nodiscard]] bool has_tree() const noexcept { return accessor_.is_valid(); }
+    [[nodiscard]] bool has_bvh() const noexcept { return has_tree(); }
 
-    friend void swap(gwn_bvh_topology_object &lhs, gwn_bvh_topology_object &rhs) noexcept {
+    friend void
+    swap(gwn_bvh_topology_tree_object &lhs, gwn_bvh_topology_tree_object &rhs) noexcept {
         using std::swap;
         swap(lhs.accessor_, rhs.accessor_);
         swap(static_cast<gwn_stream_mixin &>(lhs), static_cast<gwn_stream_mixin &>(rhs));
@@ -280,41 +319,81 @@ private:
     accessor_type accessor_{};
 };
 
-/// \brief Owning host-side RAII wrapper for a BVH data tree accessor.
-///
-/// \remark `clear()` and destructor release memory on the currently bound stream.
+/// \brief Owning host-side RAII wrapper for an AABB payload tree accessor.
 template <int Width, class Real = float, class Index = std::int64_t>
-class gwn_bvh_data_tree_object final : public gwn_noncopyable, public gwn_stream_mixin {
+class gwn_bvh_aabb_tree_object final : public gwn_noncopyable, public gwn_stream_mixin {
 public:
     static_assert(Width >= 2, "BVH object width must be at least 2.");
 
     using real_type = Real;
     using index_type = Index;
-    using accessor_type = gwn_bvh_data_tree_accessor<Width, Real, Index>;
+    using accessor_type = gwn_bvh_aabb_tree_accessor<Width, Real, Index>;
 
-    gwn_bvh_data_tree_object() = default;
+    gwn_bvh_aabb_tree_object() = default;
 
-    gwn_bvh_data_tree_object(gwn_bvh_data_tree_object &&other) noexcept { swap(*this, other); }
+    gwn_bvh_aabb_tree_object(gwn_bvh_aabb_tree_object &&other) noexcept { swap(*this, other); }
 
-    gwn_bvh_data_tree_object &operator=(gwn_bvh_data_tree_object other) noexcept {
+    gwn_bvh_aabb_tree_object &operator=(gwn_bvh_aabb_tree_object other) noexcept {
         swap(*this, other);
         return *this;
     }
 
-    ~gwn_bvh_data_tree_object() { clear(); }
+    ~gwn_bvh_aabb_tree_object() { clear(); }
 
-    void clear() noexcept { detail::gwn_release_bvh_data_accessor(accessor_, stream()); }
+    void clear() noexcept { detail::gwn_release_bvh_aabb_tree_accessor(accessor_, stream()); }
 
     void clear(cudaStream_t const clear_stream) noexcept {
         set_stream(clear_stream);
-        detail::gwn_release_bvh_data_accessor(accessor_, stream());
+        detail::gwn_release_bvh_aabb_tree_accessor(accessor_, stream());
+    }
+
+    [[nodiscard]] accessor_type &accessor() noexcept { return accessor_; }
+    [[nodiscard]] accessor_type const &accessor() const noexcept { return accessor_; }
+    [[nodiscard]] bool has_tree() const noexcept { return !accessor_.empty(); }
+
+    friend void swap(gwn_bvh_aabb_tree_object &lhs, gwn_bvh_aabb_tree_object &rhs) noexcept {
+        using std::swap;
+        swap(lhs.accessor_, rhs.accessor_);
+        swap(static_cast<gwn_stream_mixin &>(lhs), static_cast<gwn_stream_mixin &>(rhs));
+    }
+
+private:
+    accessor_type accessor_{};
+};
+
+/// \brief Owning host-side RAII wrapper for a moment payload tree accessor.
+template <int Width, class Real = float, class Index = std::int64_t>
+class gwn_bvh_moment_tree_object final : public gwn_noncopyable, public gwn_stream_mixin {
+public:
+    static_assert(Width >= 2, "BVH object width must be at least 2.");
+
+    using real_type = Real;
+    using index_type = Index;
+    using accessor_type = gwn_bvh_moment_tree_accessor<Width, Real, Index>;
+
+    gwn_bvh_moment_tree_object() = default;
+
+    gwn_bvh_moment_tree_object(gwn_bvh_moment_tree_object &&other) noexcept { swap(*this, other); }
+
+    gwn_bvh_moment_tree_object &operator=(gwn_bvh_moment_tree_object other) noexcept {
+        swap(*this, other);
+        return *this;
+    }
+
+    ~gwn_bvh_moment_tree_object() { clear(); }
+
+    void clear() noexcept { detail::gwn_release_bvh_moment_tree_accessor(accessor_, stream()); }
+
+    void clear(cudaStream_t const clear_stream) noexcept {
+        set_stream(clear_stream);
+        detail::gwn_release_bvh_moment_tree_accessor(accessor_, stream());
     }
 
     [[nodiscard]] accessor_type &accessor() noexcept { return accessor_; }
     [[nodiscard]] accessor_type const &accessor() const noexcept { return accessor_; }
     [[nodiscard]] bool has_any_data() const noexcept { return !accessor_.empty(); }
 
-    friend void swap(gwn_bvh_data_tree_object &lhs, gwn_bvh_data_tree_object &rhs) noexcept {
+    friend void swap(gwn_bvh_moment_tree_object &lhs, gwn_bvh_moment_tree_object &rhs) noexcept {
         using std::swap;
         swap(lhs.accessor_, rhs.accessor_);
         swap(static_cast<gwn_stream_mixin &>(lhs), static_cast<gwn_stream_mixin &>(rhs));
@@ -325,15 +404,30 @@ private:
 };
 
 template <class Real = float, class Index = std::int64_t>
-using gwn_bvh4_accessor = gwn_bvh_topology_accessor<4, Real, Index>;
+using gwn_bvh4_accessor = gwn_bvh_topology_tree_accessor<4, Real, Index>;
 
 template <class Real = float, class Index = std::int64_t>
-using gwn_bvh4_data_accessor = gwn_bvh_data_tree_accessor<4, Real, Index>;
+using gwn_bvh4_aabb_accessor = gwn_bvh_aabb_tree_accessor<4, Real, Index>;
 
 template <class Real = float, class Index = std::int64_t>
-using gwn_bvh_object = gwn_bvh_topology_object<4, Real, Index>;
+using gwn_bvh4_moment_accessor = gwn_bvh_moment_tree_accessor<4, Real, Index>;
 
 template <class Real = float, class Index = std::int64_t>
-using gwn_bvh_data_object = gwn_bvh_data_tree_object<4, Real, Index>;
+using gwn_bvh_object = gwn_bvh_topology_tree_object<4, Real, Index>;
+
+template <class Real = float, class Index = std::int64_t>
+using gwn_bvh_aabb_object = gwn_bvh_aabb_tree_object<4, Real, Index>;
+
+template <class Real = float, class Index = std::int64_t>
+using gwn_bvh_moment_object = gwn_bvh_moment_tree_object<4, Real, Index>;
+
+template <int Width, class Real = float, class Index = std::int64_t>
+using gwn_bvh_topology_object = gwn_bvh_topology_tree_object<Width, Real, Index>;
+
+template <int Width, class Real = float, class Index = std::int64_t>
+using gwn_bvh_aabb_tree_object_t = gwn_bvh_aabb_tree_object<Width, Real, Index>;
+
+template <int Width, class Real = float, class Index = std::int64_t>
+using gwn_bvh_moment_tree_object_t = gwn_bvh_moment_tree_object<Width, Real, Index>;
 
 } // namespace gwn

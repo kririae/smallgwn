@@ -37,42 +37,48 @@ if(SMALLGWN_BUILD_TESTS)
     include(CTest)
     enable_testing()
 
-    add_executable(smallgwn_smoke_compile tests/smoke_compile.cu)
-    target_link_libraries(smallgwn_smoke_compile PRIVATE gwn::smallgwn)
-    add_test(NAME smallgwn_smoke_compile COMMAND smallgwn_smoke_compile)
-
     find_package(GTest QUIET)
     if(GTest_FOUND)
-        add_executable(smallgwn_parity_scaffold
-            tests/parity_scaffold.cu
-            tests/reference_hdk/UT_Array.cpp
-            tests/reference_hdk/UT_SolidAngle.cpp
-        )
-        target_link_libraries(smallgwn_parity_scaffold PRIVATE gwn::smallgwn GTest::gtest GTest::gtest_main TBB::tbb)
-        target_include_directories(smallgwn_parity_scaffold PRIVATE
+        # ---------------------------------------------------------------
+        # Common include directories for all test targets.
+        # ---------------------------------------------------------------
+        set(SMALLGWN_TEST_INCLUDE_DIRS
             "${CMAKE_CURRENT_SOURCE_DIR}/tests"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/reference_hdk"
         )
-        add_test(NAME smallgwn_parity_scaffold COMMAND smallgwn_parity_scaffold)
 
-        add_executable(smallgwn_bvh_model_parity
-            tests/bvh_model_parity.cu
-        )
-        target_link_libraries(smallgwn_bvh_model_parity PRIVATE gwn::smallgwn GTest::gtest GTest::gtest_main TBB::tbb)
-        target_include_directories(smallgwn_bvh_model_parity PRIVATE
-            "${CMAKE_CURRENT_SOURCE_DIR}/tests"
-        )
-        add_test(NAME smallgwn_bvh_model_parity COMMAND smallgwn_bvh_model_parity)
+        # ---------------------------------------------------------------
+        # Helper: define a unit/integration test target.
+        # ---------------------------------------------------------------
+        function(smallgwn_add_test TARGET_NAME)
+            cmake_parse_arguments(ARG "" "" "SOURCES;EXTRA_SOURCES" ${ARGN})
+            add_executable(${TARGET_NAME} ${ARG_SOURCES} ${ARG_EXTRA_SOURCES})
+            target_link_libraries(${TARGET_NAME} PRIVATE gwn::smallgwn GTest::gtest GTest::gtest_main TBB::tbb)
+            target_include_directories(${TARGET_NAME} PRIVATE ${SMALLGWN_TEST_INCLUDE_DIRS})
+            add_test(NAME ${TARGET_NAME} COMMAND ${TARGET_NAME})
+        endfunction()
 
-        add_executable(gwn_correctness_models
-            tests/gwn_correctness_models.cu
-        )
-        target_link_libraries(gwn_correctness_models PRIVATE gwn::smallgwn GTest::gtest GTest::gtest_main TBB::tbb)
-        target_include_directories(gwn_correctness_models PRIVATE
-            "${CMAKE_CURRENT_SOURCE_DIR}/tests"
-        )
-        add_test(NAME gwn_correctness_models COMMAND gwn_correctness_models)
+        # ---------------------------------------------------------------
+        # Unit tests.
+        # ---------------------------------------------------------------
+        smallgwn_add_test(smallgwn_unit_status         SOURCES tests/unit_status.cu)
+        smallgwn_add_test(smallgwn_unit_device_array   SOURCES tests/unit_device_array.cu)
+        smallgwn_add_test(smallgwn_unit_stream_mixin   SOURCES tests/unit_stream_mixin.cu)
+        smallgwn_add_test(smallgwn_unit_geometry       SOURCES tests/unit_geometry.cu)
+        smallgwn_add_test(smallgwn_unit_bvh_topology   SOURCES tests/unit_bvh_topology.cu)
+        smallgwn_add_test(smallgwn_unit_bvh_taylor     SOURCES tests/unit_bvh_taylor.cu)
+
+        smallgwn_add_test(smallgwn_unit_winding_exact  SOURCES tests/unit_winding_exact.cu
+            EXTRA_SOURCES tests/reference_hdk/UT_Array.cpp tests/reference_hdk/UT_SolidAngle.cpp)
+        smallgwn_add_test(smallgwn_unit_winding_taylor SOURCES tests/unit_winding_taylor.cu)
+
+        # ---------------------------------------------------------------
+        # Integration tests.
+        # ---------------------------------------------------------------
+        smallgwn_add_test(smallgwn_integration_model_parity SOURCES tests/integration_model_parity.cu
+            EXTRA_SOURCES tests/reference_hdk/UT_Array.cpp tests/reference_hdk/UT_SolidAngle.cpp)
+        smallgwn_add_test(smallgwn_integration_correctness  SOURCES tests/integration_correctness.cu)
     else()
-        message(STATUS "GTest not found; parity scaffold target is skipped.")
+        message(STATUS "GTest not found; test targets are skipped.")
     endif()
 endif()

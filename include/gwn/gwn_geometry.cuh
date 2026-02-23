@@ -42,91 +42,9 @@ template <class Real, class Index = std::int64_t> struct gwn_geometry_accessor {
 
 namespace detail {
 
-template <class T>
-[[nodiscard]] constexpr T *gwn_mutable_data(cuda::std::span<T const> const span) noexcept {
-    return const_cast<T *>(span.data());
-}
-
-template <class T>
-gwn_status gwn_upload_span(
-    cuda::std::span<T const> &dst, cuda::std::span<T const> src, cudaStream_t const stream
-) {
-    if (dst.data() != nullptr) {
-        GWN_RETURN_ON_ERROR(gwn_cuda_free(gwn_mutable_data(dst), stream));
-        dst = {};
-    }
-
-    dst = {};
-    if (src.empty())
-        return gwn_status::ok();
-
-    void *device_ptr = nullptr;
-    GWN_RETURN_ON_ERROR(gwn_cuda_malloc(&device_ptr, src.size_bytes(), stream));
-    auto cleanup_device_ptr =
-        gwn_make_scope_exit([&]() noexcept { (void)gwn_cuda_free(device_ptr, stream); });
-
-    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
-        cudaMemcpyAsync(device_ptr, src.data(), src.size_bytes(), cudaMemcpyHostToDevice, stream)
-    ));
-
-    dst = cuda::std::span<T const>(static_cast<T const *>(device_ptr), src.size());
-    cleanup_device_ptr.release();
-    return gwn_status::ok();
-}
-
-template <class T>
-gwn_status gwn_allocate_span(
-    cuda::std::span<T const> &dst, std::size_t const count, cudaStream_t const stream
-) {
-    if (dst.data() != nullptr) {
-        GWN_RETURN_ON_ERROR(gwn_cuda_free(gwn_mutable_data(dst), stream));
-        dst = {};
-    }
-
-    if (count == 0)
-        return gwn_status::ok();
-
-    void *raw_ptr = nullptr;
-    GWN_RETURN_ON_ERROR(gwn_cuda_malloc(&raw_ptr, count * sizeof(T), stream));
-
-    dst = cuda::std::span<T const>(static_cast<T const *>(raw_ptr), count);
-    return gwn_status::ok();
-}
-
-template <class T>
-gwn_status gwn_copy_device_to_span(
-    cuda::std::span<T const> &dst, T const *src, std::size_t const count, cudaStream_t const stream
-) {
-    GWN_RETURN_ON_ERROR(gwn_allocate_span(dst, count, stream));
-    if (count == 0)
-        return gwn_status::ok();
-
-    auto cleanup_dst = gwn_make_scope_exit([&]() noexcept {
-        (void)gwn_cuda_free(gwn_mutable_data(dst), stream);
-        dst = {};
-    });
-
-    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemcpyAsync(
-        gwn_mutable_data(dst), src, count * sizeof(T), cudaMemcpyDeviceToDevice, stream
-    )));
-
-    cleanup_dst.release();
-    return gwn_status::ok();
-}
-
-template <class T>
-void gwn_release_span(cuda::std::span<T const> &span_view, cudaStream_t const stream) noexcept {
-    if (span_view.data() != nullptr) {
-        gwn_status const status = gwn_cuda_free(gwn_mutable_data(span_view), stream);
-        if (!status.is_ok())
-            GWN_HANDLE_STATUS_FAIL(status);
-        span_view = {};
-    }
-}
-
 template <class... Spans>
 void gwn_release_spans(cudaStream_t const stream, Spans &...spans) noexcept {
-    (gwn_release_span(spans, stream), ...);
+    (gwn_free_span(spans, stream), ...);
 }
 
 template <class Real, class Index>
@@ -150,17 +68,27 @@ gwn_status gwn_upload_accessor(
     if (i0.size() != i1.size() || i0.size() != i2.size())
         return gwn_status::invalid_argument("Triangle SoA spans must have identical lengths.");
 
-    auto cleanup_accessor =
-        gwn_make_scope_exit([&]() noexcept { gwn_release_accessor(accessor, stream); });
+    gwn_geometry_accessor<Real, Index> staging{};
+    auto cleanup_staging =
+        gwn_make_scope_exit([&]() noexcept { gwn_release_accessor(staging, stream); });
 
-    GWN_RETURN_ON_ERROR(gwn_upload_span(accessor.vertex_x, x, stream));
-    GWN_RETURN_ON_ERROR(gwn_upload_span(accessor.vertex_y, y, stream));
-    GWN_RETURN_ON_ERROR(gwn_upload_span(accessor.vertex_z, z, stream));
-    GWN_RETURN_ON_ERROR(gwn_upload_span(accessor.tri_i0, i0, stream));
-    GWN_RETURN_ON_ERROR(gwn_upload_span(accessor.tri_i1, i1, stream));
-    GWN_RETURN_ON_ERROR(gwn_upload_span(accessor.tri_i2, i2, stream));
+    GWN_RETURN_ON_ERROR(gwn_allocate_span(staging.vertex_x, x.size(), stream));
+    GWN_RETURN_ON_ERROR(gwn_allocate_span(staging.vertex_y, y.size(), stream));
+    GWN_RETURN_ON_ERROR(gwn_allocate_span(staging.vertex_z, z.size(), stream));
+    GWN_RETURN_ON_ERROR(gwn_allocate_span(staging.tri_i0, i0.size(), stream));
+    GWN_RETURN_ON_ERROR(gwn_allocate_span(staging.tri_i1, i1.size(), stream));
+    GWN_RETURN_ON_ERROR(gwn_allocate_span(staging.tri_i2, i2.size(), stream));
 
-    cleanup_accessor.release();
+    GWN_RETURN_ON_ERROR(gwn_copy_h2d(staging.vertex_x, x, stream));
+    GWN_RETURN_ON_ERROR(gwn_copy_h2d(staging.vertex_y, y, stream));
+    GWN_RETURN_ON_ERROR(gwn_copy_h2d(staging.vertex_z, z, stream));
+    GWN_RETURN_ON_ERROR(gwn_copy_h2d(staging.tri_i0, i0, stream));
+    GWN_RETURN_ON_ERROR(gwn_copy_h2d(staging.tri_i1, i1, stream));
+    GWN_RETURN_ON_ERROR(gwn_copy_h2d(staging.tri_i2, i2, stream));
+
+    gwn_release_accessor(accessor, stream);
+    accessor = staging;
+    cleanup_staging.release();
     return gwn_status::ok();
 }
 

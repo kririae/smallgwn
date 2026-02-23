@@ -25,7 +25,7 @@ These instructions apply to the `smallgwn/` project tree.
 ## Naming and API Rules
 - Use `gwn::` namespace and `gwn_` prefix for public symbols.
 - Avoid `_wide` naming in public API types.
-- Keep width as template parameter where relevant; default aliases are width=4 (`gwn_bvh_accessor`, `gwn_bvh_data4_accessor`).
+- Keep width as template parameter where relevant; width=4 aliases are `gwn_bvh_accessor`, `gwn_bvh_aabb4_accessor`, and `gwn_bvh_moment4_accessor`.
 
 ## Formatting Rules
 - Use `clang-format` with Chromium style via `smallgwn/.clang-format`.
@@ -36,10 +36,16 @@ These instructions apply to the `smallgwn/` project tree.
 - Use SoA (Structure of Arrays) layout for geometry (`x/y/z`, `i0/i1/i2`).
 - Prefer TBB for trivially parallel CPU-side batch work.
 - **Stream Binding**: Stream binding is explicit:
-  - owning objects (`gwn_geometry_object`, `gwn_bvh_topology_object`, `gwn_bvh_data_tree_object`) use `gwn_stream_mixin`;
+  - owning objects (`gwn_geometry_object`, `gwn_bvh_topology_object`, `gwn_bvh_aabb_object`, `gwn_bvh_moment_object`) use `gwn_stream_mixin`;
   - `clear()`/destructor release on the currently bound stream;
-  - successful stream-parameterized mutations update the bound stream.
+  - successful stream-parameterized mutations update the bound stream;
+  - object-first build/refit overloads in `gwn_bvh_build.cuh` must update bound stream on success.
 - **Memory Allocation**: Keep stream allocator path ONLY (`cudaMallocAsync`/`cudaFreeAsync`). Never use legacy synchronous fallback paths. `gwn_device_array<T>` remembers stream and releases on its bound stream by default.
+  - All `gwn_device_array` methods (`resize`, `clear`, `zero`, `copy_from_host`, `copy_to_host`) and free helpers (`gwn_cuda_free`, `gwn_free_span`, etc.) are `noexcept`.
+  - `resize(count, stream)` rebinds the bound stream even when `count` matches the current size (no alloc/free occurs in that case).
+  - `resize(count, stream)` allocates new storage on `stream` but releases previous storage on the previously bound stream; bound stream switches to `stream` only after successful commit.
+  - `clear(stream)` releases on the currently bound stream, then rebinds to `stream` on success; no-arg `clear()` and destructor release on the bound stream.
+  - For span handoff to accessors/objects, use span primitives (`gwn_allocate_span`, `gwn_free_span`, `gwn_copy_h2d`, `gwn_copy_d2h`, `gwn_copy_d2d`) instead of `gwn_device_array`.
 
 ## C++ Resource Management & Idioms
 - **RAII & Non-copyable**: Host owning objects should generally stay non-copyable (delete copy constructor/assignment) to prevent accidental deep copies of GPU memory. Use accessor-centric RAII.
@@ -49,13 +55,18 @@ These instructions apply to the `smallgwn/` project tree.
 ## Current BVH/Taylor Design
 - Topology and data are separated:
   - Topology: `gwn_bvh_topology_accessor<Width,...>` / `gwn_bvh_topology_object<Width,...>`
-  - Data tree: `gwn_bvh_data_tree_accessor<Width,...>` / `gwn_bvh_data_tree_object<Width,...>`
+  - AABB tree: `gwn_bvh_aabb_accessor<Width,...>` / `gwn_bvh_aabb_tree_object_t<Width,...>`
+  - Moment tree: `gwn_bvh_moment_accessor<Width,...>` / `gwn_bvh_moment_tree_object_t<Width,...>`
 - `include/gwn/gwn_bvh_build.cuh` keeps public build APIs, while internal build passes/functors live in flat `include/gwn/detail/` headers.
-- LBVH topology build is GPU-centric (`gwn_build_bvh_lbvh<Width,...>` + `gwn_build_bvh4_lbvh`).
+- Public BVH build/refit entrypoints are object-based (`gwn_geometry_object` + BVH object types); accessor-based build/refit APIs are internal-only under `gwn::detail`.
+- LBVH topology build is pass-composed:
+  - binary LBVH pass (`gwn_build_binary_lbvh_topology`)
+  - collapse pass (`gwn_collapse_binary_lbvh_topology`)
+  - exposed entry: `gwn_build_bvh_topology_lbvh<Width,...>` / `gwn_build_bvh4_topology_lbvh`
+- Generic async refit kernels/traits live in `include/gwn/detail/gwn_bvh_refit_async.cuh`.
 - LBVH build path uses CUB for scene reduction and radix sort (NO Thrust in runtime build path).
 - Taylor build currently supports `Order=0/1`:
-  - Production path: `gwn_build_bvh4_lbvh_taylor<Order,...>` uses fully GPU async upward propagation with atomics.
-  - Reference path: `gwn_build_bvh4_lbvh_taylor_levelwise<Order,...>` is always compiled and available.
+  - Production path uses fully GPU async upward propagation with atomics through `gwn_refit_bvh_moment`.
   - Async Taylor temporary buffers (parent/slot/arity/arrivals/pending moments) use `gwn_device_array`.
 - Winding number query APIs:
   - Exact: `gwn_compute_winding_number_batch_bvh_exact`
@@ -63,18 +74,29 @@ These instructions apply to the `smallgwn/` project tree.
 
 ## Error Handling Rules
 - Prefer internal C++ exceptions only inside implementation details; public APIs should return `gwn_status` error codes.
+- **`gwn_status` is fully `noexcept`**: Factory methods (`invalid_argument`, `internal_error`, `cuda_runtime_error`) and all helpers (`gwn_cuda_to_status`, `gwn_cuda_malloc`, `gwn_cuda_free`) are `noexcept`. `std::string`/`std::format` OOM is treated as a fatal precondition violation (same policy as `operator new` in embedded/GPU contexts).
+- **`GWN_RETURN_ON_ERROR(expr)`**: Stores the result in `gwn_status_result_` (not `gwn_status`) to avoid shadowing the type name in the enclosing scope.
 - For executable boundaries, prefer a single top-level exception translation block:
   - `int main() try { ... } catch (...) { ... }`
 - Use a dedicated `catch` block to translate exceptions to status/diagnostics, rather than scattered local catches.
 
 ## Test Structure & Environments
-- `tests/smoke_compile.cu`: API compile/smoke sanity for geometry/BVH/taylor entry points.
-- `tests/parity_scaffold.cu`: Small synthetic parity checks (CPU exact vs GPU exact/taylor). Includes stream-binding regression checks and vendored HDK headers for oracle helpers.
-- `tests/bvh_model_parity.cu`: Integration tests on OBJ models. 
-  - *Env vars*: `SMALLGWN_MODEL_DATA_DIR` (default `/tmp/common-3d-test-models/data`), `SMALLGWN_RUN_TAYLOR_BENCHMARK=1`, `SMALLGWN_TAYLOR_BENCH_REPEATS`.
-- `tests/gwn_correctness_models.cu`: Model correctness with voxelized query coverage.
-  - *Env vars*: `SMALLGWN_MODEL_PATH`, `SMALLGWN_MODEL_DATA_DIR`, `SMALLGWN_VOXEL_TOTAL_POINTS`, `SMALLGWN_VOXEL_QUERY_CHUNK_SIZE`, `SMALLGWN_CPU_WORK_BUDGET`, `SMALLGWN_CPU_MAX_SAMPLES`, `SMALLGWN_CPU_MIN_SAMPLES`.
-- `tests/reference_cpu.hpp`: TBB-parallel CPU exact reference implementation.
+- Unit tests:
+  - `tests/unit_status.cu`
+  - `tests/unit_device_array.cu`
+  - `tests/unit_stream_mixin.cu`
+  - `tests/unit_geometry.cu`
+  - `tests/unit_bvh_topology.cu`
+  - `tests/unit_bvh_taylor.cu`
+  - `tests/unit_winding_exact.cu`
+  - `tests/unit_winding_taylor.cu`
+- Integration tests:
+  - `tests/integration_model_parity.cu`
+  - `tests/integration_correctness.cu`
+  - Exact-heavy model parity/correctness cases are intentionally compiled out with `#if 0` during current refactor cycle.
+  - Model-based integration tests are fail-fast on missing model data (no `GTEST_SKIP` on missing dataset path).
+  - Taylor parity includes GPU order-0/order-1 vs HDK CPU order-0/order-1 comparisons.
+- `tests/reference_cpu.cuh`: TBB-parallel CPU exact reference implementation.
 - `tests/reference_hdk/*`: Vendored HDK reference sources for parity/regression checks (keep under `tests/`, not public).
 
 ## Validation Workflow

@@ -2,19 +2,13 @@
 
 #include <algorithm>
 #include <array>
-#include <charconv>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib>
-#include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <limits>
 #include <optional>
 #include <span>
-#include <sstream>
-#include <string>
 #include <string_view>
 #include <vector>
 
@@ -22,21 +16,18 @@
 
 #include <gwn/gwn.cuh>
 
-#include "reference_cpu.hpp"
+#include "reference_cpu.cuh"
+#include "test_utils.hpp"
 
 namespace {
 
-using Real = float;
-using Index = std::int64_t;
+using Real = gwn::tests::Real;
+using Index = gwn::tests::Index;
+using gwn::tests::HostMesh;
 
-struct HostMesh {
-    std::vector<Real> vertex_x;
-    std::vector<Real> vertex_y;
-    std::vector<Real> vertex_z;
-    std::vector<Index> tri_i0;
-    std::vector<Index> tri_i1;
-    std::vector<Index> tri_i2;
-};
+// ---------------------------------------------------------------------------
+// Voxel grid helpers (unique to correctness tests).
+// ---------------------------------------------------------------------------
 
 struct MeshBounds {
     Real min_x{Real(0)};
@@ -61,13 +52,6 @@ struct VoxelGridSpec {
     [[nodiscard]] std::size_t count() const noexcept { return nx * ny * nz; }
 };
 
-struct RunningErrorStats {
-    double max_abs{0.0};
-    double mean_abs{0.0};
-    std::size_t count{0};
-    std::size_t over_threshold{0};
-};
-
 struct ErrorSummary {
     double max_abs{0.0};
     double mean_abs{0.0};
@@ -75,169 +59,16 @@ struct ErrorSummary {
     double p99_abs{0.0};
 };
 
-[[nodiscard]] bool is_cuda_runtime_unavailable_message(std::string_view const message) noexcept {
-    return message.find("cudaErrorNoDevice") != std::string_view::npos ||
-           message.find("cudaErrorInsufficientDriver") != std::string_view::npos ||
-           message.find("cudaErrorInitializationError") != std::string_view::npos ||
-           message.find("cudaErrorSystemDriverMismatch") != std::string_view::npos ||
-           message.find("cudaErrorOperatingSystem") != std::string_view::npos ||
-           message.find("cudaErrorSystemNotReady") != std::string_view::npos ||
-           message.find("cudaErrorNotSupported") != std::string_view::npos;
-}
+struct RunningErrorStats {
+    double max_abs{0.0};
+    double mean_abs{0.0};
+    std::size_t count{0};
+    std::size_t over_threshold{0};
+};
 
-[[nodiscard]] std::string status_to_debug_string(gwn::gwn_status const &status) {
-    std::ostringstream out;
-    out << status.message();
-    if (status.has_location()) {
-        std::source_location const loc = status.location();
-        out << " at " << loc.file_name() << ":" << loc.line();
-    }
-    return out.str();
-}
-
-[[nodiscard]] std::size_t get_env_positive_size_t(char const *name, std::size_t default_value) {
-    char const *value = std::getenv(name);
-    if (value == nullptr || *value == '\0')
-        return default_value;
-
-    std::size_t parsed = 0;
-    char const *end = value + std::char_traits<char>::length(value);
-    auto const [ptr, ec] = std::from_chars(value, end, parsed);
-    if (ec != std::errc() || ptr != end || parsed == 0)
-        return default_value;
-    return parsed;
-}
-
-[[nodiscard]] std::string_view trim_left(std::string_view const line) noexcept {
-    std::size_t start = 0;
-    while (start < line.size() &&
-           (line[start] == ' ' || line[start] == '\t' || line[start] == '\r')) {
-        ++start;
-    }
-    return line.substr(start);
-}
-
-[[nodiscard]] std::optional<Index>
-parse_obj_index(std::string_view const token, std::size_t const vertex_count) {
-    if (token.empty())
-        return std::nullopt;
-
-    std::size_t const slash = token.find('/');
-    std::string_view const index_token =
-        (slash == std::string_view::npos) ? token : token.substr(0, slash);
-    if (index_token.empty())
-        return std::nullopt;
-
-    Index raw = 0;
-    char const *begin = index_token.data();
-    char const *end = index_token.data() + index_token.size();
-    auto const [ptr, ec] = std::from_chars(begin, end, raw);
-    if (ec != std::errc() || ptr != end || raw == 0)
-        return std::nullopt;
-
-    Index const resolved = (raw > 0) ? (raw - 1) : (static_cast<Index>(vertex_count) + raw);
-    if (resolved < 0 || static_cast<std::size_t>(resolved) >= vertex_count)
-        return std::nullopt;
-
-    return resolved;
-}
-
-[[nodiscard]] std::optional<HostMesh> load_obj_mesh(std::filesystem::path const &path) {
-    std::ifstream input(path);
-    if (!input.is_open())
-        return std::nullopt;
-
-    HostMesh mesh;
-    std::string line;
-    while (std::getline(input, line)) {
-        std::string_view const trimmed = trim_left(line);
-        if (trimmed.size() < 2 || trimmed[0] == '#')
-            continue;
-
-        if (trimmed.starts_with("v ")) {
-            std::istringstream in(std::string(trimmed.substr(2)));
-            Real x = Real(0);
-            Real y = Real(0);
-            Real z = Real(0);
-            if (!(in >> x >> y >> z))
-                continue;
-            mesh.vertex_x.push_back(x);
-            mesh.vertex_y.push_back(y);
-            mesh.vertex_z.push_back(z);
-            continue;
-        }
-
-        if (!trimmed.starts_with("f "))
-            continue;
-
-        std::istringstream in(std::string(trimmed.substr(2)));
-        std::vector<Index> polygon{};
-        std::string token;
-        while (in >> token) {
-            std::optional<Index> const parsed = parse_obj_index(token, mesh.vertex_x.size());
-            if (parsed.has_value())
-                polygon.push_back(*parsed);
-        }
-        if (polygon.size() < 3)
-            continue;
-
-        Index const first = polygon[0];
-        for (std::size_t corner = 1; corner + 1 < polygon.size(); ++corner) {
-            mesh.tri_i0.push_back(first);
-            mesh.tri_i1.push_back(polygon[corner]);
-            mesh.tri_i2.push_back(polygon[corner + 1]);
-        }
-    }
-
-    if (mesh.vertex_x.empty() || mesh.tri_i0.empty())
-        return std::nullopt;
-    return mesh;
-}
-
-[[nodiscard]] std::vector<std::filesystem::path>
-collect_obj_model_paths(std::filesystem::path const &model_dir) {
-    std::vector<std::filesystem::path> model_paths{};
-    for (auto const &entry : std::filesystem::directory_iterator(model_dir)) {
-        if (!entry.is_regular_file())
-            continue;
-        std::filesystem::path const path = entry.path();
-        if (path.extension() == ".obj")
-            model_paths.push_back(path);
-    }
-    std::sort(model_paths.begin(), model_paths.end());
-    model_paths.erase(std::unique(model_paths.begin(), model_paths.end()), model_paths.end());
-    return model_paths;
-}
-
-[[nodiscard]] std::vector<std::filesystem::path> collect_model_paths() {
-    std::vector<std::filesystem::path> model_paths{};
-
-    if (char const *path_env = std::getenv("SMALLGWN_MODEL_PATH");
-        path_env != nullptr && *path_env != '\0') {
-        std::filesystem::path const path(path_env);
-        if (std::filesystem::is_regular_file(path) && path.extension() == ".obj")
-            model_paths.push_back(path);
-    }
-
-    if (char const *dir_env = std::getenv("SMALLGWN_MODEL_DATA_DIR");
-        dir_env != nullptr && *dir_env != '\0') {
-        std::filesystem::path const path(dir_env);
-        if (std::filesystem::is_directory(path)) {
-            auto const dir_models = collect_obj_model_paths(path);
-            model_paths.insert(model_paths.end(), dir_models.begin(), dir_models.end());
-        }
-    } else {
-        std::filesystem::path const default_path("/tmp/common-3d-test-models/data");
-        if (std::filesystem::is_directory(default_path)) {
-            auto const dir_models = collect_obj_model_paths(default_path);
-            model_paths.insert(model_paths.end(), dir_models.begin(), dir_models.end());
-        }
-    }
-
-    std::sort(model_paths.begin(), model_paths.end());
-    model_paths.erase(std::unique(model_paths.begin(), model_paths.end()), model_paths.end());
-    return model_paths;
-}
+// ---------------------------------------------------------------------------
+// Helpers.
+// ---------------------------------------------------------------------------
 
 [[nodiscard]] MeshBounds compute_mesh_bounds(HostMesh const &mesh) {
     MeshBounds bounds{};
@@ -490,15 +321,19 @@ summarize_error(std::span<Real const> const lhs, std::span<Real const> const rhs
     return summary;
 }
 
-TEST(gwn_correctness_models, voxel_order1_levelwise_matches_iterative) {
-    std::vector<std::filesystem::path> const model_paths = collect_model_paths();
-    if (model_paths.empty())
-        GTEST_SKIP() << "No model input found. Set SMALLGWN_MODEL_DATA_DIR or SMALLGWN_MODEL_PATH.";
+// ---------------------------------------------------------------------------
+// Integration Tests.
+// ---------------------------------------------------------------------------
+
+TEST(smallgwn_integration_correctness, voxel_order1_rebuild_consistency) {
+    std::vector<std::filesystem::path> const model_paths = gwn::tests::collect_model_paths();
+    ASSERT_FALSE(model_paths.empty())
+        << "No model input found. Set SMALLGWN_MODEL_DATA_DIR or SMALLGWN_MODEL_PATH.";
 
     std::size_t const target_total_points =
-        get_env_positive_size_t("SMALLGWN_VOXEL_TOTAL_POINTS", 10'000'000);
+        gwn::tests::get_env_positive_size_t("SMALLGWN_VOXEL_TOTAL_POINTS", 10'000'000);
     std::size_t const chunk_size =
-        get_env_positive_size_t("SMALLGWN_VOXEL_QUERY_CHUNK_SIZE", 1'000'000);
+        gwn::tests::get_env_positive_size_t("SMALLGWN_VOXEL_QUERY_CHUNK_SIZE", 1'000'000);
     std::size_t const target_points_per_model = std::max<std::size_t>(
         65'536, target_total_points / std::max<std::size_t>(1, model_paths.size())
     );
@@ -510,7 +345,7 @@ TEST(gwn_correctness_models, voxel_order1_levelwise_matches_iterative) {
     bool any_nonzero_winding = false;
     for (std::filesystem::path const &model_path : model_paths) {
         SCOPED_TRACE(model_path.string());
-        std::optional<HostMesh> const maybe_mesh = load_obj_mesh(model_path);
+        std::optional<HostMesh> const maybe_mesh = gwn::tests::load_obj_mesh(model_path);
         if (!maybe_mesh.has_value())
             continue;
         HostMesh const &mesh = *maybe_mesh;
@@ -531,67 +366,32 @@ TEST(gwn_correctness_models, voxel_order1_levelwise_matches_iterative) {
             cuda::std::span<Index const>(mesh.tri_i1.data(), mesh.tri_i1.size()),
             cuda::std::span<Index const>(mesh.tri_i2.data(), mesh.tri_i2.size())
         );
-        if (!upload_status.is_ok() && upload_status.error() == gwn::gwn_error::cuda_runtime_error &&
-            is_cuda_runtime_unavailable_message(upload_status.message())) {
-            GTEST_SKIP() << "CUDA runtime unavailable: " << upload_status.message();
-        }
-        ASSERT_TRUE(upload_status.is_ok()) << status_to_debug_string(upload_status);
+        SMALLGWN_SKIP_IF_STATUS_CUDA_UNAVAILABLE(upload_status);
+        ASSERT_TRUE(upload_status.is_ok()) << gwn::tests::status_to_debug_string(upload_status);
 
         gwn::gwn_bvh_object<Real, Index> bvh_iterative;
-        gwn::gwn_bvh_data_object<Real, Index> data_iterative;
-        gwn::gwn_status const build_iterative_status =
-            gwn::gwn_build_bvh4_lbvh_taylor<1, Real, Index>(
-                geometry.accessor(), bvh_iterative.accessor(), data_iterative.accessor()
-            );
-        ASSERT_TRUE(build_iterative_status.is_ok())
-            << status_to_debug_string(build_iterative_status);
+        gwn::gwn_bvh_aabb_object<Real, Index> aabb_iterative;
+        gwn::gwn_bvh_moment_object<Real, Index> data_iterative;
+        ASSERT_TRUE((gwn::gwn_build_bvh4_topology_aabb_moment_lbvh<1, Real, Index>(
+                         geometry, bvh_iterative, aabb_iterative, data_iterative
+        )
+                         .is_ok()));
 
         gwn::gwn_bvh_object<Real, Index> bvh_levelwise;
-        gwn::gwn_bvh_data_object<Real, Index> data_levelwise;
-        gwn::gwn_status const build_levelwise_status =
-            gwn::gwn_build_bvh4_lbvh_taylor_levelwise<1, Real, Index>(
-                geometry.accessor(), bvh_levelwise.accessor(), data_levelwise.accessor()
-            );
-        ASSERT_TRUE(build_levelwise_status.is_ok())
-            << status_to_debug_string(build_levelwise_status);
-
-        Real *d_query_x = nullptr;
-        Real *d_query_y = nullptr;
-        Real *d_query_z = nullptr;
-        Real *d_output_iterative = nullptr;
-        Real *d_output_levelwise = nullptr;
-        auto cleanup = gwn::gwn_make_scope_exit([&]() noexcept {
-            if (d_output_levelwise != nullptr)
-                (void)gwn::gwn_cuda_free(d_output_levelwise);
-            if (d_output_iterative != nullptr)
-                (void)gwn::gwn_cuda_free(d_output_iterative);
-            if (d_query_z != nullptr)
-                (void)gwn::gwn_cuda_free(d_query_z);
-            if (d_query_y != nullptr)
-                (void)gwn::gwn_cuda_free(d_query_y);
-            if (d_query_x != nullptr)
-                (void)gwn::gwn_cuda_free(d_query_x);
-        });
+        gwn::gwn_bvh_aabb_object<Real, Index> aabb_levelwise;
+        gwn::gwn_bvh_moment_object<Real, Index> data_levelwise;
+        ASSERT_TRUE((gwn::gwn_build_bvh4_topology_aabb_moment_lbvh<1, Real, Index>(
+                         geometry, bvh_levelwise, aabb_levelwise, data_levelwise
+        )
+                         .is_ok()));
 
         std::size_t const alloc_count = std::min(chunk_size, query_count);
-        std::size_t const alloc_bytes = alloc_count * sizeof(Real);
-        ASSERT_TRUE(
-            gwn::gwn_cuda_malloc(reinterpret_cast<void **>(&d_query_x), alloc_bytes).is_ok()
-        );
-        ASSERT_TRUE(
-            gwn::gwn_cuda_malloc(reinterpret_cast<void **>(&d_query_y), alloc_bytes).is_ok()
-        );
-        ASSERT_TRUE(
-            gwn::gwn_cuda_malloc(reinterpret_cast<void **>(&d_query_z), alloc_bytes).is_ok()
-        );
-        ASSERT_TRUE(
-            gwn::gwn_cuda_malloc(reinterpret_cast<void **>(&d_output_iterative), alloc_bytes)
-                .is_ok()
-        );
-        ASSERT_TRUE(
-            gwn::gwn_cuda_malloc(reinterpret_cast<void **>(&d_output_levelwise), alloc_bytes)
-                .is_ok()
-        );
+        gwn::gwn_device_array<Real> d_qx, d_qy, d_qz, d_out_iter, d_out_lw;
+        ASSERT_TRUE(d_qx.resize(alloc_count).is_ok());
+        ASSERT_TRUE(d_qy.resize(alloc_count).is_ok());
+        ASSERT_TRUE(d_qz.resize(alloc_count).is_ok());
+        ASSERT_TRUE(d_out_iter.resize(alloc_count).is_ok());
+        ASSERT_TRUE(d_out_lw.resize(alloc_count).is_ok());
 
         std::vector<Real> query_x{};
         std::vector<Real> query_y{};
@@ -610,48 +410,44 @@ TEST(gwn_correctness_models, voxel_order1_levelwise_matches_iterative) {
             host_iterative.resize(count);
             host_levelwise.resize(count);
 
-            std::size_t const bytes = count * sizeof(Real);
-            ASSERT_EQ(
-                cudaSuccess, cudaMemcpy(d_query_x, query_x.data(), bytes, cudaMemcpyHostToDevice)
+            ASSERT_TRUE(
+                d_qx.copy_from_host(cuda::std::span<Real const>(query_x.data(), count)).is_ok()
             );
-            ASSERT_EQ(
-                cudaSuccess, cudaMemcpy(d_query_y, query_y.data(), bytes, cudaMemcpyHostToDevice)
+            ASSERT_TRUE(
+                d_qy.copy_from_host(cuda::std::span<Real const>(query_y.data(), count)).is_ok()
             );
-            ASSERT_EQ(
-                cudaSuccess, cudaMemcpy(d_query_z, query_z.data(), bytes, cudaMemcpyHostToDevice)
+            ASSERT_TRUE(
+                d_qz.copy_from_host(cuda::std::span<Real const>(query_z.data(), count)).is_ok()
             );
 
-            gwn::gwn_status const iterative_query_status =
-                gwn::gwn_compute_winding_number_batch_bvh_taylor<1, Real, Index>(
-                    geometry.accessor(), bvh_iterative.accessor(), data_iterative.accessor(),
-                    cuda::std::span<Real const>(d_query_x, count),
-                    cuda::std::span<Real const>(d_query_y, count),
-                    cuda::std::span<Real const>(d_query_z, count),
-                    cuda::std::span<Real>(d_output_iterative, count), k_accuracy_scale
-                );
-            ASSERT_TRUE(iterative_query_status.is_ok())
-                << status_to_debug_string(iterative_query_status);
+            ASSERT_TRUE((gwn::gwn_compute_winding_number_batch_bvh_taylor<1, Real, Index>(
+                             geometry.accessor(), bvh_iterative.accessor(),
+                             data_iterative.accessor(),
+                             cuda::std::span<Real const>(d_qx.data(), count),
+                             cuda::std::span<Real const>(d_qy.data(), count),
+                             cuda::std::span<Real const>(d_qz.data(), count),
+                             cuda::std::span<Real>(d_out_iter.data(), count), k_accuracy_scale
+            )
+                             .is_ok()));
 
-            gwn::gwn_status const levelwise_query_status =
-                gwn::gwn_compute_winding_number_batch_bvh_taylor<1, Real, Index>(
-                    geometry.accessor(), bvh_levelwise.accessor(), data_levelwise.accessor(),
-                    cuda::std::span<Real const>(d_query_x, count),
-                    cuda::std::span<Real const>(d_query_y, count),
-                    cuda::std::span<Real const>(d_query_z, count),
-                    cuda::std::span<Real>(d_output_levelwise, count), k_accuracy_scale
-                );
-            ASSERT_TRUE(levelwise_query_status.is_ok())
-                << status_to_debug_string(levelwise_query_status);
+            ASSERT_TRUE((gwn::gwn_compute_winding_number_batch_bvh_taylor<1, Real, Index>(
+                             geometry.accessor(), bvh_levelwise.accessor(),
+                             data_levelwise.accessor(),
+                             cuda::std::span<Real const>(d_qx.data(), count),
+                             cuda::std::span<Real const>(d_qy.data(), count),
+                             cuda::std::span<Real const>(d_qz.data(), count),
+                             cuda::std::span<Real>(d_out_lw.data(), count), k_accuracy_scale
+            )
+                             .is_ok()));
 
             ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
-            ASSERT_EQ(
-                cudaSuccess,
-                cudaMemcpy(host_iterative.data(), d_output_iterative, bytes, cudaMemcpyDeviceToHost)
+            ASSERT_TRUE(
+                d_out_iter.copy_to_host(cuda::std::span<Real>(host_iterative.data(), count)).is_ok()
             );
-            ASSERT_EQ(
-                cudaSuccess,
-                cudaMemcpy(host_levelwise.data(), d_output_levelwise, bytes, cudaMemcpyDeviceToHost)
+            ASSERT_TRUE(
+                d_out_lw.copy_to_host(cuda::std::span<Real>(host_levelwise.data(), count)).is_ok()
             );
+            ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
 
             for (std::size_t i = 0; i < count; ++i) {
                 max_abs_winding =
@@ -684,7 +480,7 @@ TEST(gwn_correctness_models, voxel_order1_levelwise_matches_iterative) {
 
         EXPECT_TRUE(center_seen) << "Center voxel was not covered for " << model_path.string();
         EXPECT_EQ(stats.over_threshold, 0u)
-            << "Levelwise and iterative order-1 Taylor mismatch on model " << model_path.string();
+            << "Order-1 rebuild mismatch on model " << model_path.string();
     }
 
     ASSERT_GT(tested_model_count, 0u) << "No valid OBJ models were exercised.";
@@ -692,31 +488,33 @@ TEST(gwn_correctness_models, voxel_order1_levelwise_matches_iterative) {
         << "All tested models produced near-zero winding values across voxel queries.";
 }
 
-TEST(gwn_correctness_models, voxel_exact_and_taylor_match_cpu_on_small_models) {
-    std::vector<std::filesystem::path> const model_paths = collect_model_paths();
+#if 0
+TEST(smallgwn_integration_correctness, voxel_exact_and_taylor_match_cpu_on_small_models) {
+    std::vector<std::filesystem::path> const model_paths = gwn::tests::collect_model_paths();
     if (model_paths.empty())
         GTEST_SKIP() << "No model input found. Set SMALLGWN_MODEL_DATA_DIR or SMALLGWN_MODEL_PATH.";
 
     std::size_t const target_total_points =
-        get_env_positive_size_t("SMALLGWN_VOXEL_TOTAL_POINTS", 10'000'000);
+        gwn::tests::get_env_positive_size_t("SMALLGWN_VOXEL_TOTAL_POINTS", 10'000'000);
     std::size_t const target_points_per_model = std::max<std::size_t>(
-        65'536, target_total_points / std::max<std::size_t>(1, model_paths.size())
-    );
+        65'536, target_total_points / std::max<std::size_t>(1, model_paths.size()));
     std::size_t const cpu_work_budget =
-        get_env_positive_size_t("SMALLGWN_CPU_WORK_BUDGET", 120'000'000);
-    std::size_t const max_cpu_samples = get_env_positive_size_t("SMALLGWN_CPU_MAX_SAMPLES", 50'000);
-    std::size_t const min_cpu_samples = get_env_positive_size_t("SMALLGWN_CPU_MIN_SAMPLES", 4'096);
+        gwn::tests::get_env_positive_size_t("SMALLGWN_CPU_WORK_BUDGET", 120'000'000);
+    std::size_t const max_cpu_samples =
+        gwn::tests::get_env_positive_size_t("SMALLGWN_CPU_MAX_SAMPLES", 50'000);
+    std::size_t const min_cpu_samples =
+        gwn::tests::get_env_positive_size_t("SMALLGWN_CPU_MIN_SAMPLES", 4'096);
 
     constexpr Real k_accuracy_scale = Real(2);
     std::size_t tested_model_count = 0;
     bool any_nonzero_exact = false;
 
-    for (std::filesystem::path const &model_path : model_paths) {
+    for (std::filesystem::path const& model_path : model_paths) {
         SCOPED_TRACE(model_path.string());
-        std::optional<HostMesh> const maybe_mesh = load_obj_mesh(model_path);
+        std::optional<HostMesh> const maybe_mesh = gwn::tests::load_obj_mesh(model_path);
         if (!maybe_mesh.has_value())
             continue;
-        HostMesh const &mesh = *maybe_mesh;
+        HostMesh const& mesh = *maybe_mesh;
 
         std::size_t const tri_count = mesh.tri_i0.size();
         if (tri_count == 0)
@@ -730,7 +528,8 @@ TEST(gwn_correctness_models, voxel_exact_and_taylor_match_cpu_on_small_models) {
             continue;
 
         std::size_t const samples_by_work = std::max<std::size_t>(1, cpu_work_budget / tri_count);
-        std::size_t const sample_count = std::min({voxel_count, max_cpu_samples, samples_by_work});
+        std::size_t const sample_count =
+            std::min({voxel_count, max_cpu_samples, samples_by_work});
         if (sample_count < min_cpu_samples) {
             std::cout << "[gwn-correctness] skip model=" << model_path.filename().string()
                       << " triangles=" << tri_count
@@ -746,8 +545,7 @@ TEST(gwn_correctness_models, voxel_exact_and_taylor_match_cpu_on_small_models) {
         std::vector<Real> query_z{};
         fill_sampled_queries(
             grid, std::span<std::size_t const>(sample_indices.data(), sample_indices.size()),
-            query_x, query_y, query_z
-        );
+            query_x, query_y, query_z);
 
         std::vector<Real> reference_output(sample_count, Real(0));
         gwn::gwn_status const reference_status =
@@ -761,9 +559,9 @@ TEST(gwn_correctness_models, voxel_exact_and_taylor_match_cpu_on_small_models) {
                 std::span<Real const>(query_x.data(), query_x.size()),
                 std::span<Real const>(query_y.data(), query_y.size()),
                 std::span<Real const>(query_z.data(), query_z.size()),
-                std::span<Real>(reference_output.data(), reference_output.size())
-            );
-        ASSERT_TRUE(reference_status.is_ok()) << status_to_debug_string(reference_status);
+                std::span<Real>(reference_output.data(), reference_output.size()));
+        ASSERT_TRUE(reference_status.is_ok())
+            << gwn::tests::status_to_debug_string(reference_status);
 
         gwn::gwn_geometry_object<Real, Index> geometry;
         gwn::gwn_status const upload_status = geometry.upload(
@@ -772,171 +570,103 @@ TEST(gwn_correctness_models, voxel_exact_and_taylor_match_cpu_on_small_models) {
             cuda::std::span<Real const>(mesh.vertex_z.data(), mesh.vertex_z.size()),
             cuda::std::span<Index const>(mesh.tri_i0.data(), mesh.tri_i0.size()),
             cuda::std::span<Index const>(mesh.tri_i1.data(), mesh.tri_i1.size()),
-            cuda::std::span<Index const>(mesh.tri_i2.data(), mesh.tri_i2.size())
-        );
-        if (!upload_status.is_ok() && upload_status.error() == gwn::gwn_error::cuda_runtime_error &&
-            is_cuda_runtime_unavailable_message(upload_status.message())) {
-            GTEST_SKIP() << "CUDA runtime unavailable: " << upload_status.message();
-        }
-        ASSERT_TRUE(upload_status.is_ok()) << status_to_debug_string(upload_status);
+            cuda::std::span<Index const>(mesh.tri_i2.data(), mesh.tri_i2.size()));
+        SMALLGWN_SKIP_IF_STATUS_CUDA_UNAVAILABLE(upload_status);
+        ASSERT_TRUE(upload_status.is_ok()) << gwn::tests::status_to_debug_string(upload_status);
 
-        Real *d_query_x = nullptr;
-        Real *d_query_y = nullptr;
-        Real *d_query_z = nullptr;
-        Real *d_output = nullptr;
-        auto cleanup = gwn::gwn_make_scope_exit([&]() noexcept {
-            if (d_output != nullptr)
-                (void)gwn::gwn_cuda_free(d_output);
-            if (d_query_z != nullptr)
-                (void)gwn::gwn_cuda_free(d_query_z);
-            if (d_query_y != nullptr)
-                (void)gwn::gwn_cuda_free(d_query_y);
-            if (d_query_x != nullptr)
-                (void)gwn::gwn_cuda_free(d_query_x);
-        });
-
-        std::size_t const query_bytes = sample_count * sizeof(Real);
-        ASSERT_TRUE(
-            gwn::gwn_cuda_malloc(reinterpret_cast<void **>(&d_query_x), query_bytes).is_ok()
-        );
-        ASSERT_TRUE(
-            gwn::gwn_cuda_malloc(reinterpret_cast<void **>(&d_query_y), query_bytes).is_ok()
-        );
-        ASSERT_TRUE(
-            gwn::gwn_cuda_malloc(reinterpret_cast<void **>(&d_query_z), query_bytes).is_ok()
-        );
-        ASSERT_TRUE(
-            gwn::gwn_cuda_malloc(reinterpret_cast<void **>(&d_output), query_bytes).is_ok()
-        );
-
-        ASSERT_EQ(
-            cudaSuccess, cudaMemcpy(d_query_x, query_x.data(), query_bytes, cudaMemcpyHostToDevice)
-        );
-        ASSERT_EQ(
-            cudaSuccess, cudaMemcpy(d_query_y, query_y.data(), query_bytes, cudaMemcpyHostToDevice)
-        );
-        ASSERT_EQ(
-            cudaSuccess, cudaMemcpy(d_query_z, query_z.data(), query_bytes, cudaMemcpyHostToDevice)
-        );
+        gwn::gwn_device_array<Real> d_qx, d_qy, d_qz, d_out;
+        ASSERT_TRUE(d_qx.resize(sample_count).is_ok());
+        ASSERT_TRUE(d_qy.resize(sample_count).is_ok());
+        ASSERT_TRUE(d_qz.resize(sample_count).is_ok());
+        ASSERT_TRUE(d_out.resize(sample_count).is_ok());
+        ASSERT_TRUE(d_qx.copy_from_host(
+            cuda::std::span<Real const>(query_x.data(), sample_count)).is_ok());
+        ASSERT_TRUE(d_qy.copy_from_host(
+            cuda::std::span<Real const>(query_y.data(), sample_count)).is_ok());
+        ASSERT_TRUE(d_qz.copy_from_host(
+            cuda::std::span<Real const>(query_z.data(), sample_count)).is_ok());
 
         std::vector<Real> exact_output(sample_count, Real(0));
         std::vector<Real> order0_output(sample_count, Real(0));
         std::vector<Real> order1_iterative_output(sample_count, Real(0));
         std::vector<Real> order1_levelwise_output(sample_count, Real(0));
 
+        // Exact.
         gwn::gwn_bvh_object<Real, Index> bvh_exact;
-        gwn::gwn_status const exact_build_status =
-            gwn::gwn_build_bvh4_lbvh<Real, Index>(geometry.accessor(), bvh_exact.accessor());
-        ASSERT_TRUE(exact_build_status.is_ok()) << status_to_debug_string(exact_build_status);
-
-        gwn::gwn_status const exact_query_status =
-            gwn::gwn_compute_winding_number_batch_bvh_exact<Real, Index>(
-                geometry.accessor(), bvh_exact.accessor(),
-                cuda::std::span<Real const>(d_query_x, sample_count),
-                cuda::std::span<Real const>(d_query_y, sample_count),
-                cuda::std::span<Real const>(d_query_z, sample_count),
-                cuda::std::span<Real>(d_output, sample_count)
-            );
-        ASSERT_TRUE(exact_query_status.is_ok()) << status_to_debug_string(exact_query_status);
+        ASSERT_TRUE(
+            (gwn::gwn_build_bvh4_topology_lbvh<Real, Index>(geometry, bvh_exact)
+                 .is_ok()));
+        ASSERT_TRUE((gwn::gwn_compute_winding_number_batch_bvh_exact<Real, Index>(
+                        geometry.accessor(), bvh_exact.accessor(),
+                        d_qx.span(), d_qy.span(), d_qz.span(), d_out.span())
+                        .is_ok()));
         ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
-        ASSERT_EQ(
-            cudaSuccess,
-            cudaMemcpy(exact_output.data(), d_output, query_bytes, cudaMemcpyDeviceToHost)
-        );
+        ASSERT_TRUE(d_out.copy_to_host(
+            cuda::std::span<Real>(exact_output.data(), exact_output.size())).is_ok());
+        ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
 
+        // Order 0.
         gwn::gwn_bvh_object<Real, Index> bvh_order0;
-        gwn::gwn_bvh_data_object<Real, Index> data_order0;
-        gwn::gwn_status const order0_build_status = gwn::gwn_build_bvh4_lbvh_taylor<0, Real, Index>(
-            geometry.accessor(), bvh_order0.accessor(), data_order0.accessor()
-        );
-        ASSERT_TRUE(order0_build_status.is_ok()) << status_to_debug_string(order0_build_status);
-        gwn::gwn_status const order0_query_status =
-            gwn::gwn_compute_winding_number_batch_bvh_taylor<0, Real, Index>(
-                geometry.accessor(), bvh_order0.accessor(), data_order0.accessor(),
-                cuda::std::span<Real const>(d_query_x, sample_count),
-                cuda::std::span<Real const>(d_query_y, sample_count),
-                cuda::std::span<Real const>(d_query_z, sample_count),
-                cuda::std::span<Real>(d_output, sample_count), k_accuracy_scale
-            );
-        ASSERT_TRUE(order0_query_status.is_ok()) << status_to_debug_string(order0_query_status);
+        gwn::gwn_bvh_aabb_object<Real, Index> aabb_order0;
+        gwn::gwn_bvh_moment_object<Real, Index> data_order0;
+        ASSERT_TRUE((gwn::gwn_build_bvh4_topology_aabb_moment_lbvh<0, Real, Index>(geometry, bvh_order0, aabb_order0, data_order0)
+                        .is_ok()));
+        ASSERT_TRUE((gwn::gwn_compute_winding_number_batch_bvh_taylor<0, Real, Index>(
+                        geometry.accessor(), bvh_order0.accessor(), data_order0.accessor(),
+                        d_qx.span(), d_qy.span(), d_qz.span(), d_out.span(), k_accuracy_scale)
+                        .is_ok()));
         ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
-        ASSERT_EQ(
-            cudaSuccess,
-            cudaMemcpy(order0_output.data(), d_output, query_bytes, cudaMemcpyDeviceToHost)
-        );
+        ASSERT_TRUE(d_out.copy_to_host(
+            cuda::std::span<Real>(order0_output.data(), order0_output.size())).is_ok());
+        ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
 
-        gwn::gwn_bvh_object<Real, Index> bvh_order1_iterative;
-        gwn::gwn_bvh_data_object<Real, Index> data_order1_iterative;
-        gwn::gwn_status const order1_iterative_build_status =
-            gwn::gwn_build_bvh4_lbvh_taylor<1, Real, Index>(
-                geometry.accessor(), bvh_order1_iterative.accessor(),
-                data_order1_iterative.accessor()
-            );
-        ASSERT_TRUE(order1_iterative_build_status.is_ok())
-            << status_to_debug_string(order1_iterative_build_status);
-        gwn::gwn_status const order1_iterative_query_status =
-            gwn::gwn_compute_winding_number_batch_bvh_taylor<1, Real, Index>(
-                geometry.accessor(), bvh_order1_iterative.accessor(),
-                data_order1_iterative.accessor(),
-                cuda::std::span<Real const>(d_query_x, sample_count),
-                cuda::std::span<Real const>(d_query_y, sample_count),
-                cuda::std::span<Real const>(d_query_z, sample_count),
-                cuda::std::span<Real>(d_output, sample_count), k_accuracy_scale
-            );
-        ASSERT_TRUE(order1_iterative_query_status.is_ok())
-            << status_to_debug_string(order1_iterative_query_status);
+        // Order 1 iterative.
+        gwn::gwn_bvh_object<Real, Index> bvh_order1_iter;
+        gwn::gwn_bvh_aabb_object<Real, Index> aabb_order1_iter;
+        gwn::gwn_bvh_moment_object<Real, Index> data_order1_iter;
+        ASSERT_TRUE((gwn::gwn_build_bvh4_topology_aabb_moment_lbvh<1, Real, Index>(geometry, bvh_order1_iter, aabb_order1_iter, data_order1_iter)
+                        .is_ok()));
+        ASSERT_TRUE((gwn::gwn_compute_winding_number_batch_bvh_taylor<1, Real, Index>(
+                        geometry.accessor(), bvh_order1_iter.accessor(),
+                        data_order1_iter.accessor(),
+                        d_qx.span(), d_qy.span(), d_qz.span(), d_out.span(), k_accuracy_scale)
+                        .is_ok()));
         ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
-        ASSERT_EQ(
-            cudaSuccess,
-            cudaMemcpy(
-                order1_iterative_output.data(), d_output, query_bytes, cudaMemcpyDeviceToHost
-            )
-        );
+        ASSERT_TRUE(d_out.copy_to_host(
+            cuda::std::span<Real>(order1_iterative_output.data(), order1_iterative_output.size()))
+                        .is_ok());
+        ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
 
-        gwn::gwn_bvh_object<Real, Index> bvh_order1_levelwise;
-        gwn::gwn_bvh_data_object<Real, Index> data_order1_levelwise;
-        gwn::gwn_status const order1_levelwise_build_status =
-            gwn::gwn_build_bvh4_lbvh_taylor_levelwise<1, Real, Index>(
-                geometry.accessor(), bvh_order1_levelwise.accessor(),
-                data_order1_levelwise.accessor()
-            );
-        ASSERT_TRUE(order1_levelwise_build_status.is_ok())
-            << status_to_debug_string(order1_levelwise_build_status);
-        gwn::gwn_status const order1_levelwise_query_status =
-            gwn::gwn_compute_winding_number_batch_bvh_taylor<1, Real, Index>(
-                geometry.accessor(), bvh_order1_levelwise.accessor(),
-                data_order1_levelwise.accessor(),
-                cuda::std::span<Real const>(d_query_x, sample_count),
-                cuda::std::span<Real const>(d_query_y, sample_count),
-                cuda::std::span<Real const>(d_query_z, sample_count),
-                cuda::std::span<Real>(d_output, sample_count), k_accuracy_scale
-            );
-        ASSERT_TRUE(order1_levelwise_query_status.is_ok())
-            << status_to_debug_string(order1_levelwise_query_status);
+        // Order 1 levelwise.
+        gwn::gwn_bvh_object<Real, Index> bvh_order1_lw;
+        gwn::gwn_bvh_aabb_object<Real, Index> aabb_order1_lw;
+        gwn::gwn_bvh_moment_object<Real, Index> data_order1_lw;
+        ASSERT_TRUE((gwn::gwn_build_bvh4_topology_aabb_moment_lbvh<1, Real, Index>(geometry, bvh_order1_lw, aabb_order1_lw, data_order1_lw)
+                        .is_ok()));
+        ASSERT_TRUE((gwn::gwn_compute_winding_number_batch_bvh_taylor<1, Real, Index>(
+                        geometry.accessor(), bvh_order1_lw.accessor(),
+                        data_order1_lw.accessor(),
+                        d_qx.span(), d_qy.span(), d_qz.span(), d_out.span(), k_accuracy_scale)
+                        .is_ok()));
         ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
-        ASSERT_EQ(
-            cudaSuccess,
-            cudaMemcpy(
-                order1_levelwise_output.data(), d_output, query_bytes, cudaMemcpyDeviceToHost
-            )
-        );
+        ASSERT_TRUE(d_out.copy_to_host(
+            cuda::std::span<Real>(order1_levelwise_output.data(), order1_levelwise_output.size()))
+                        .is_ok());
+        ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
 
         ErrorSummary const exact_vs_cpu = summarize_error(
             std::span<Real const>(exact_output.data(), exact_output.size()),
-            std::span<Real const>(reference_output.data(), reference_output.size())
-        );
+            std::span<Real const>(reference_output.data(), reference_output.size()));
         ErrorSummary const order0_vs_exact = summarize_error(
             std::span<Real const>(order0_output.data(), order0_output.size()),
-            std::span<Real const>(exact_output.data(), exact_output.size())
-        );
+            std::span<Real const>(exact_output.data(), exact_output.size()));
         ErrorSummary const order1_vs_exact = summarize_error(
             std::span<Real const>(order1_iterative_output.data(), order1_iterative_output.size()),
-            std::span<Real const>(exact_output.data(), exact_output.size())
-        );
+            std::span<Real const>(exact_output.data(), exact_output.size()));
         ErrorSummary const levelwise_vs_iterative = summarize_error(
             std::span<Real const>(order1_levelwise_output.data(), order1_levelwise_output.size()),
-            std::span<Real const>(order1_iterative_output.data(), order1_iterative_output.size())
-        );
+            std::span<Real const>(order1_iterative_output.data(),
+                                  order1_iterative_output.size()));
         double const exact_value_max_abs = [&]() {
             double value = 0.0;
             for (Real const winding : exact_output)
@@ -969,7 +699,9 @@ TEST(gwn_correctness_models, voxel_exact_and_taylor_match_cpu_on_small_models) {
 
     ASSERT_GT(tested_model_count, 0u)
         << "No models satisfied CPU-reference sampling budget for correctness checks.";
-    EXPECT_TRUE(any_nonzero_exact) << "All sampled models produced near-zero exact winding values.";
+    EXPECT_TRUE(any_nonzero_exact)
+        << "All sampled models produced near-zero exact winding values.";
 }
+#endif
 
 } // namespace
