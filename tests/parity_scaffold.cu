@@ -249,11 +249,12 @@ TEST(smallgwn_parity_scaffold, bvh_taylor_orders_match_reference_for_far_queries
     ASSERT_TRUE(upload_status.is_ok()) << upload_status.message();
 
     gwn::gwn_bvh_object<float, std::int64_t> bvh;
+    gwn::gwn_bvh_data_object<float, std::int64_t> bvh_data;
     gwn::gwn_status const build_status = gwn::gwn_build_bvh4_lbvh_taylor<0, float, std::int64_t>(
-        geometry.accessor(), bvh.accessor()
+        geometry.accessor(), bvh.accessor(), bvh_data.accessor()
     );
     ASSERT_TRUE(build_status.is_ok()) << build_status.message();
-    ASSERT_TRUE(bvh.accessor().template has_taylor_order<0>());
+    ASSERT_TRUE(bvh_data.accessor().template has_taylor_order<0>());
 
     float *d_query_x = nullptr;
     float *d_query_y = nullptr;
@@ -298,7 +299,7 @@ TEST(smallgwn_parity_scaffold, bvh_taylor_orders_match_reference_for_far_queries
 
     gwn::gwn_status const order0_query_status =
         gwn::gwn_compute_winding_number_batch_bvh_taylor<0, float, std::int64_t>(
-            geometry.accessor(), bvh.accessor(),
+            geometry.accessor(), bvh.accessor(), bvh_data.accessor(),
             cuda::std::span<float const>(d_query_x, query_x.size()),
             cuda::std::span<float const>(d_query_y, query_y.size()),
             cuda::std::span<float const>(d_query_z, query_z.size()),
@@ -314,14 +315,14 @@ TEST(smallgwn_parity_scaffold, bvh_taylor_orders_match_reference_for_far_queries
 
     gwn::gwn_status const build_order1_status =
         gwn::gwn_build_bvh4_lbvh_taylor<1, float, std::int64_t>(
-            geometry.accessor(), bvh.accessor()
+            geometry.accessor(), bvh.accessor(), bvh_data.accessor()
         );
     ASSERT_TRUE(build_order1_status.is_ok()) << build_order1_status.message();
-    ASSERT_TRUE(bvh.accessor().template has_taylor_order<1>());
+    ASSERT_TRUE(bvh_data.accessor().template has_taylor_order<1>());
 
     gwn::gwn_status const order1_query_status =
         gwn::gwn_compute_winding_number_batch_bvh_taylor<1, float, std::int64_t>(
-            geometry.accessor(), bvh.accessor(),
+            geometry.accessor(), bvh.accessor(), bvh_data.accessor(),
             cuda::std::span<float const>(d_query_x, query_x.size()),
             cuda::std::span<float const>(d_query_y, query_y.size()),
             cuda::std::span<float const>(d_query_z, query_z.size()),

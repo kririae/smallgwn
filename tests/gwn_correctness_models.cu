@@ -538,17 +538,19 @@ TEST(gwn_correctness_models, voxel_order1_levelwise_matches_iterative) {
         ASSERT_TRUE(upload_status.is_ok()) << status_to_debug_string(upload_status);
 
         gwn::gwn_bvh_object<Real, Index> bvh_iterative;
+        gwn::gwn_bvh_data_object<Real, Index> data_iterative;
         gwn::gwn_status const build_iterative_status =
             gwn::gwn_build_bvh4_lbvh_taylor<1, Real, Index>(
-                geometry.accessor(), bvh_iterative.accessor()
+                geometry.accessor(), bvh_iterative.accessor(), data_iterative.accessor()
             );
         ASSERT_TRUE(build_iterative_status.is_ok())
             << status_to_debug_string(build_iterative_status);
 
         gwn::gwn_bvh_object<Real, Index> bvh_levelwise;
+        gwn::gwn_bvh_data_object<Real, Index> data_levelwise;
         gwn::gwn_status const build_levelwise_status =
             gwn::gwn_build_bvh4_lbvh_taylor_levelwise<1, Real, Index>(
-                geometry.accessor(), bvh_levelwise.accessor()
+                geometry.accessor(), bvh_levelwise.accessor(), data_levelwise.accessor()
             );
         ASSERT_TRUE(build_levelwise_status.is_ok())
             << status_to_debug_string(build_levelwise_status);
@@ -621,7 +623,7 @@ TEST(gwn_correctness_models, voxel_order1_levelwise_matches_iterative) {
 
             gwn::gwn_status const iterative_query_status =
                 gwn::gwn_compute_winding_number_batch_bvh_taylor<1, Real, Index>(
-                    geometry.accessor(), bvh_iterative.accessor(),
+                    geometry.accessor(), bvh_iterative.accessor(), data_iterative.accessor(),
                     cuda::std::span<Real const>(d_query_x, count),
                     cuda::std::span<Real const>(d_query_y, count),
                     cuda::std::span<Real const>(d_query_z, count),
@@ -632,7 +634,7 @@ TEST(gwn_correctness_models, voxel_order1_levelwise_matches_iterative) {
 
             gwn::gwn_status const levelwise_query_status =
                 gwn::gwn_compute_winding_number_batch_bvh_taylor<1, Real, Index>(
-                    geometry.accessor(), bvh_levelwise.accessor(),
+                    geometry.accessor(), bvh_levelwise.accessor(), data_levelwise.accessor(),
                     cuda::std::span<Real const>(d_query_x, count),
                     cuda::std::span<Real const>(d_query_y, count),
                     cuda::std::span<Real const>(d_query_z, count),
@@ -843,13 +845,14 @@ TEST(gwn_correctness_models, voxel_exact_and_taylor_match_cpu_on_small_models) {
         );
 
         gwn::gwn_bvh_object<Real, Index> bvh_order0;
+        gwn::gwn_bvh_data_object<Real, Index> data_order0;
         gwn::gwn_status const order0_build_status = gwn::gwn_build_bvh4_lbvh_taylor<0, Real, Index>(
-            geometry.accessor(), bvh_order0.accessor()
+            geometry.accessor(), bvh_order0.accessor(), data_order0.accessor()
         );
         ASSERT_TRUE(order0_build_status.is_ok()) << status_to_debug_string(order0_build_status);
         gwn::gwn_status const order0_query_status =
             gwn::gwn_compute_winding_number_batch_bvh_taylor<0, Real, Index>(
-                geometry.accessor(), bvh_order0.accessor(),
+                geometry.accessor(), bvh_order0.accessor(), data_order0.accessor(),
                 cuda::std::span<Real const>(d_query_x, sample_count),
                 cuda::std::span<Real const>(d_query_y, sample_count),
                 cuda::std::span<Real const>(d_query_z, sample_count),
@@ -863,15 +866,18 @@ TEST(gwn_correctness_models, voxel_exact_and_taylor_match_cpu_on_small_models) {
         );
 
         gwn::gwn_bvh_object<Real, Index> bvh_order1_iterative;
+        gwn::gwn_bvh_data_object<Real, Index> data_order1_iterative;
         gwn::gwn_status const order1_iterative_build_status =
             gwn::gwn_build_bvh4_lbvh_taylor<1, Real, Index>(
-                geometry.accessor(), bvh_order1_iterative.accessor()
+                geometry.accessor(), bvh_order1_iterative.accessor(),
+                data_order1_iterative.accessor()
             );
         ASSERT_TRUE(order1_iterative_build_status.is_ok())
             << status_to_debug_string(order1_iterative_build_status);
         gwn::gwn_status const order1_iterative_query_status =
             gwn::gwn_compute_winding_number_batch_bvh_taylor<1, Real, Index>(
                 geometry.accessor(), bvh_order1_iterative.accessor(),
+                data_order1_iterative.accessor(),
                 cuda::std::span<Real const>(d_query_x, sample_count),
                 cuda::std::span<Real const>(d_query_y, sample_count),
                 cuda::std::span<Real const>(d_query_z, sample_count),
@@ -888,15 +894,18 @@ TEST(gwn_correctness_models, voxel_exact_and_taylor_match_cpu_on_small_models) {
         );
 
         gwn::gwn_bvh_object<Real, Index> bvh_order1_levelwise;
+        gwn::gwn_bvh_data_object<Real, Index> data_order1_levelwise;
         gwn::gwn_status const order1_levelwise_build_status =
             gwn::gwn_build_bvh4_lbvh_taylor_levelwise<1, Real, Index>(
-                geometry.accessor(), bvh_order1_levelwise.accessor()
+                geometry.accessor(), bvh_order1_levelwise.accessor(),
+                data_order1_levelwise.accessor()
             );
         ASSERT_TRUE(order1_levelwise_build_status.is_ok())
             << status_to_debug_string(order1_levelwise_build_status);
         gwn::gwn_status const order1_levelwise_query_status =
             gwn::gwn_compute_winding_number_batch_bvh_taylor<1, Real, Index>(
                 geometry.accessor(), bvh_order1_levelwise.accessor(),
+                data_order1_levelwise.accessor(),
                 cuda::std::span<Real const>(d_query_x, sample_count),
                 cuda::std::span<Real const>(d_query_y, sample_count),
                 cuda::std::span<Real const>(d_query_z, sample_count),

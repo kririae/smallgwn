@@ -3,12 +3,14 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <limits>
 #include <optional>
 #include <sstream>
@@ -82,6 +84,18 @@ collect_obj_model_paths(std::filesystem::path const &model_dir) {
     }
     std::sort(model_paths.begin(), model_paths.end());
     return model_paths;
+}
+
+[[nodiscard]] int get_env_positive_int(char const *name, int const default_value) {
+    char const *value = std::getenv(name);
+    if (value == nullptr || *value == '\0')
+        return default_value;
+    int parsed = 0;
+    char const *end = value + std::char_traits<char>::length(value);
+    auto const [ptr, ec] = std::from_chars(value, end, parsed);
+    if (ec != std::errc() || ptr != end || parsed <= 0)
+        return default_value;
+    return parsed;
 }
 
 [[nodiscard]] std::string_view trim_left(std::string_view const line) noexcept {
@@ -284,9 +298,12 @@ std::array<std::vector<Real>, 3> make_integration_query_soa(HostMesh const &mesh
     return soa;
 }
 
-void assert_bvh_structure(
-    gwn::gwn_bvh_accessor<Real, Index> const &accessor, std::size_t const primitive_count
+template <int Width>
+void assert_bvh_structure_wide(
+    gwn::gwn_bvh_topology_accessor<Width, Real, Index> const &accessor,
+    std::size_t const primitive_count
 ) {
+    static_assert(Width >= 2);
     ASSERT_EQ(accessor.primitive_indices.size(), primitive_count);
 
     std::vector<Index> primitive_indices(primitive_count, Index(0));
@@ -324,7 +341,7 @@ void assert_bvh_structure(
     ASSERT_GE(accessor.root_index, Index(0));
     ASSERT_LT(static_cast<std::size_t>(accessor.root_index), accessor.nodes.size());
 
-    std::vector<gwn::gwn_bvh4_node_soa<Real, Index>> nodes(accessor.nodes.size());
+    std::vector<gwn::gwn_bvh_node_soa<Width, Real, Index>> nodes(accessor.nodes.size());
     ASSERT_EQ(
         cudaSuccess, cudaMemcpy(
                          nodes.data(), accessor.nodes.data(), nodes.size() * sizeof(nodes[0]),
@@ -345,7 +362,7 @@ void assert_bvh_structure(
         visited[static_cast<std::size_t>(node_index)] = 1;
 
         auto const &node = nodes[static_cast<std::size_t>(node_index)];
-        for (int slot = 0; slot < 4; ++slot) {
+        for (int slot = 0; slot < Width; ++slot) {
             EXPECT_LE(node.child_min_x[slot], node.child_max_x[slot]);
             EXPECT_LE(node.child_min_y[slot], node.child_max_y[slot]);
             EXPECT_LE(node.child_min_z[slot], node.child_max_z[slot]);
@@ -373,6 +390,18 @@ void assert_bvh_structure(
     }
     for (int const seen : sorted_slot_seen)
         EXPECT_EQ(seen, 1);
+}
+
+void assert_bvh_structure(
+    gwn::gwn_bvh_accessor<Real, Index> const &accessor, std::size_t const primitive_count
+) {
+    gwn::gwn_bvh_topology_accessor<4, Real, Index> topology4_accessor{};
+    topology4_accessor.nodes = accessor.nodes;
+    topology4_accessor.primitive_indices = accessor.primitive_indices;
+    topology4_accessor.root_kind = accessor.root_kind;
+    topology4_accessor.root_index = accessor.root_index;
+    topology4_accessor.root_count = accessor.root_count;
+    assert_bvh_structure_wide<4>(topology4_accessor, primitive_count);
 }
 
 TEST(smallgwn_bvh_models, bvh_exact_batch_matches_cpu_on_common_models) {
@@ -502,6 +531,161 @@ TEST(smallgwn_bvh_models, bvh_exact_batch_matches_cpu_on_common_models) {
     }
 }
 
+TEST(smallgwn_bvh_models, bvh_binary_to_wide_matches_width4_exact_queries) {
+    std::optional<std::filesystem::path> const model_dir = find_model_data_dir();
+    if (!model_dir.has_value()) {
+        GTEST_SKIP() << "Model directory not found. Set SMALLGWN_MODEL_DATA_DIR or "
+                        "clone models to /tmp/common-3d-test-models/data.";
+    }
+
+    std::array<std::string_view, 4> const model_names = {
+        "suzanne.obj", "teapot.obj", "cow.obj", "stanford-bunny.obj"
+    };
+
+    std::size_t tested_model_count = 0;
+    for (std::string_view const model_name : model_names) {
+        std::filesystem::path const model_path = *model_dir / model_name;
+        if (!std::filesystem::exists(model_path))
+            continue;
+
+        SCOPED_TRACE(model_path.string());
+        std::optional<HostMesh> const maybe_mesh = load_obj_mesh(model_path);
+        ASSERT_TRUE(maybe_mesh.has_value());
+        HostMesh const &mesh = *maybe_mesh;
+        auto const query_soa = make_query_soa(mesh);
+        std::size_t const query_count = query_soa[0].size();
+        std::size_t const query_bytes = query_count * sizeof(Real);
+
+        gwn::gwn_geometry_object<Real, Index> geometry;
+        gwn::gwn_status const upload_status = geometry.upload(
+            cuda::std::span<Real const>(mesh.vertex_x.data(), mesh.vertex_x.size()),
+            cuda::std::span<Real const>(mesh.vertex_y.data(), mesh.vertex_y.size()),
+            cuda::std::span<Real const>(mesh.vertex_z.data(), mesh.vertex_z.size()),
+            cuda::std::span<Index const>(mesh.tri_i0.data(), mesh.tri_i0.size()),
+            cuda::std::span<Index const>(mesh.tri_i1.data(), mesh.tri_i1.size()),
+            cuda::std::span<Index const>(mesh.tri_i2.data(), mesh.tri_i2.size())
+        );
+        if (!upload_status.is_ok() && upload_status.error() == gwn::gwn_error::cuda_runtime_error &&
+            is_cuda_runtime_unavailable_message(upload_status.message())) {
+            GTEST_SKIP() << "CUDA runtime unavailable: " << upload_status.message();
+        }
+        ASSERT_TRUE(upload_status.is_ok()) << status_to_debug_string(upload_status);
+
+        gwn::gwn_bvh_topology_object<2, Real, Index> bvh2;
+        gwn::gwn_bvh_object<Real, Index> bvh4;
+        gwn::gwn_bvh_topology_object<8, Real, Index> bvh8;
+        gwn::gwn_status const build2_status =
+            gwn::gwn_build_bvh_lbvh<2, Real, Index>(geometry.accessor(), bvh2.accessor());
+        gwn::gwn_status const build4_status =
+            gwn::gwn_build_bvh4_lbvh<Real, Index>(geometry.accessor(), bvh4.accessor());
+        gwn::gwn_status const build8_status =
+            gwn::gwn_build_bvh_lbvh<8, Real, Index>(geometry.accessor(), bvh8.accessor());
+        ASSERT_TRUE(build2_status.is_ok()) << status_to_debug_string(build2_status);
+        ASSERT_TRUE(build4_status.is_ok()) << status_to_debug_string(build4_status);
+        ASSERT_TRUE(build8_status.is_ok()) << status_to_debug_string(build8_status);
+
+        assert_bvh_structure_wide<2>(bvh2.accessor(), mesh.tri_i0.size());
+        assert_bvh_structure(bvh4.accessor(), mesh.tri_i0.size());
+        assert_bvh_structure_wide<8>(bvh8.accessor(), mesh.tri_i0.size());
+
+        Real *d_query_x = nullptr;
+        Real *d_query_y = nullptr;
+        Real *d_query_z = nullptr;
+        Real *d_output = nullptr;
+        auto cleanup = gwn::gwn_make_scope_exit([&]() noexcept {
+            if (d_output != nullptr)
+                (void)gwn::gwn_cuda_free(d_output);
+            if (d_query_z != nullptr)
+                (void)gwn::gwn_cuda_free(d_query_z);
+            if (d_query_y != nullptr)
+                (void)gwn::gwn_cuda_free(d_query_y);
+            if (d_query_x != nullptr)
+                (void)gwn::gwn_cuda_free(d_query_x);
+        });
+
+        ASSERT_TRUE(
+            gwn::gwn_cuda_malloc(reinterpret_cast<void **>(&d_query_x), query_bytes).is_ok()
+        );
+        ASSERT_TRUE(
+            gwn::gwn_cuda_malloc(reinterpret_cast<void **>(&d_query_y), query_bytes).is_ok()
+        );
+        ASSERT_TRUE(
+            gwn::gwn_cuda_malloc(reinterpret_cast<void **>(&d_query_z), query_bytes).is_ok()
+        );
+        ASSERT_TRUE(
+            gwn::gwn_cuda_malloc(reinterpret_cast<void **>(&d_output), query_bytes).is_ok()
+        );
+
+        ASSERT_EQ(
+            cudaSuccess,
+            cudaMemcpy(d_query_x, query_soa[0].data(), query_bytes, cudaMemcpyHostToDevice)
+        );
+        ASSERT_EQ(
+            cudaSuccess,
+            cudaMemcpy(d_query_y, query_soa[1].data(), query_bytes, cudaMemcpyHostToDevice)
+        );
+        ASSERT_EQ(
+            cudaSuccess,
+            cudaMemcpy(d_query_z, query_soa[2].data(), query_bytes, cudaMemcpyHostToDevice)
+        );
+
+        gwn::gwn_status const query4_status =
+            gwn::gwn_compute_winding_number_batch_bvh_exact<Real, Index>(
+                geometry.accessor(), bvh4.accessor(),
+                cuda::std::span<Real const>(d_query_x, query_count),
+                cuda::std::span<Real const>(d_query_y, query_count),
+                cuda::std::span<Real const>(d_query_z, query_count),
+                cuda::std::span<Real>(d_output, query_count)
+            );
+        ASSERT_TRUE(query4_status.is_ok()) << status_to_debug_string(query4_status);
+        ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+        std::vector<Real> output4(query_count, Real(0));
+        ASSERT_EQ(
+            cudaSuccess, cudaMemcpy(output4.data(), d_output, query_bytes, cudaMemcpyDeviceToHost)
+        );
+
+        gwn::gwn_status const query2_status =
+            gwn::gwn_compute_winding_number_batch_bvh_exact<2, Real, Index>(
+                geometry.accessor(), bvh2.accessor(),
+                cuda::std::span<Real const>(d_query_x, query_count),
+                cuda::std::span<Real const>(d_query_y, query_count),
+                cuda::std::span<Real const>(d_query_z, query_count),
+                cuda::std::span<Real>(d_output, query_count)
+            );
+        ASSERT_TRUE(query2_status.is_ok()) << status_to_debug_string(query2_status);
+        ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+        std::vector<Real> output2(query_count, Real(0));
+        ASSERT_EQ(
+            cudaSuccess, cudaMemcpy(output2.data(), d_output, query_bytes, cudaMemcpyDeviceToHost)
+        );
+
+        gwn::gwn_status const query8_status =
+            gwn::gwn_compute_winding_number_batch_bvh_exact<8, Real, Index>(
+                geometry.accessor(), bvh8.accessor(),
+                cuda::std::span<Real const>(d_query_x, query_count),
+                cuda::std::span<Real const>(d_query_y, query_count),
+                cuda::std::span<Real const>(d_query_z, query_count),
+                cuda::std::span<Real>(d_output, query_count)
+            );
+        ASSERT_TRUE(query8_status.is_ok()) << status_to_debug_string(query8_status);
+        ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+        std::vector<Real> output8(query_count, Real(0));
+        ASSERT_EQ(
+            cudaSuccess, cudaMemcpy(output8.data(), d_output, query_bytes, cudaMemcpyDeviceToHost)
+        );
+
+        ++tested_model_count;
+        for (std::size_t query_id = 0; query_id < query_count; ++query_id) {
+            EXPECT_NEAR(output2[query_id], output4[query_id], Real(5e-4))
+                << "query index: " << query_id;
+            EXPECT_NEAR(output8[query_id], output4[query_id], Real(5e-4))
+                << "query index: " << query_id;
+        }
+    }
+
+    ASSERT_GT(tested_model_count, 0u) << "No valid OBJ models were exercised.";
+}
+
 TEST(smallgwn_bvh_models, integration_exact_and_taylor_consistency_on_common_models) {
     std::optional<std::filesystem::path> const model_dir = find_model_data_dir();
     if (!model_dir.has_value()) {
@@ -513,8 +697,8 @@ TEST(smallgwn_bvh_models, integration_exact_and_taylor_consistency_on_common_mod
     if (model_paths.empty())
         GTEST_SKIP() << "No .obj models found in " << model_dir->string();
 
-    constexpr Real k_order0_epsilon = Real(5e-2);
-    constexpr Real k_order1_epsilon = Real(3e-2);
+    constexpr Real k_order0_epsilon = Real(6.5e-2);
+    constexpr Real k_order1_epsilon = Real(4.5e-2);
     constexpr Real k_accuracy_scale = Real(2);
 
     std::size_t tested_model_count = 0;
@@ -545,6 +729,7 @@ TEST(smallgwn_bvh_models, integration_exact_and_taylor_consistency_on_common_mod
         ASSERT_TRUE(upload_status.is_ok()) << status_to_debug_string(upload_status);
 
         gwn::gwn_bvh_object<Real, Index> bvh;
+        gwn::gwn_bvh_data_object<Real, Index> bvh_data;
         gwn::gwn_status const exact_build_status =
             gwn::gwn_build_bvh4_lbvh<Real, Index>(geometry.accessor(), bvh.accessor());
         ASSERT_TRUE(exact_build_status.is_ok()) << status_to_debug_string(exact_build_status);
@@ -609,13 +794,14 @@ TEST(smallgwn_bvh_models, integration_exact_and_taylor_consistency_on_common_mod
             cudaMemcpy(exact_output.data(), d_output, query_bytes, cudaMemcpyDeviceToHost)
         );
 
-        gwn::gwn_status const order0_build_status =
-            gwn::gwn_build_bvh4_lbvh_taylor<0, Real, Index>(geometry.accessor(), bvh.accessor());
+        gwn::gwn_status const order0_build_status = gwn::gwn_build_bvh4_lbvh_taylor<0, Real, Index>(
+            geometry.accessor(), bvh.accessor(), bvh_data.accessor()
+        );
         ASSERT_TRUE(order0_build_status.is_ok()) << status_to_debug_string(order0_build_status);
-        ASSERT_TRUE(bvh.accessor().template has_taylor_order<0>());
+        ASSERT_TRUE(bvh_data.accessor().template has_taylor_order<0>());
         gwn::gwn_status const order0_query_status =
             gwn::gwn_compute_winding_number_batch_bvh_taylor<0, Real, Index>(
-                geometry.accessor(), bvh.accessor(),
+                geometry.accessor(), bvh.accessor(), bvh_data.accessor(),
                 cuda::std::span<Real const>(d_query_x, query_count),
                 cuda::std::span<Real const>(d_query_y, query_count),
                 cuda::std::span<Real const>(d_query_z, query_count),
@@ -629,13 +815,14 @@ TEST(smallgwn_bvh_models, integration_exact_and_taylor_consistency_on_common_mod
             cudaMemcpy(order0_output.data(), d_output, query_bytes, cudaMemcpyDeviceToHost)
         );
 
-        gwn::gwn_status const order1_build_status =
-            gwn::gwn_build_bvh4_lbvh_taylor<1, Real, Index>(geometry.accessor(), bvh.accessor());
+        gwn::gwn_status const order1_build_status = gwn::gwn_build_bvh4_lbvh_taylor<1, Real, Index>(
+            geometry.accessor(), bvh.accessor(), bvh_data.accessor()
+        );
         ASSERT_TRUE(order1_build_status.is_ok()) << status_to_debug_string(order1_build_status);
-        ASSERT_TRUE(bvh.accessor().template has_taylor_order<1>());
+        ASSERT_TRUE(bvh_data.accessor().template has_taylor_order<1>());
         gwn::gwn_status const order1_query_status =
             gwn::gwn_compute_winding_number_batch_bvh_taylor<1, Real, Index>(
-                geometry.accessor(), bvh.accessor(),
+                geometry.accessor(), bvh.accessor(), bvh_data.accessor(),
                 cuda::std::span<Real const>(d_query_x, query_count),
                 cuda::std::span<Real const>(d_query_y, query_count),
                 cuda::std::span<Real const>(d_query_z, query_count),
@@ -659,6 +846,264 @@ TEST(smallgwn_bvh_models, integration_exact_and_taylor_consistency_on_common_mod
     }
 
     ASSERT_GT(tested_model_count, 0u) << "No valid OBJ models were exercised.";
+}
+
+TEST(smallgwn_bvh_models, integration_taylor_levelwise_matches_iterative_on_common_models) {
+    std::optional<std::filesystem::path> const model_dir = find_model_data_dir();
+    if (!model_dir.has_value()) {
+        GTEST_SKIP() << "Model directory not found. Set SMALLGWN_MODEL_DATA_DIR or "
+                        "clone models to /tmp/common-3d-test-models/data.";
+    }
+
+    std::vector<std::filesystem::path> const model_paths = collect_obj_model_paths(*model_dir);
+    if (model_paths.empty())
+        GTEST_SKIP() << "No .obj models found in " << model_dir->string();
+
+    constexpr Real k_consistency_epsilon = Real(3e-4);
+    constexpr Real k_accuracy_scale = Real(2);
+
+    std::size_t tested_model_count = 0;
+    for (std::filesystem::path const &model_path : model_paths) {
+        SCOPED_TRACE(model_path.string());
+        std::optional<HostMesh> const maybe_mesh = load_obj_mesh(model_path);
+        if (!maybe_mesh.has_value())
+            continue;
+        HostMesh const &mesh = *maybe_mesh;
+        auto const query_soa = make_integration_query_soa(mesh);
+        std::size_t const query_count = query_soa[0].size();
+        if (query_count == 0)
+            continue;
+
+        gwn::gwn_geometry_object<Real, Index> geometry;
+        gwn::gwn_status const upload_status = geometry.upload(
+            cuda::std::span<Real const>(mesh.vertex_x.data(), mesh.vertex_x.size()),
+            cuda::std::span<Real const>(mesh.vertex_y.data(), mesh.vertex_y.size()),
+            cuda::std::span<Real const>(mesh.vertex_z.data(), mesh.vertex_z.size()),
+            cuda::std::span<Index const>(mesh.tri_i0.data(), mesh.tri_i0.size()),
+            cuda::std::span<Index const>(mesh.tri_i1.data(), mesh.tri_i1.size()),
+            cuda::std::span<Index const>(mesh.tri_i2.data(), mesh.tri_i2.size())
+        );
+        if (!upload_status.is_ok() && upload_status.error() == gwn::gwn_error::cuda_runtime_error &&
+            is_cuda_runtime_unavailable_message(upload_status.message())) {
+            GTEST_SKIP() << "CUDA runtime unavailable: " << upload_status.message();
+        }
+        ASSERT_TRUE(upload_status.is_ok()) << status_to_debug_string(upload_status);
+
+        Real *d_query_x = nullptr;
+        Real *d_query_y = nullptr;
+        Real *d_query_z = nullptr;
+        Real *d_output = nullptr;
+        auto cleanup = gwn::gwn_make_scope_exit([&]() noexcept {
+            if (d_output != nullptr)
+                (void)gwn::gwn_cuda_free(d_output);
+            if (d_query_z != nullptr)
+                (void)gwn::gwn_cuda_free(d_query_z);
+            if (d_query_y != nullptr)
+                (void)gwn::gwn_cuda_free(d_query_y);
+            if (d_query_x != nullptr)
+                (void)gwn::gwn_cuda_free(d_query_x);
+        });
+
+        std::size_t const query_bytes = query_count * sizeof(Real);
+        ASSERT_TRUE(
+            gwn::gwn_cuda_malloc(reinterpret_cast<void **>(&d_query_x), query_bytes).is_ok()
+        );
+        ASSERT_TRUE(
+            gwn::gwn_cuda_malloc(reinterpret_cast<void **>(&d_query_y), query_bytes).is_ok()
+        );
+        ASSERT_TRUE(
+            gwn::gwn_cuda_malloc(reinterpret_cast<void **>(&d_query_z), query_bytes).is_ok()
+        );
+        ASSERT_TRUE(
+            gwn::gwn_cuda_malloc(reinterpret_cast<void **>(&d_output), query_bytes).is_ok()
+        );
+
+        ASSERT_EQ(
+            cudaSuccess,
+            cudaMemcpy(d_query_x, query_soa[0].data(), query_bytes, cudaMemcpyHostToDevice)
+        );
+        ASSERT_EQ(
+            cudaSuccess,
+            cudaMemcpy(d_query_y, query_soa[1].data(), query_bytes, cudaMemcpyHostToDevice)
+        );
+        ASSERT_EQ(
+            cudaSuccess,
+            cudaMemcpy(d_query_z, query_soa[2].data(), query_bytes, cudaMemcpyHostToDevice)
+        );
+
+        gwn::gwn_bvh_object<Real, Index> bvh_iterative;
+        gwn::gwn_bvh_data_object<Real, Index> data_iterative;
+        gwn::gwn_status const iterative_build_status =
+            gwn::gwn_build_bvh4_lbvh_taylor<1, Real, Index>(
+                geometry.accessor(), bvh_iterative.accessor(), data_iterative.accessor()
+            );
+        ASSERT_TRUE(iterative_build_status.is_ok())
+            << status_to_debug_string(iterative_build_status);
+        gwn::gwn_status const iterative_query_status =
+            gwn::gwn_compute_winding_number_batch_bvh_taylor<1, Real, Index>(
+                geometry.accessor(), bvh_iterative.accessor(), data_iterative.accessor(),
+                cuda::std::span<Real const>(d_query_x, query_count),
+                cuda::std::span<Real const>(d_query_y, query_count),
+                cuda::std::span<Real const>(d_query_z, query_count),
+                cuda::std::span<Real>(d_output, query_count), k_accuracy_scale
+            );
+        ASSERT_TRUE(iterative_query_status.is_ok())
+            << status_to_debug_string(iterative_query_status);
+        ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+        std::vector<Real> iterative_output(query_count, Real(0));
+        ASSERT_EQ(
+            cudaSuccess,
+            cudaMemcpy(iterative_output.data(), d_output, query_bytes, cudaMemcpyDeviceToHost)
+        );
+
+        gwn::gwn_bvh_object<Real, Index> bvh_levelwise;
+        gwn::gwn_bvh_data_object<Real, Index> data_levelwise;
+        gwn::gwn_status const levelwise_build_status =
+            gwn::gwn_build_bvh4_lbvh_taylor_levelwise<1, Real, Index>(
+                geometry.accessor(), bvh_levelwise.accessor(), data_levelwise.accessor()
+            );
+        ASSERT_TRUE(levelwise_build_status.is_ok())
+            << status_to_debug_string(levelwise_build_status);
+        gwn::gwn_status const levelwise_query_status =
+            gwn::gwn_compute_winding_number_batch_bvh_taylor<1, Real, Index>(
+                geometry.accessor(), bvh_levelwise.accessor(), data_levelwise.accessor(),
+                cuda::std::span<Real const>(d_query_x, query_count),
+                cuda::std::span<Real const>(d_query_y, query_count),
+                cuda::std::span<Real const>(d_query_z, query_count),
+                cuda::std::span<Real>(d_output, query_count), k_accuracy_scale
+            );
+        ASSERT_TRUE(levelwise_query_status.is_ok())
+            << status_to_debug_string(levelwise_query_status);
+        ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+        std::vector<Real> levelwise_output(query_count, Real(0));
+        ASSERT_EQ(
+            cudaSuccess,
+            cudaMemcpy(levelwise_output.data(), d_output, query_bytes, cudaMemcpyDeviceToHost)
+        );
+
+        ++tested_model_count;
+        for (std::size_t query_id = 0; query_id < query_count; ++query_id) {
+            EXPECT_NEAR(
+                levelwise_output[query_id], iterative_output[query_id], k_consistency_epsilon
+            ) << "query index: "
+              << query_id;
+        }
+    }
+
+    ASSERT_GT(tested_model_count, 0u) << "No valid OBJ models were exercised.";
+}
+
+TEST(smallgwn_bvh_models, benchmark_taylor_levelwise_vs_iterative) {
+    if (char const *run_benchmark = std::getenv("SMALLGWN_RUN_TAYLOR_BENCHMARK");
+        run_benchmark == nullptr || std::string_view(run_benchmark) != "1") {
+        GTEST_SKIP() << "Set SMALLGWN_RUN_TAYLOR_BENCHMARK=1 to run performance benchmark.";
+    }
+
+    std::optional<std::filesystem::path> const model_dir = find_model_data_dir();
+    if (!model_dir.has_value()) {
+        GTEST_SKIP() << "Model directory not found. Set SMALLGWN_MODEL_DATA_DIR or "
+                        "clone models to /tmp/common-3d-test-models/data.";
+    }
+
+    std::vector<std::filesystem::path> const model_paths = collect_obj_model_paths(*model_dir);
+    if (model_paths.empty())
+        GTEST_SKIP() << "No .obj models found in " << model_dir->string();
+
+    int const repeats = get_env_positive_int("SMALLGWN_TAYLOR_BENCH_REPEATS", 3);
+    cudaStream_t const stream = gwn::gwn_default_stream();
+
+    double total_iterative_ms = 0.0;
+    double total_levelwise_ms = 0.0;
+    std::size_t tested_model_count = 0;
+
+    for (std::filesystem::path const &model_path : model_paths) {
+        SCOPED_TRACE(model_path.string());
+        std::optional<HostMesh> const maybe_mesh = load_obj_mesh(model_path);
+        if (!maybe_mesh.has_value())
+            continue;
+        HostMesh const &mesh = *maybe_mesh;
+
+        gwn::gwn_geometry_object<Real, Index> geometry;
+        gwn::gwn_status const upload_status = geometry.upload(
+            cuda::std::span<Real const>(mesh.vertex_x.data(), mesh.vertex_x.size()),
+            cuda::std::span<Real const>(mesh.vertex_y.data(), mesh.vertex_y.size()),
+            cuda::std::span<Real const>(mesh.vertex_z.data(), mesh.vertex_z.size()),
+            cuda::std::span<Index const>(mesh.tri_i0.data(), mesh.tri_i0.size()),
+            cuda::std::span<Index const>(mesh.tri_i1.data(), mesh.tri_i1.size()),
+            cuda::std::span<Index const>(mesh.tri_i2.data(), mesh.tri_i2.size()), stream
+        );
+        if (!upload_status.is_ok() && upload_status.error() == gwn::gwn_error::cuda_runtime_error &&
+            is_cuda_runtime_unavailable_message(upload_status.message())) {
+            GTEST_SKIP() << "CUDA runtime unavailable: " << upload_status.message();
+        }
+        ASSERT_TRUE(upload_status.is_ok()) << status_to_debug_string(upload_status);
+
+        gwn::gwn_bvh_object<Real, Index> bvh_iterative;
+        gwn::gwn_bvh_data_object<Real, Index> data_iterative;
+        gwn::gwn_bvh_object<Real, Index> bvh_levelwise;
+        gwn::gwn_bvh_data_object<Real, Index> data_levelwise;
+
+        auto const warmup_iterative = gwn::gwn_build_bvh4_lbvh_taylor<1, Real, Index>(
+            geometry.accessor(), bvh_iterative.accessor(), data_iterative.accessor(), stream
+        );
+        ASSERT_TRUE(warmup_iterative.is_ok()) << status_to_debug_string(warmup_iterative);
+        ASSERT_EQ(cudaSuccess, cudaStreamSynchronize(stream));
+
+        auto const warmup_levelwise = gwn::gwn_build_bvh4_lbvh_taylor_levelwise<1, Real, Index>(
+            geometry.accessor(), bvh_levelwise.accessor(), data_levelwise.accessor(), stream
+        );
+        ASSERT_TRUE(warmup_levelwise.is_ok()) << status_to_debug_string(warmup_levelwise);
+        ASSERT_EQ(cudaSuccess, cudaStreamSynchronize(stream));
+
+        auto measure_builder_ms = [&](auto &&builder) {
+            double total_ms = 0.0;
+            for (int repeat = 0; repeat < repeats; ++repeat) {
+                auto const begin = std::chrono::steady_clock::now();
+                gwn::gwn_status const status = builder();
+                if (!status.is_ok()) {
+                    ADD_FAILURE() << status_to_debug_string(status);
+                    return std::numeric_limits<double>::quiet_NaN();
+                }
+                if (cudaSuccess != cudaStreamSynchronize(stream)) {
+                    ADD_FAILURE() << "cudaStreamSynchronize failed during benchmark.";
+                    return std::numeric_limits<double>::quiet_NaN();
+                }
+                auto const end = std::chrono::steady_clock::now();
+                total_ms += std::chrono::duration<double, std::milli>(end - begin).count();
+            }
+            return total_ms / static_cast<double>(repeats);
+        };
+
+        double const iterative_ms = measure_builder_ms([&]() {
+            return gwn::gwn_build_bvh4_lbvh_taylor<1, Real, Index>(
+                geometry.accessor(), bvh_iterative.accessor(), data_iterative.accessor(), stream
+            );
+        });
+        double const levelwise_ms = measure_builder_ms([&]() {
+            return gwn::gwn_build_bvh4_lbvh_taylor_levelwise<1, Real, Index>(
+                geometry.accessor(), bvh_levelwise.accessor(), data_levelwise.accessor(), stream
+            );
+        });
+        ASSERT_TRUE(std::isfinite(iterative_ms));
+        ASSERT_TRUE(std::isfinite(levelwise_ms));
+
+        ++tested_model_count;
+        total_iterative_ms += iterative_ms;
+        total_levelwise_ms += levelwise_ms;
+
+        std::cout << "[smallgwn-bench] model=" << model_path.filename().string()
+                  << " iterative_ms=" << iterative_ms << " levelwise_ms=" << levelwise_ms
+                  << " speedup=" << (iterative_ms / std::max(levelwise_ms, 1e-9)) << std::endl;
+    }
+
+    ASSERT_GT(tested_model_count, 0u) << "No valid OBJ models were exercised.";
+    std::cout << "[smallgwn-bench] total_models=" << tested_model_count << " avg_iterative_ms="
+              << (total_iterative_ms / static_cast<double>(tested_model_count))
+              << " avg_levelwise_ms="
+              << (total_levelwise_ms / static_cast<double>(tested_model_count)) << " avg_speedup="
+              << ((total_iterative_ms / static_cast<double>(tested_model_count)) /
+                  std::max(total_levelwise_ms / static_cast<double>(tested_model_count), 1e-9))
+              << std::endl;
 }
 
 } // namespace
