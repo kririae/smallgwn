@@ -22,7 +22,7 @@ namespace detail {
 inline constexpr std::uint32_t k_gwn_hploc_search_radius = 8u;
 inline constexpr std::uint32_t k_gwn_hploc_merging_threshold = 16u;
 inline constexpr std::uint32_t k_gwn_hploc_invalid_u32 = std::numeric_limits<std::uint32_t>::max();
-inline constexpr bool k_gwn_hploc_enable_experimental_kernel = false;
+inline constexpr bool k_gwn_hploc_enable_experimental_kernel = true;
 
 template <class Real> struct gwn_hploc_node {
     gwn_aabb<Real> bounds{};
@@ -54,15 +54,20 @@ template <class Real>
 [[nodiscard]] __device__ inline gwn_aabb<Real>
 gwn_hploc_shfl_aabb(unsigned int const mask, gwn_aabb<Real> const &value, int const src_lane) {
     gwn_aabb<Real> result{};
-    if (src_lane < 0 || src_lane >= 32)
-        return result;
-
     result.min_x = __shfl_sync(mask, value.min_x, src_lane);
     result.min_y = __shfl_sync(mask, value.min_y, src_lane);
     result.min_z = __shfl_sync(mask, value.min_z, src_lane);
     result.max_x = __shfl_sync(mask, value.max_x, src_lane);
     result.max_y = __shfl_sync(mask, value.max_y, src_lane);
     result.max_z = __shfl_sync(mask, value.max_z, src_lane);
+    return result;
+}
+
+[[nodiscard]] __device__ inline uint2
+gwn_hploc_shfl_uint2(unsigned int const mask, uint2 const value, int const src_lane) {
+    uint2 result{};
+    result.x = __shfl_sync(mask, value.x, src_lane);
+    result.y = __shfl_sync(mask, value.y, src_lane);
     return result;
 }
 
@@ -168,7 +173,7 @@ template <int BlockSize, std::uint32_t SearchRadius, std::uint32_t MergingThresh
 __global__ __launch_bounds__(BlockSize) void gwn_build_binary_hploc_kernel(
     std::uint32_t const primitive_count, gwn_hploc_node<Real> *full_nodes,
     std::uint32_t *cluster_indices, std::uint32_t *boundary_parent, unsigned int *cluster_count,
-    std::uint32_t const *sorted_morton_codes
+    std::uint32_t const *sorted_morton_codes, unsigned int *failure_flag
 ) {
     constexpr int k_warp_size = 32;
     static_assert((BlockSize % k_warp_size) == 0, "BlockSize must be a multiple of 32.");
@@ -257,13 +262,10 @@ __global__ __launch_bounds__(BlockSize) void gwn_build_binary_hploc_kernel(
 
         unsigned int const valid_mask = __ballot_sync(0xffffffffu, merge || !mutual_neighbor);
         int const shift = __fns(valid_mask, 0u, lane + 1u);
-        if (shift == -1) {
+        cluster_idx = __shfl_sync(0xffffffffu, cluster_idx, shift);
+        if (shift == -1)
             cluster_idx = k_gwn_hploc_invalid_u32;
-            cluster_bounds = gwn_aabb<Real>{};
-        } else {
-            cluster_idx = __shfl_sync(0xffffffffu, cluster_idx, shift);
-            cluster_bounds = gwn_hploc_shfl_aabb(0xffffffffu, cluster_bounds, shift);
-        }
+        cluster_bounds = gwn_hploc_shfl_aabb(0xffffffffu, cluster_bounds, shift);
 
         return num_prim - merge_count;
     };
@@ -272,42 +274,29 @@ __global__ __launch_bounds__(BlockSize) void gwn_build_binary_hploc_kernel(
                                            std::uint32_t const cluster_idx,
                                            gwn_aabb<Real> cluster_bounds) {
         (void)cluster_idx;
-        Real min_area = std::numeric_limits<Real>::infinity();
-        std::uint32_t min_idx = k_gwn_hploc_invalid_u32;
+        uint2 min_area_idx = make_uint2(k_gwn_hploc_invalid_u32, k_gwn_hploc_invalid_u32);
 
         for (std::uint32_t radius = 1; radius <= SearchRadius; ++radius) {
             std::uint32_t const neighbor_lane = lane + radius;
-            Real area = std::numeric_limits<Real>::infinity();
+            std::uint32_t area = k_gwn_hploc_invalid_u32;
+            gwn_aabb<Real> const neighbor_bounds =
+                gwn_hploc_shfl_aabb(0xffffffffu, cluster_bounds, static_cast<int>(neighbor_lane));
             if (neighbor_lane < num_prim) {
-                gwn_aabb<Real> const neighbor_bounds = gwn_hploc_shfl_aabb(
-                    0xffffffffu, cluster_bounds, static_cast<int>(neighbor_lane)
-                );
-                area = gwn_hploc_union_half_area(cluster_bounds, neighbor_bounds);
-                if (area < min_area) {
-                    min_area = area;
-                    min_idx = neighbor_lane;
-                }
+                gwn_aabb<Real> const merged_bounds =
+                    gwn_aabb_union(cluster_bounds, neighbor_bounds);
+                area = __float_as_uint(static_cast<float>(gwn_aabb_half_area(merged_bounds)));
+                if (area < min_area_idx.x)
+                    min_area_idx = make_uint2(area, neighbor_lane);
             }
 
-            Real neighbor_min_area =
-                __shfl_sync(0xffffffffu, min_area, static_cast<int>(neighbor_lane));
-            std::uint32_t neighbor_min_idx =
-                __shfl_sync(0xffffffffu, min_idx, static_cast<int>(neighbor_lane));
-            if (area < neighbor_min_area) {
-                neighbor_min_area = area;
-                neighbor_min_idx = lane;
-            }
-
-            int const back_lane = static_cast<int>(lane) - static_cast<int>(radius);
-            if (back_lane >= 0) {
-                min_area = __shfl_sync(0xffffffffu, neighbor_min_area, back_lane);
-                min_idx = __shfl_sync(0xffffffffu, neighbor_min_idx, back_lane);
-            } else {
-                min_area = std::numeric_limits<Real>::infinity();
-                min_idx = k_gwn_hploc_invalid_u32;
-            }
+            uint2 neighbor_nn =
+                gwn_hploc_shfl_uint2(0xffffffffu, min_area_idx, static_cast<int>(neighbor_lane));
+            if (area < neighbor_nn.x)
+                neighbor_nn = make_uint2(area, lane);
+            min_area_idx =
+                gwn_hploc_shfl_uint2(0xffffffffu, neighbor_nn, static_cast<int>(lane - radius));
         }
-        return min_idx;
+        return min_area_idx.y;
     };
 
     auto const ploc_merge = [&](int const selected_lane, std::uint32_t const left_boundary,
@@ -331,7 +320,13 @@ __global__ __launch_bounds__(BlockSize) void gwn_build_binary_hploc_kernel(
 
         std::uint32_t const threshold =
             __shfl_sync(0xffffffffu, is_final ? 1u : MergingThreshold, selected_lane);
+        std::uint32_t inner_iter = 0;
         while (num_prim > threshold) {
+            if (++inner_iter > 1024u) {
+                if (failure_flag != nullptr)
+                    atomicExch(failure_flag, 1u);
+                break;
+            }
             std::uint32_t const previous_num_prim = num_prim;
             std::uint32_t const nearest =
                 find_nearest_neighbor(num_prim, cluster_idx, cluster_bounds);
@@ -351,8 +346,11 @@ __global__ __launch_bounds__(BlockSize) void gwn_build_binary_hploc_kernel(
                 num_prim = merge_clusters_create_binary_node(
                     num_prim, fallback_neighbor, cluster_idx, cluster_bounds
                 );
-                if (num_prim == previous_num_prim)
+                if (num_prim == previous_num_prim) {
+                    if (failure_flag != nullptr)
+                        atomicExch(failure_flag, 1u);
                     break;
+                }
             }
         }
 
@@ -363,8 +361,14 @@ __global__ __launch_bounds__(BlockSize) void gwn_build_binary_hploc_kernel(
     std::uint32_t right = idx;
     std::uint32_t split = 0;
     bool lane_active = idx < primitive_count;
+    std::uint32_t outer_iter = 0;
 
     while (__ballot_sync(0xffffffffu, lane_active) != 0u) {
+        if (++outer_iter > primitive_count * 8u + 1024u) {
+            if (failure_flag != nullptr)
+                atomicExch(failure_flag, 1u);
+            break;
+        }
         if (lane_active) {
             std::uint32_t previous_id = k_gwn_hploc_invalid_u32;
             if (find_parent_id(left, right) == right) {
@@ -558,10 +562,12 @@ gwn_status gwn_bvh_topology_build_binary_hploc(
     gwn_device_array<std::uint32_t> cluster_indices{};
     gwn_device_array<std::uint32_t> boundary_parent{};
     gwn_device_array<unsigned int> cluster_count{};
+    gwn_device_array<unsigned int> failure_flag{};
     GWN_RETURN_ON_ERROR(full_nodes.resize(primitive_count * 2 - 1, stream));
     GWN_RETURN_ON_ERROR(cluster_indices.resize(primitive_count, stream));
     GWN_RETURN_ON_ERROR(boundary_parent.resize(primitive_count, stream));
     GWN_RETURN_ON_ERROR(cluster_count.resize(1, stream));
+    GWN_RETURN_ON_ERROR(failure_flag.resize(1, stream));
 
     GWN_RETURN_ON_ERROR(
         gwn_launch_linear_kernel<k_block_size>(
@@ -580,22 +586,36 @@ gwn_status gwn_bvh_topology_build_binary_hploc(
         cluster_count.data(), &initial_cluster_count, sizeof(unsigned int), cudaMemcpyHostToDevice,
         stream
     )));
+    GWN_RETURN_ON_ERROR(
+        gwn_cuda_to_status(cudaMemsetAsync(failure_flag.data(), 0, sizeof(unsigned int), stream))
+    );
 
     int const block_count = gwn_block_count_1d<k_block_size>(primitive_count);
     gwn_build_binary_hploc_kernel<
         k_block_size, k_gwn_hploc_search_radius, k_gwn_hploc_merging_threshold, Real>
         <<<block_count, k_block_size, 0, stream>>>(
             static_cast<std::uint32_t>(primitive_count), full_nodes.data(), cluster_indices.data(),
-            boundary_parent.data(), cluster_count.data(), sorted_morton_codes.data()
+            boundary_parent.data(), cluster_count.data(), sorted_morton_codes.data(),
+            failure_flag.data()
         );
     GWN_RETURN_ON_ERROR(gwn_check_last_kernel());
 
     unsigned int host_cluster_count = 0u;
+    unsigned int host_failure_flag = 0u;
     GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemcpyAsync(
         &host_cluster_count, cluster_count.data(), sizeof(unsigned int), cudaMemcpyDeviceToHost,
         stream
     )));
+    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemcpyAsync(
+        &host_failure_flag, failure_flag.data(), sizeof(unsigned int), cudaMemcpyDeviceToHost,
+        stream
+    )));
     GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaStreamSynchronize(stream)));
+    if (host_failure_flag != 0u) {
+        return gwn_status::internal_error(
+            "H-PLOC build kernel failed to converge; possible invalid merge state."
+        );
+    }
     unsigned int const expected_cluster_count = static_cast<unsigned int>(primitive_count * 2 - 1);
     if (host_cluster_count != expected_cluster_count)
         return gwn_status::internal_error("H-PLOC builder did not converge to a single root.");

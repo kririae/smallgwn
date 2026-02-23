@@ -39,10 +39,13 @@ template <int Width, class Index> struct gwn_collapse_summarize_pass_functor {
             return;
 
         int depth = 0;
+        std::size_t hop_count = 0;
         Index cursor = internal_id;
         while (gwn_is_valid_index(cursor) && cursor != root_internal_index) {
             std::size_t const cursor_u = static_cast<std::size_t>(cursor);
             if (cursor_u >= internal_parent.size())
+                return;
+            if (hop_count++ > internal_parent.size())
                 return;
             ++depth;
             cursor = internal_parent[cursor_u];
