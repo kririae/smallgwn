@@ -12,7 +12,7 @@
 
 namespace gwn {
 
-template <class Real, class Index = std::int64_t> struct gwn_geometry_accessor {
+template <class Real, class Index = std::uint32_t> struct gwn_geometry_accessor {
     using real_type = Real;
     using index_type = Index;
 
@@ -98,7 +98,7 @@ gwn_status gwn_upload_accessor(
 ///
 /// \remark `clear()` and destructor release memory on the currently bound stream.
 /// \remark The bound stream is updated after successful `upload(..., stream)`.
-template <class Real = float, class Index = std::int64_t>
+template <class Real = float, class Index = std::uint32_t>
 class gwn_geometry_object final : public gwn_noncopyable, public gwn_stream_mixin {
     static_assert(std::is_floating_point_v<Real>, "Real must be a floating-point type.");
     static_assert(std::is_integral_v<Index>, "Index must be an integral type.");

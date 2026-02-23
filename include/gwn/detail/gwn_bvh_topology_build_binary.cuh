@@ -26,8 +26,7 @@ template <class Index> struct gwn_build_binary_topology_functor {
     cuda::std::span<std::uint8_t> leaf_parent_slot{};
 
     [[nodiscard]] __device__ inline int delta(Index const i, Index const j) const noexcept {
-        Index const leaf_count = static_cast<Index>(morton_codes.size());
-        if (j < Index(0) || j >= leaf_count)
+        if (!gwn_index_in_bounds(j, morton_codes.size()))
             return -1;
 
         std::uint32_t const code_i = morton_codes[static_cast<std::size_t>(i)];
@@ -138,7 +137,7 @@ template <class Real, class Index> struct gwn_accumulate_binary_bounds_pass_func
         }
 
         Index parent = leaf_parent[leaf_id];
-        if (parent < Index(0))
+        if (gwn_is_invalid_index(parent))
             return;
 
         std::uint8_t child_slot = leaf_parent_slot[leaf_id];
@@ -146,7 +145,7 @@ template <class Real, class Index> struct gwn_accumulate_binary_bounds_pass_func
             return;
 
         gwn_aabb<Real> merged_bounds = sorted_leaf_aabbs[leaf_id];
-        while (parent >= Index(0)) {
+        while (gwn_is_valid_index(parent)) {
             std::size_t const parent_id = static_cast<std::size_t>(parent);
             if (parent_id >= internal_bounds.size() || parent_id >= pending_left_bounds.size() ||
                 parent_id >= pending_right_bounds.size() ||
@@ -171,7 +170,7 @@ template <class Real, class Index> struct gwn_accumulate_binary_bounds_pass_func
             internal_bounds[parent_id] = merged_bounds;
 
             Index const next_parent = internal_parent[parent_id];
-            if (next_parent < Index(0))
+            if (gwn_is_invalid_index(next_parent))
                 return;
 
             child_slot = internal_parent_slot[parent_id];

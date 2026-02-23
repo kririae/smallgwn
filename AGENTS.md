@@ -25,6 +25,7 @@ These instructions apply to the `smallgwn/` project tree.
 ## Naming and API Rules
 - Use `gwn::` namespace and `gwn_` prefix for public symbols.
 - Avoid `_wide` naming in public API types.
+- Default public index type is `std::uint32_t` for geometry/BVH/query templates unless explicitly overridden.
 - Keep width as template parameter where relevant; width=4 accessor aliases are `gwn_bvh_accessor`, `gwn_bvh_aabb4_accessor`, and `gwn_bvh_moment4_accessor` (no `gwn_bvh4_*` duplicates).
 - Owning-object state query uses a single unified predicate `has_data()` across all BVH object types (`gwn_bvh_topology_tree_object`, `gwn_bvh_aabb_tree_object`, `gwn_bvh_moment_tree_object`).
 
@@ -43,6 +44,7 @@ These instructions apply to the `smallgwn/` project tree.
   - object-first build/refit/facade overloads in `gwn_bvh_topology_build.cuh`, `gwn_bvh_refit.cuh`,
     and `gwn_bvh_facade.cuh` must update bound stream on success.
 - **Memory Allocation**: Keep stream allocator path ONLY (`cudaMallocAsync`/`cudaFreeAsync`). Never use legacy synchronous fallback paths. `gwn_device_array<T>` remembers stream and releases on its bound stream by default.
+- **Index Sentinels**: Never hardcode signed `< 0` checks in shared code paths; use `gwn_invalid_index`, `gwn_is_invalid_index`, and `gwn_index_in_bounds` from `gwn_utils.cuh` so both signed and unsigned `Index` instantiations are valid.
   - All `gwn_device_array` methods (`resize`, `clear`, `zero`, `copy_from_host`, `copy_to_host`) and free helpers (`gwn_cuda_free`, `gwn_free_span`, etc.) are `noexcept`.
   - `resize(count, stream)` rebinds the bound stream even when `count` matches the current size (no alloc/free occurs in that case).
   - `resize(count, stream)` allocates new storage on `stream` but releases previous storage on the previously bound stream; bound stream switches to `stream` only after successful commit.

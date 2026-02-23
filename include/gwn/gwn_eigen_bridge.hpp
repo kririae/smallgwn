@@ -6,7 +6,10 @@
 #error "gwn_eigen_bridge.hpp requires Eigen/Core in the include path."
 #endif
 
+#include <atomic>
+#include <cmath>
 #include <exception>
+#include <limits>
 #include <memory>
 
 #include <Eigen/Core>
@@ -15,7 +18,7 @@
 
 namespace gwn {
 
-template <class Real = float, class Index = std::int64_t, class DerivedV, class DerivedF>
+template <class Real = float, class Index = std::uint32_t, class DerivedV, class DerivedF>
 gwn_status gwn_upload_from_eigen(
     gwn_geometry_object<Real, Index> &object, Eigen::MatrixBase<DerivedV> const &vertices,
     Eigen::MatrixBase<DerivedF> const &triangles, cudaStream_t const stream = gwn_default_stream()
@@ -30,6 +33,10 @@ gwn_status gwn_upload_from_eigen(
 
     std::size_t const vertex_count_u = static_cast<std::size_t>(vertex_count);
     std::size_t const triangle_count_u = static_cast<std::size_t>(triangle_count);
+    if (vertex_count_u > 0 &&
+        (vertex_count_u - 1) > static_cast<std::size_t>(std::numeric_limits<Index>::max())) {
+        return gwn_status::invalid_argument("Vertex count exceeds index range.");
+    }
 
     auto x = std::make_unique_for_overwrite<Real[]>(vertex_count_u);
     auto y = std::make_unique_for_overwrite<Real[]>(vertex_count_u);
@@ -50,17 +57,53 @@ gwn_status gwn_upload_from_eigen(
     auto i0 = std::make_unique_for_overwrite<Index[]>(triangle_count_u);
     auto i1 = std::make_unique_for_overwrite<Index[]>(triangle_count_u);
     auto i2 = std::make_unique_for_overwrite<Index[]>(triangle_count_u);
+    auto const try_convert_index = [vertex_count_u](auto const value, Index &out) noexcept {
+        using value_type = std::decay_t<decltype(value)>;
+        if constexpr (std::is_floating_point_v<value_type>) {
+            if (!std::isfinite(value) || std::floor(value) != value)
+                return false;
+        }
+        if constexpr (std::is_signed_v<value_type>) {
+            if (value < value_type(0))
+                return false;
+        }
+
+        std::uint64_t const value_u64 = static_cast<std::uint64_t>(value);
+        if (value_u64 > static_cast<std::uint64_t>(std::numeric_limits<Index>::max()) ||
+            value_u64 >= static_cast<std::uint64_t>(vertex_count_u)) {
+            return false;
+        }
+        out = static_cast<Index>(value_u64);
+        return true;
+    };
+
+    std::atomic<bool> invalid_triangle_indices{false};
     if (triangle_count > 0) {
         tbb::parallel_for(
             tbb::blocked_range<Eigen::Index>(0, triangle_count),
             [&](tbb::blocked_range<Eigen::Index> const &range) {
             for (Eigen::Index i = range.begin(); i < range.end(); ++i) {
-                i0[static_cast<std::size_t>(i)] = static_cast<Index>(triangles(i, 0));
-                i1[static_cast<std::size_t>(i)] = static_cast<Index>(triangles(i, 1));
-                i2[static_cast<std::size_t>(i)] = static_cast<Index>(triangles(i, 2));
+                Index tri0 = 0;
+                Index tri1 = 0;
+                Index tri2 = 0;
+                bool const is_valid = try_convert_index(triangles(i, 0), tri0) &&
+                                      try_convert_index(triangles(i, 1), tri1) &&
+                                      try_convert_index(triangles(i, 2), tri2);
+                if (!is_valid) {
+                    invalid_triangle_indices.store(true, std::memory_order_relaxed);
+                    continue;
+                }
+                i0[static_cast<std::size_t>(i)] = tri0;
+                i1[static_cast<std::size_t>(i)] = tri1;
+                i2[static_cast<std::size_t>(i)] = tri2;
             }
         }
         );
+        if (invalid_triangle_indices.load(std::memory_order_relaxed)) {
+            return gwn_status::invalid_argument(
+                "Eigen triangle indices must be integer-valued in [0, vertex_count)."
+            );
+        }
     }
 
     return object.upload(

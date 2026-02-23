@@ -51,7 +51,7 @@ inline Real reference_signed_solid_angle_triangle(
     return Real(2) * std::atan2(numerator, denominator);
 }
 
-template <class Real, class Index = std::int64_t>
+template <class Real, class Index = std::uint32_t>
 inline Real reference_winding_number_point(
     std::span<Real const> vertex_x, std::span<Real const> vertex_y, std::span<Real const> vertex_z,
     std::span<Index const> tri_i0, std::span<Index const> tri_i1, std::span<Index const> tri_i2,
@@ -65,14 +65,15 @@ inline Real reference_winding_number_point(
         Index const ia = tri_i0[tri];
         Index const ib = tri_i1[tri];
         Index const ic = tri_i2[tri];
-        if (ia < Index(0) || ib < Index(0) || ic < Index(0))
+        if (!gwn_index_in_bounds(ia, vertex_x.size()) ||
+            !gwn_index_in_bounds(ib, vertex_x.size()) ||
+            !gwn_index_in_bounds(ic, vertex_x.size())) {
             continue;
+        }
 
         std::size_t const a_index = static_cast<std::size_t>(ia);
         std::size_t const b_index = static_cast<std::size_t>(ib);
         std::size_t const c_index = static_cast<std::size_t>(ic);
-        if (a_index >= vertex_x.size() || b_index >= vertex_x.size() || c_index >= vertex_x.size())
-            continue;
 
         reference_vec3<Real> const a(vertex_x[a_index], vertex_y[a_index], vertex_z[a_index]);
         reference_vec3<Real> const b(vertex_x[b_index], vertex_y[b_index], vertex_z[b_index]);
@@ -84,7 +85,7 @@ inline Real reference_winding_number_point(
     return omega_sum / (Real(4) * k_pi);
 }
 
-template <class Real, class Index = std::int64_t>
+template <class Real, class Index = std::uint32_t>
 inline gwn_status reference_winding_number_batch(
     std::span<Real const> vertex_x, std::span<Real const> vertex_y, std::span<Real const> vertex_z,
     std::span<Index const> tri_i0, std::span<Index const> tri_i1, std::span<Index const> tri_i2,
@@ -115,7 +116,7 @@ inline gwn_status reference_winding_number_batch(
     return gwn_status::ok();
 }
 
-template <class Real, class Index = std::int64_t>
+template <class Real, class Index = std::uint32_t>
 inline gwn_status reference_winding_number_batch_hdk_taylor(
     std::span<Real const> vertex_x, std::span<Real const> vertex_y, std::span<Real const> vertex_z,
     std::span<Index const> tri_i0, std::span<Index const> tri_i1, std::span<Index const> tri_i2,
@@ -153,7 +154,7 @@ inline gwn_status reference_winding_number_batch_hdk_taylor(
         Index const ia = tri_i0[triangle_id];
         Index const ib = tri_i1[triangle_id];
         Index const ic = tri_i2[triangle_id];
-        if (ia < Index(0) || ib < Index(0) || ic < Index(0))
+        if (gwn_is_invalid_index(ia) || gwn_is_invalid_index(ib) || gwn_is_invalid_index(ic))
             return gwn_status::invalid_argument("Triangle index must be non-negative.");
         std::size_t const a = static_cast<std::size_t>(ia);
         std::size_t const b = static_cast<std::size_t>(ib);

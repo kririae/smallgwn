@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <format>
+#include <limits>
 #include <source_location>
 #include <stdexcept>
 #include <string>
@@ -62,6 +63,36 @@ template <class T>
 [[nodiscard]] __host__ __device__ constexpr bool
 gwn_span_has_storage(cuda::std::span<T> const span) noexcept {
     return span.size() == 0 || span.data() != nullptr;
+}
+
+/// \brief Return the sentinel value used for invalid integral indices.
+template <class Index>
+[[nodiscard]] __host__ __device__ constexpr Index gwn_invalid_index() noexcept {
+    static_assert(std::is_integral_v<Index>, "Index must be an integral type.");
+    return std::numeric_limits<Index>::max();
+}
+
+/// \brief Return whether an index value is invalid.
+template <class Index>
+[[nodiscard]] __host__ __device__ constexpr bool gwn_is_invalid_index(Index const index) noexcept {
+    static_assert(std::is_integral_v<Index>, "Index must be an integral type.");
+    if constexpr (std::is_signed_v<Index>)
+        return index < Index(0);
+    else
+        return index == gwn_invalid_index<Index>();
+}
+
+/// \brief Return whether an index value is valid.
+template <class Index>
+[[nodiscard]] __host__ __device__ constexpr bool gwn_is_valid_index(Index const index) noexcept {
+    return !gwn_is_invalid_index(index);
+}
+
+/// \brief Return whether an index is valid and within `[0, bound)`.
+template <class Index>
+[[nodiscard]] __host__ __device__ constexpr bool
+gwn_index_in_bounds(Index const index, std::size_t const bound) noexcept {
+    return gwn_is_valid_index(index) && static_cast<std::size_t>(index) < bound;
 }
 
 /// \brief High-level status categories exposed by the public API.

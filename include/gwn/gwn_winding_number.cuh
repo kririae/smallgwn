@@ -33,25 +33,22 @@ __device__ inline Real gwn_triangle_solid_angle_from_primitive(
     gwn_geometry_accessor<Real, Index> const &geometry, Index const primitive_id,
     gwn_vec3<Real> const &query
 ) noexcept {
-    if (primitive_id < Index(0) ||
-        static_cast<std::size_t>(primitive_id) >= geometry.triangle_count()) {
+    if (!gwn_index_in_bounds(primitive_id, geometry.triangle_count()))
         return Real(0);
-    }
 
     std::size_t const triangle_id = static_cast<std::size_t>(primitive_id);
     Index const ia = geometry.tri_i0[triangle_id];
     Index const ib = geometry.tri_i1[triangle_id];
     Index const ic = geometry.tri_i2[triangle_id];
-    if (ia < Index(0) || ib < Index(0) || ic < Index(0))
+    if (!gwn_index_in_bounds(ia, geometry.vertex_count()) ||
+        !gwn_index_in_bounds(ib, geometry.vertex_count()) ||
+        !gwn_index_in_bounds(ic, geometry.vertex_count())) {
         return Real(0);
+    }
 
     std::size_t const a_index = static_cast<std::size_t>(ia);
     std::size_t const b_index = static_cast<std::size_t>(ib);
     std::size_t const c_index = static_cast<std::size_t>(ic);
-    if (a_index >= geometry.vertex_count() || b_index >= geometry.vertex_count() ||
-        c_index >= geometry.vertex_count()) {
-        return Real(0);
-    }
 
     gwn_vec3<Real> const a(
         geometry.vertex_x[a_index], geometry.vertex_y[a_index], geometry.vertex_z[a_index]
@@ -135,10 +132,8 @@ __device__ inline Real gwn_winding_number_point_bvh_exact(
     if (bvh.root_kind == gwn_bvh_child_kind::k_leaf) {
         for (Index primitive_offset = 0; primitive_offset < bvh.root_count; ++primitive_offset) {
             Index const sorted_primitive_index = bvh.root_index + primitive_offset;
-            if (sorted_primitive_index < Index(0) ||
-                static_cast<std::size_t>(sorted_primitive_index) >= bvh.primitive_indices.size()) {
+            if (!gwn_index_in_bounds(sorted_primitive_index, bvh.primitive_indices.size()))
                 continue;
-            }
             Index const primitive_index =
                 bvh.primitive_indices[static_cast<std::size_t>(sorted_primitive_index)];
             omega_sum += gwn_triangle_solid_angle_from_primitive<Real, Index>(
@@ -154,7 +149,7 @@ __device__ inline Real gwn_winding_number_point_bvh_exact(
     stack[stack_size++] = bvh.root_index;
     while (stack_size > 0) {
         Index const node_index = stack[--stack_size];
-        if (node_index < Index(0) || static_cast<std::size_t>(node_index) >= bvh.nodes.size())
+        if (!gwn_index_in_bounds(node_index, bvh.nodes.size()))
             continue;
 
         gwn_bvh_topology_node_soa<Width, Index> const &node =
@@ -179,11 +174,8 @@ __device__ inline Real gwn_winding_number_point_bvh_exact(
             Index const count = node.child_count[child_slot];
             for (Index primitive_offset = 0; primitive_offset < count; ++primitive_offset) {
                 Index const sorted_primitive_index = begin + primitive_offset;
-                if (sorted_primitive_index < Index(0) ||
-                    static_cast<std::size_t>(sorted_primitive_index) >=
-                        bvh.primitive_indices.size()) {
+                if (!gwn_index_in_bounds(sorted_primitive_index, bvh.primitive_indices.size()))
                     continue;
-                }
                 Index const primitive_index =
                     bvh.primitive_indices[static_cast<std::size_t>(sorted_primitive_index)];
                 omega_sum += gwn_triangle_solid_angle_from_primitive<Real, Index>(
@@ -318,7 +310,7 @@ __device__ inline Real gwn_winding_number_point_bvh_taylor(
     stack[stack_size++] = bvh.root_index;
     while (stack_size > 0) {
         Index const node_index = stack[--stack_size];
-        if (node_index < Index(0) || static_cast<std::size_t>(node_index) >= bvh.nodes.size())
+        if (!gwn_index_in_bounds(node_index, bvh.nodes.size()))
             continue;
 
         gwn_bvh_topology_node_soa<Width, Index> const &node =
@@ -391,11 +383,8 @@ __device__ inline Real gwn_winding_number_point_bvh_taylor(
             gwn_vec3<Real> const query(qx, qy, qz);
             for (Index primitive_offset = 0; primitive_offset < count; ++primitive_offset) {
                 Index const sorted_primitive_index = begin + primitive_offset;
-                if (sorted_primitive_index < Index(0) ||
-                    static_cast<std::size_t>(sorted_primitive_index) >=
-                        bvh.primitive_indices.size()) {
+                if (!gwn_index_in_bounds(sorted_primitive_index, bvh.primitive_indices.size()))
                     continue;
-                }
                 Index const primitive_index =
                     bvh.primitive_indices[static_cast<std::size_t>(sorted_primitive_index)];
                 omega_sum += gwn_triangle_solid_angle_from_primitive<Real, Index>(
@@ -472,7 +461,7 @@ gwn_make_winding_number_batch_bvh_taylor_functor(
 } // namespace detail
 
 /// \brief Compute winding numbers for a batch of query points by direct triangle summation.
-template <class Real, class Index = std::int64_t>
+template <class Real, class Index = std::uint32_t>
 gwn_status gwn_compute_winding_number_batch(
     gwn_geometry_accessor<Real, Index> const &geometry, cuda::std::span<Real const> const query_x,
     cuda::std::span<Real const> const query_y, cuda::std::span<Real const> const query_z,
@@ -508,7 +497,7 @@ gwn_status gwn_compute_winding_number_batch(
 
 /// \brief Compute winding numbers for a batch using exact BVH traversal.
 template <
-    int Width, class Real, class Index = std::int64_t,
+    int Width, class Real, class Index = std::uint32_t,
     int StackCapacity = k_gwn_default_traversal_stack_capacity>
 gwn_status gwn_compute_winding_number_batch_bvh_exact(
     gwn_geometry_accessor<Real, Index> const &geometry,
@@ -549,7 +538,7 @@ gwn_status gwn_compute_winding_number_batch_bvh_exact(
 
 /// \brief Width-4 convenience wrapper for exact BVH batch queries.
 template <
-    class Real, class Index = std::int64_t,
+    class Real, class Index = std::uint32_t,
     int StackCapacity = k_gwn_default_traversal_stack_capacity>
 gwn_status gwn_compute_winding_number_batch_bvh_exact(
     gwn_geometry_accessor<Real, Index> const &geometry, gwn_bvh_accessor<Real, Index> const &bvh,
@@ -566,7 +555,7 @@ gwn_status gwn_compute_winding_number_batch_bvh_exact(
 ///
 /// \remark Falls back to exact child descent per node when the approximation criterion fails.
 template <
-    int Order, int Width, class Real, class Index = std::int64_t,
+    int Order, int Width, class Real, class Index = std::uint32_t,
     int StackCapacity = k_gwn_default_traversal_stack_capacity>
 gwn_status gwn_compute_winding_number_batch_bvh_taylor(
     gwn_geometry_accessor<Real, Index> const &geometry,
@@ -618,7 +607,7 @@ gwn_status gwn_compute_winding_number_batch_bvh_taylor(
 
 /// \brief Width-4 convenience wrapper for Taylor BVH batch queries.
 template <
-    int Order, class Real, class Index = std::int64_t,
+    int Order, class Real, class Index = std::uint32_t,
     int StackCapacity = k_gwn_default_traversal_stack_capacity>
 gwn_status gwn_compute_winding_number_batch_bvh_taylor(
     gwn_geometry_accessor<Real, Index> const &geometry, gwn_bvh_accessor<Real, Index> const &bvh,

@@ -40,7 +40,7 @@ template <int Width, class Index> struct gwn_collapse_summarize_pass_functor {
 
         int depth = 0;
         Index cursor = internal_id;
-        while (cursor >= Index(0) && cursor != root_internal_index) {
+        while (gwn_is_valid_index(cursor) && cursor != root_internal_index) {
             std::size_t const cursor_u = static_cast<std::size_t>(cursor);
             if (cursor_u >= internal_parent.size())
                 return;
@@ -86,8 +86,7 @@ template <int Width, class Index> struct gwn_collapse_emit_nodes_pass_functor {
 
         gwn_bvh_topology_node_soa<Width, Index> output_node{};
         Index const binary_root = wide_node_binary_root[wide_node_id_u];
-        if (binary_root < Index(0) ||
-            static_cast<std::size_t>(binary_root) >= binary_nodes.size()) {
+        if (!gwn_index_in_bounds(binary_root, binary_nodes.size())) {
             GWN_PRAGMA_UNROLL
             for (int slot = 0; slot < Width; ++slot)
                 gwn_set_invalid_child(output_node, slot);
@@ -125,8 +124,8 @@ template <int Width, class Index> struct gwn_collapse_emit_nodes_pass_functor {
                 continue;
             }
 
-            if (kind != gwn_bvh_child_kind::k_internal || ref.index < Index(0) ||
-                static_cast<std::size_t>(ref.index) >= binary_nodes.size()) {
+            if (kind != gwn_bvh_child_kind::k_internal ||
+                !gwn_index_in_bounds(ref.index, binary_nodes.size())) {
                 gwn_set_invalid_child(output_node, written_children++);
                 if (overflow_flag != nullptr)
                     atomicExch(overflow_flag, 1u);
@@ -147,8 +146,7 @@ template <int Width, class Index> struct gwn_collapse_emit_nodes_pass_functor {
                 }
 
                 Index const child_wide_id = internal_wide_node_id[internal_index_u];
-                if (child_wide_id < Index(0) ||
-                    static_cast<std::size_t>(child_wide_id) >= output_nodes.size()) {
+                if (!gwn_index_in_bounds(child_wide_id, output_nodes.size())) {
                     gwn_set_invalid_child(output_node, written_children++);
                     if (overflow_flag != nullptr)
                         atomicExch(overflow_flag, 1u);

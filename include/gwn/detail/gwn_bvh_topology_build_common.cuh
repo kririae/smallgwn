@@ -135,10 +135,9 @@ template <class Real, class Index> struct gwn_compute_triangle_aabbs_and_morton_
         Index const ia = geometry.tri_i0[triangle_id];
         Index const ib = geometry.tri_i1[triangle_id];
         Index const ic = geometry.tri_i2[triangle_id];
-        if (ia < Index(0) || ib < Index(0) || ic < Index(0) ||
-            static_cast<std::size_t>(ia) >= geometry.vertex_count() ||
-            static_cast<std::size_t>(ib) >= geometry.vertex_count() ||
-            static_cast<std::size_t>(ic) >= geometry.vertex_count()) {
+        if (!gwn_index_in_bounds(ia, geometry.vertex_count()) ||
+            !gwn_index_in_bounds(ib, geometry.vertex_count()) ||
+            !gwn_index_in_bounds(ic, geometry.vertex_count())) {
             primitive_aabbs[triangle_id] =
                 gwn_aabb<Real>{Real(0), Real(0), Real(0), Real(0), Real(0), Real(0)};
             morton_codes[triangle_id] = 0;

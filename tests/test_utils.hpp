@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -22,7 +23,7 @@ namespace gwn::tests {
 // ---------------------------------------------------------------------------
 
 using Real = float;
-using Index = std::int64_t;
+using Index = std::uint32_t;
 
 // ---------------------------------------------------------------------------
 // SoA host mesh.
@@ -124,18 +125,25 @@ parse_obj_index(std::string_view const token, std::size_t const vertex_count) {
     if (index_token.empty())
         return std::nullopt;
 
-    Index raw = 0;
+    std::int64_t raw = 0;
     char const *begin = index_token.data();
     char const *end = index_token.data() + index_token.size();
     auto const [ptr, ec] = std::from_chars(begin, end, raw);
     if (ec != std::errc() || ptr != end || raw == 0)
         return std::nullopt;
 
-    Index const resolved = (raw > 0) ? (raw - 1) : (static_cast<Index>(vertex_count) + raw);
-    if (resolved < 0 || static_cast<std::size_t>(resolved) >= vertex_count)
+    std::int64_t const vertex_count_i64 = static_cast<std::int64_t>(vertex_count);
+    std::int64_t const resolved = (raw > 0) ? (raw - 1) : (vertex_count_i64 + raw);
+    if (resolved < 0)
         return std::nullopt;
 
-    return resolved;
+    std::uint64_t const resolved_u64 = static_cast<std::uint64_t>(resolved);
+    if (resolved_u64 >= static_cast<std::uint64_t>(vertex_count) ||
+        resolved_u64 > static_cast<std::uint64_t>(std::numeric_limits<Index>::max())) {
+        return std::nullopt;
+    }
+
+    return static_cast<Index>(resolved_u64);
 }
 
 [[nodiscard]] inline std::optional<HostMesh> load_obj_mesh(std::filesystem::path const &path) {

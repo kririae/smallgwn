@@ -75,25 +75,22 @@ __device__ inline bool gwn_compute_triangle_aabb(
     gwn_geometry_accessor<Real, Index> const &geometry, Index const primitive_id,
     gwn_aabb<Real> &bounds
 ) noexcept {
-    if (primitive_id < Index(0) ||
-        static_cast<std::size_t>(primitive_id) >= geometry.triangle_count()) {
+    if (!gwn_index_in_bounds(primitive_id, geometry.triangle_count()))
         return false;
-    }
 
     std::size_t const triangle_id = static_cast<std::size_t>(primitive_id);
     Index const ia = geometry.tri_i0[triangle_id];
     Index const ib = geometry.tri_i1[triangle_id];
     Index const ic = geometry.tri_i2[triangle_id];
-    if (ia < Index(0) || ib < Index(0) || ic < Index(0))
+    if (!gwn_index_in_bounds(ia, geometry.vertex_count()) ||
+        !gwn_index_in_bounds(ib, geometry.vertex_count()) ||
+        !gwn_index_in_bounds(ic, geometry.vertex_count())) {
         return false;
+    }
 
     std::size_t const a_index = static_cast<std::size_t>(ia);
     std::size_t const b_index = static_cast<std::size_t>(ib);
     std::size_t const c_index = static_cast<std::size_t>(ic);
-    if (a_index >= geometry.vertex_count() || b_index >= geometry.vertex_count() ||
-        c_index >= geometry.vertex_count()) {
-        return false;
-    }
 
     Real const ax = geometry.vertex_x[a_index];
     Real const ay = geometry.vertex_y[a_index];
@@ -118,25 +115,22 @@ __device__ inline bool gwn_compute_triangle_taylor_raw_moment(
     gwn_geometry_accessor<Real, Index> const &geometry, Index const primitive_id,
     gwn_device_taylor_moment<Order, Real> &raw_moment
 ) noexcept {
-    if (primitive_id < Index(0) ||
-        static_cast<std::size_t>(primitive_id) >= geometry.triangle_count()) {
+    if (!gwn_index_in_bounds(primitive_id, geometry.triangle_count()))
         return false;
-    }
 
     std::size_t const triangle_id = static_cast<std::size_t>(primitive_id);
     Index const ia = geometry.tri_i0[triangle_id];
     Index const ib = geometry.tri_i1[triangle_id];
     Index const ic = geometry.tri_i2[triangle_id];
-    if (ia < Index(0) || ib < Index(0) || ic < Index(0))
+    if (!gwn_index_in_bounds(ia, geometry.vertex_count()) ||
+        !gwn_index_in_bounds(ib, geometry.vertex_count()) ||
+        !gwn_index_in_bounds(ic, geometry.vertex_count())) {
         return false;
+    }
 
     std::size_t const a_index = static_cast<std::size_t>(ia);
     std::size_t const b_index = static_cast<std::size_t>(ib);
     std::size_t const c_index = static_cast<std::size_t>(ic);
-    if (a_index >= geometry.vertex_count() || b_index >= geometry.vertex_count() ||
-        c_index >= geometry.vertex_count()) {
-        return false;
-    }
 
     Real const ax = geometry.vertex_x[a_index];
     Real const ay = geometry.vertex_y[a_index];
@@ -227,8 +221,7 @@ template <int Width, class Real, class Index> struct gwn_prepare_refit_topology_
             ++arity;
             if (kind == gwn_bvh_child_kind::k_internal) {
                 Index const child_index = node.child_index[child_slot];
-                if (child_index < Index(0) ||
-                    static_cast<std::size_t>(child_index) >= topology.nodes.size()) {
+                if (!gwn_index_in_bounds(child_index, topology.nodes.size())) {
                     mark_error();
                     continue;
                 }
@@ -240,7 +233,7 @@ template <int Width, class Real, class Index> struct gwn_prepare_refit_topology_
 
             Index const leaf_begin = node.child_index[child_slot];
             Index const leaf_count = node.child_count[child_slot];
-            if (leaf_begin < Index(0) || leaf_count < Index(0)) {
+            if (gwn_is_invalid_index(leaf_begin) || gwn_is_invalid_index(leaf_count)) {
                 mark_error();
                 continue;
             }
@@ -282,8 +275,6 @@ template <int Width, class Real, class Index> struct gwn_aabb_refit_traits {
         payload = {};
         for (Index primitive_offset = 0; primitive_offset < count; ++primitive_offset) {
             Index const sorted_slot = begin + primitive_offset;
-            if (sorted_slot < Index(0))
-                continue;
             std::size_t const sorted_slot_u = static_cast<std::size_t>(sorted_slot);
             if (sorted_slot_u >= topology.primitive_indices.size())
                 continue;
@@ -358,8 +349,6 @@ template <int Order, int Width, class Real, class Index> struct gwn_moment_refit
         payload = {};
         for (Index primitive_offset = 0; primitive_offset < count; ++primitive_offset) {
             Index const sorted_slot = begin + primitive_offset;
-            if (sorted_slot < Index(0))
-                continue;
             std::size_t const sorted_slot_u = static_cast<std::size_t>(sorted_slot);
             if (sorted_slot_u >= topology.primitive_indices.size())
                 continue;
@@ -531,7 +520,7 @@ template <class Traits, int Width, class Real, class Index> struct gwn_refit_fro
     __device__ void propagate_up(
         Index current_parent, std::uint8_t current_slot, payload_type current_payload
     ) const noexcept {
-        while (current_parent >= Index(0)) {
+        while (gwn_is_valid_index(current_parent)) {
             std::size_t const parent_id = static_cast<std::size_t>(current_parent);
             if (parent_id >= topology.nodes.size() || parent_id >= arrays.internal_parent.size() ||
                 parent_id >= arrays.internal_parent_slot.size() ||
@@ -575,7 +564,7 @@ template <class Traits, int Width, class Real, class Index> struct gwn_refit_fro
             }
 
             Index const parent_parent = arrays.internal_parent[parent_id];
-            if (parent_parent < Index(0))
+            if (gwn_is_invalid_index(parent_parent))
                 return;
 
             std::uint8_t const parent_parent_slot = arrays.internal_parent_slot[parent_id];
