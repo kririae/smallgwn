@@ -25,8 +25,10 @@ template <class Index> struct gwn_build_binary_topology_functor {
     cuda::std::span<Index> leaf_parent{};
     cuda::std::span<std::uint8_t> leaf_parent_slot{};
 
-    [[nodiscard]] __device__ inline int delta(Index const i, Index const j) const noexcept {
-        if (!gwn_index_in_bounds(j, morton_codes.size()))
+    [[nodiscard]] __device__ inline int
+    delta(std::int64_t const i, std::int64_t const j) const noexcept {
+        std::int64_t const leaf_count = static_cast<std::int64_t>(morton_codes.size());
+        if (j < 0 || j >= leaf_count)
             return -1;
 
         std::uint32_t const code_i = morton_codes[static_cast<std::size_t>(i)];
@@ -43,77 +45,72 @@ template <class Index> struct gwn_build_binary_topology_functor {
     }
 
     __device__ void operator()(std::size_t const internal_id_u) const {
-        Index const internal_id = static_cast<Index>(internal_id_u);
-        Index const leaf_count = static_cast<Index>(morton_codes.size());
-        if (leaf_count <= Index(1))
+        std::int64_t const internal_id = static_cast<std::int64_t>(internal_id_u);
+        std::int64_t const leaf_count = static_cast<std::int64_t>(morton_codes.size());
+        if (leaf_count <= 1)
             return;
+        Index const internal_id_index = static_cast<Index>(internal_id);
 
-        int const direction = (delta(internal_id, internal_id + Index(1)) -
-                                   delta(internal_id, internal_id - Index(1)) >=
-                               0)
-                                  ? 1
-                                  : -1;
-        int const delta_min = delta(internal_id, internal_id - static_cast<Index>(direction));
+        int const direction =
+            (delta(internal_id, internal_id + 1) - delta(internal_id, internal_id - 1) >= 0) ? 1
+                                                                                             : -1;
+        int const delta_min = delta(internal_id, internal_id - direction);
 
-        Index range_length_max = Index(2);
-        while (delta(internal_id, internal_id + range_length_max * static_cast<Index>(direction)) >
-               delta_min) {
+        std::int64_t range_length_max = 2;
+        while (delta(internal_id, internal_id + range_length_max * direction) > delta_min)
             range_length_max <<= 1;
-        }
 
-        Index range_length = Index(0);
-        for (Index step = range_length_max >> 1; step > 0; step >>= 1) {
-            if (delta(
-                    internal_id, internal_id + (range_length + step) * static_cast<Index>(direction)
-                ) > delta_min) {
+        std::int64_t range_length = 0;
+        for (std::int64_t step = range_length_max >> 1; step > 0; step >>= 1)
+            if (delta(internal_id, internal_id + (range_length + step) * direction) > delta_min)
                 range_length += step;
-            }
-        }
 
-        Index const j = internal_id + range_length * static_cast<Index>(direction);
-        Index const first = std::min(internal_id, j);
-        Index const last = std::max(internal_id, j);
+        std::int64_t const j = internal_id + range_length * direction;
+        std::int64_t const first = std::min(internal_id, j);
+        std::int64_t const last = std::max(internal_id, j);
 
         int const delta_node = delta(first, last);
-        Index split = first;
-        Index step = last - first;
+        std::int64_t split = first;
+        std::int64_t step = last - first;
         do {
-            step = (step + Index(1)) >> 1;
-            Index const candidate = split + step;
+            step = (step + 1) >> 1;
+            std::int64_t const candidate = split + step;
             if (candidate < last && delta(first, candidate) > delta_node)
                 split = candidate;
-        } while (step > Index(1));
+        } while (step > 1);
 
         gwn_binary_node<Index> node{};
+        Index const split_index = static_cast<Index>(split);
+        Index const split_plus_one_index = static_cast<Index>(split + 1);
         if (split == first) {
             node.left.kind = static_cast<std::uint8_t>(gwn_bvh_child_kind::k_leaf);
-            node.left.index = split;
+            node.left.index = split_index;
         } else {
             node.left.kind = static_cast<std::uint8_t>(gwn_bvh_child_kind::k_internal);
-            node.left.index = split;
+            node.left.index = split_index;
         }
 
-        if (split + Index(1) == last) {
+        if ((split + 1) == last) {
             node.right.kind = static_cast<std::uint8_t>(gwn_bvh_child_kind::k_leaf);
-            node.right.index = split + Index(1);
+            node.right.index = split_plus_one_index;
         } else {
             node.right.kind = static_cast<std::uint8_t>(gwn_bvh_child_kind::k_internal);
-            node.right.index = split + Index(1);
+            node.right.index = split_plus_one_index;
         }
 
         binary_nodes[internal_id_u] = node;
         if (node.left.kind == static_cast<std::uint8_t>(gwn_bvh_child_kind::k_internal)) {
-            internal_parent[static_cast<std::size_t>(node.left.index)] = internal_id;
+            internal_parent[static_cast<std::size_t>(node.left.index)] = internal_id_index;
             internal_parent_slot[static_cast<std::size_t>(node.left.index)] = 0;
         } else {
-            leaf_parent[static_cast<std::size_t>(node.left.index)] = internal_id;
+            leaf_parent[static_cast<std::size_t>(node.left.index)] = internal_id_index;
             leaf_parent_slot[static_cast<std::size_t>(node.left.index)] = 0;
         }
         if (node.right.kind == static_cast<std::uint8_t>(gwn_bvh_child_kind::k_internal)) {
-            internal_parent[static_cast<std::size_t>(node.right.index)] = internal_id;
+            internal_parent[static_cast<std::size_t>(node.right.index)] = internal_id_index;
             internal_parent_slot[static_cast<std::size_t>(node.right.index)] = 1;
         } else {
-            leaf_parent[static_cast<std::size_t>(node.right.index)] = internal_id;
+            leaf_parent[static_cast<std::size_t>(node.right.index)] = internal_id_index;
             leaf_parent_slot[static_cast<std::size_t>(node.right.index)] = 1;
         }
     }
