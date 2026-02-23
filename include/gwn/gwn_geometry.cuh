@@ -166,8 +166,12 @@ gwn_status gwn_upload_accessor(
 
 } // namespace detail
 
+/// \brief Owning host-side RAII wrapper for geometry accessor storage.
+///
+/// \remark `clear()` and destructor release memory on the currently bound stream.
+/// \remark The bound stream is updated after successful `upload(..., stream)`.
 template <class Real = float, class Index = std::int64_t>
-class gwn_geometry_object final : public gwn_noncopyable {
+class gwn_geometry_object final : public gwn_noncopyable, public gwn_stream_mixin {
     static_assert(std::is_floating_point_v<Real>, "Real must be a floating-point type.");
     static_assert(std::is_integral_v<Index>, "Index must be an integral type.");
 
@@ -203,6 +207,7 @@ public:
         cudaStream_t const stream = gwn_default_stream()
     ) noexcept {
         gwn_geometry_object staging;
+        staging.set_stream(stream);
         GWN_RETURN_ON_ERROR(
             detail::gwn_upload_accessor(staging.accessor_, x, y, z, i0, i1, i2, stream)
         );
@@ -211,8 +216,11 @@ public:
         return gwn_status::ok();
     }
 
-    void clear(cudaStream_t const stream = gwn_default_stream()) noexcept {
-        detail::gwn_release_accessor(accessor_, stream);
+    void clear() noexcept { detail::gwn_release_accessor(accessor_, stream()); }
+
+    void clear(cudaStream_t const clear_stream) noexcept {
+        set_stream(clear_stream);
+        detail::gwn_release_accessor(accessor_, stream());
     }
 
     [[nodiscard]] accessor_type const &accessor() const noexcept { return accessor_; }
@@ -222,6 +230,7 @@ public:
     friend void swap(gwn_geometry_object &lhs, gwn_geometry_object &rhs) noexcept {
         using std::swap;
         swap(lhs.accessor_, rhs.accessor_);
+        swap(static_cast<gwn_stream_mixin &>(lhs), static_cast<gwn_stream_mixin &>(rhs));
     }
 
 private:

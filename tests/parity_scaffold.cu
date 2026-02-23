@@ -28,6 +28,74 @@ bool is_cuda_runtime_unavailable_message(std::string_view const message) {
 
 } // namespace
 
+TEST(smallgwn_parity_scaffold, stream_bound_objects_remember_bound_stream) {
+    cudaStream_t stream_a = nullptr;
+    cudaError_t result = cudaStreamCreateWithFlags(&stream_a, cudaStreamNonBlocking);
+    if (is_cuda_runtime_unavailable(result))
+        GTEST_SKIP() << "CUDA runtime unavailable: " << cudaGetErrorString(result);
+    ASSERT_EQ(cudaSuccess, result);
+
+    cudaStream_t stream_b = nullptr;
+    result = cudaStreamCreateWithFlags(&stream_b, cudaStreamNonBlocking);
+    ASSERT_EQ(cudaSuccess, result);
+
+    gwn::gwn_geometry_object<float, std::int64_t> geometry;
+    EXPECT_EQ(geometry.stream(), gwn::gwn_default_stream());
+    geometry.set_stream(stream_a);
+    EXPECT_EQ(geometry.stream(), stream_a);
+    geometry.clear(stream_b);
+    EXPECT_EQ(geometry.stream(), stream_b);
+
+    gwn::gwn_bvh_object<float, std::int64_t> bvh;
+    EXPECT_EQ(bvh.stream(), gwn::gwn_default_stream());
+    bvh.set_stream(stream_a);
+    EXPECT_EQ(bvh.stream(), stream_a);
+    bvh.clear(stream_b);
+    EXPECT_EQ(bvh.stream(), stream_b);
+
+    gwn::gwn_bvh_data_object<float, std::int64_t> data_tree;
+    EXPECT_EQ(data_tree.stream(), gwn::gwn_default_stream());
+    data_tree.set_stream(stream_a);
+    EXPECT_EQ(data_tree.stream(), stream_a);
+    data_tree.clear(stream_b);
+    EXPECT_EQ(data_tree.stream(), stream_b);
+
+    ASSERT_EQ(cudaSuccess, cudaStreamSynchronize(stream_a));
+    ASSERT_EQ(cudaSuccess, cudaStreamSynchronize(stream_b));
+    ASSERT_EQ(cudaSuccess, cudaStreamDestroy(stream_a));
+    ASSERT_EQ(cudaSuccess, cudaStreamDestroy(stream_b));
+}
+
+TEST(smallgwn_parity_scaffold, device_array_remembers_stream_for_clear) {
+    cudaStream_t stream_a = nullptr;
+    cudaError_t result = cudaStreamCreateWithFlags(&stream_a, cudaStreamNonBlocking);
+    if (is_cuda_runtime_unavailable(result))
+        GTEST_SKIP() << "CUDA runtime unavailable: " << cudaGetErrorString(result);
+    ASSERT_EQ(cudaSuccess, result);
+
+    cudaStream_t stream_b = nullptr;
+    result = cudaStreamCreateWithFlags(&stream_b, cudaStreamNonBlocking);
+    ASSERT_EQ(cudaSuccess, result);
+
+    {
+        gwn::gwn_device_array<float> device_buffer;
+        EXPECT_EQ(device_buffer.stream(), gwn::gwn_default_stream());
+
+        gwn::gwn_status const resize_status = device_buffer.resize(32, stream_a);
+        ASSERT_TRUE(resize_status.is_ok()) << resize_status.message();
+        EXPECT_EQ(device_buffer.stream(), stream_a);
+
+        gwn::gwn_status const clear_status = device_buffer.clear(stream_b);
+        ASSERT_TRUE(clear_status.is_ok()) << clear_status.message();
+        EXPECT_EQ(device_buffer.stream(), stream_b);
+    }
+
+    ASSERT_EQ(cudaSuccess, cudaStreamSynchronize(stream_a));
+    ASSERT_EQ(cudaSuccess, cudaStreamSynchronize(stream_b));
+    ASSERT_EQ(cudaSuccess, cudaStreamDestroy(stream_a));
+    ASSERT_EQ(cudaSuccess, cudaStreamDestroy(stream_b));
+}
+
 TEST(smallgwn_parity_scaffold, cpu_reference_matches_repository_triangle_oracle) {
     constexpr float k_pi = 3.14159265358979323846f;
     constexpr float k_epsilon = 1e-6f;

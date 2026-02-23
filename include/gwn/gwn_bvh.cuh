@@ -237,8 +237,10 @@ void gwn_release_bvh_data_accessor(
 } // namespace detail
 
 /// \brief Owning host-side RAII wrapper for a topology tree accessor.
+///
+/// \remark `clear()` and destructor release memory on the currently bound stream.
 template <int Width, class Real = float, class Index = std::int64_t>
-class gwn_bvh_topology_object final : public gwn_noncopyable {
+class gwn_bvh_topology_object final : public gwn_noncopyable, public gwn_stream_mixin {
 public:
     static_assert(Width >= 2, "BVH object width must be at least 2.");
 
@@ -257,8 +259,11 @@ public:
 
     ~gwn_bvh_topology_object() { clear(); }
 
-    void clear(cudaStream_t const stream = gwn_default_stream()) noexcept {
-        detail::gwn_release_bvh_topology_accessor(accessor_, stream);
+    void clear() noexcept { detail::gwn_release_bvh_topology_accessor(accessor_, stream()); }
+
+    void clear(cudaStream_t const clear_stream) noexcept {
+        set_stream(clear_stream);
+        detail::gwn_release_bvh_topology_accessor(accessor_, stream());
     }
 
     [[nodiscard]] accessor_type &accessor() noexcept { return accessor_; }
@@ -268,6 +273,7 @@ public:
     friend void swap(gwn_bvh_topology_object &lhs, gwn_bvh_topology_object &rhs) noexcept {
         using std::swap;
         swap(lhs.accessor_, rhs.accessor_);
+        swap(static_cast<gwn_stream_mixin &>(lhs), static_cast<gwn_stream_mixin &>(rhs));
     }
 
 private:
@@ -275,8 +281,10 @@ private:
 };
 
 /// \brief Owning host-side RAII wrapper for a BVH data tree accessor.
+///
+/// \remark `clear()` and destructor release memory on the currently bound stream.
 template <int Width, class Real = float, class Index = std::int64_t>
-class gwn_bvh_data_tree_object final : public gwn_noncopyable {
+class gwn_bvh_data_tree_object final : public gwn_noncopyable, public gwn_stream_mixin {
 public:
     static_assert(Width >= 2, "BVH object width must be at least 2.");
 
@@ -295,8 +303,11 @@ public:
 
     ~gwn_bvh_data_tree_object() { clear(); }
 
-    void clear(cudaStream_t const stream = gwn_default_stream()) noexcept {
-        detail::gwn_release_bvh_data_accessor(accessor_, stream);
+    void clear() noexcept { detail::gwn_release_bvh_data_accessor(accessor_, stream()); }
+
+    void clear(cudaStream_t const clear_stream) noexcept {
+        set_stream(clear_stream);
+        detail::gwn_release_bvh_data_accessor(accessor_, stream());
     }
 
     [[nodiscard]] accessor_type &accessor() noexcept { return accessor_; }
@@ -306,6 +317,7 @@ public:
     friend void swap(gwn_bvh_data_tree_object &lhs, gwn_bvh_data_tree_object &rhs) noexcept {
         using std::swap;
         swap(lhs.accessor_, rhs.accessor_);
+        swap(static_cast<gwn_stream_mixin &>(lhs), static_cast<gwn_stream_mixin &>(rhs));
     }
 
 private:

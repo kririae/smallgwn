@@ -26,6 +26,30 @@ public:
     gwn_noncopyable &operator=(gwn_noncopyable const &) = delete;
 };
 
+/// \brief Default stream used by API helpers.
+[[nodiscard]] inline cudaStream_t gwn_default_stream() noexcept;
+
+/// \brief Mixin that binds an object to a CUDA stream.
+///
+/// \remark This mixin only stores stream state and accessor methods.
+/// \remark It does not own memory and does not perform synchronization.
+class gwn_stream_mixin {
+public:
+    gwn_stream_mixin() noexcept = default;
+    explicit gwn_stream_mixin(cudaStream_t const stream) noexcept : stream_(stream) {}
+
+    [[nodiscard]] cudaStream_t stream() const noexcept { return stream_; }
+    void set_stream(cudaStream_t const stream) noexcept { stream_ = stream; }
+
+    friend void swap(gwn_stream_mixin &lhs, gwn_stream_mixin &rhs) noexcept {
+        using std::swap;
+        swap(lhs.stream_, rhs.stream_);
+    }
+
+private:
+    cudaStream_t stream_ = gwn_default_stream();
+};
+
 /// \brief Returns true when span data pointer is valid for its size.
 template <class T>
 [[nodiscard]] __host__ __device__ constexpr bool
@@ -185,7 +209,6 @@ inline gwn_status gwn_cuda_to_status(
     return gwn_status::cuda_runtime_error(cuda_result, loc);
 }
 
-/// \brief Default stream used by API helpers.
 [[nodiscard]] inline cudaStream_t gwn_default_stream() noexcept { return cudaStreamLegacy; }
 
 /// \brief Allocate device memory from CUDA stream-ordered allocator only.
@@ -218,11 +241,13 @@ gwn_cuda_free(void *ptr, cudaStream_t const stream = gwn_default_stream()) noexc
 /// \remark Allocation and release use `cudaMallocAsync` / `cudaFreeAsync` only.
 /// \remark `resize()` does not preserve old contents.
 /// \remark Assignment uses copy-and-swap; copy construction remains disabled.
+/// \remark `clear()` and destructor release on the currently bound stream.
 template <class T> class gwn_device_array final : public gwn_noncopyable {
 public:
     using value_type = T;
 
     gwn_device_array() = default;
+    explicit gwn_device_array(cudaStream_t const stream) noexcept : stream_(stream) {}
 
     gwn_device_array(gwn_device_array &&other) noexcept { swap(*this, other); }
 
@@ -239,8 +264,10 @@ public:
 
     [[nodiscard]] gwn_status
     resize(std::size_t const count, cudaStream_t const stream = gwn_default_stream()) noexcept {
-        if (count == size_)
+        if (count == size_) {
+            stream_ = stream;
             return gwn_status::ok();
+        }
         if (count == 0)
             return clear(stream);
 
@@ -262,12 +289,16 @@ public:
 
         data_ = static_cast<T *>(new_ptr);
         size_ = count;
+        stream_ = stream;
         new_ptr = nullptr;
         cleanup_new_ptr.release();
         return gwn_status::ok();
     }
 
-    [[nodiscard]] gwn_status clear(cudaStream_t const stream = gwn_default_stream()) noexcept {
+    [[nodiscard]] gwn_status clear() noexcept { return clear(stream_); }
+
+    [[nodiscard]] gwn_status clear(cudaStream_t const stream) noexcept {
+        stream_ = stream;
         if (data_ == nullptr) {
             size_ = 0;
             return gwn_status::ok();
@@ -280,6 +311,9 @@ public:
         size_ = 0;
         return gwn_status::ok();
     }
+
+    [[nodiscard]] cudaStream_t stream() const noexcept { return stream_; }
+    void set_stream(cudaStream_t const stream) noexcept { stream_ = stream; }
 
     [[nodiscard]] gwn_status zero(cudaStream_t const stream = gwn_default_stream()) noexcept {
         if (empty())
@@ -332,11 +366,13 @@ public:
         using std::swap;
         swap(lhs.data_, rhs.data_);
         swap(lhs.size_, rhs.size_);
+        swap(lhs.stream_, rhs.stream_);
     }
 
 private:
     T *data_ = nullptr;
     std::size_t size_ = 0;
+    cudaStream_t stream_ = gwn_default_stream();
 };
 
 } // namespace gwn
