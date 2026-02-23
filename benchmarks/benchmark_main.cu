@@ -34,6 +34,20 @@ constexpr int k_default_stack_capacity = 32;
 constexpr bool k_default_stream_sync_per_iter = true;
 constexpr std::uint64_t k_default_seed = 0xB3A9E5D4ULL;
 
+enum class benchmark_topology_builder {
+    k_lbvh,
+    k_hploc,
+};
+
+[[nodiscard]] constexpr std::string_view
+to_string(benchmark_topology_builder const builder) noexcept {
+    switch (builder) {
+    case benchmark_topology_builder::k_lbvh: return "lbvh";
+    case benchmark_topology_builder::k_hploc: return "hploc";
+    }
+    return "unknown";
+}
+
 struct benchmark_cli_options {
     std::optional<std::filesystem::path> model_path{};
     std::optional<std::filesystem::path> model_dir{};
@@ -45,6 +59,7 @@ struct benchmark_cli_options {
     bool stream_sync_per_iter{k_default_stream_sync_per_iter};
     std::filesystem::path csv_path{"smallgwn_bench.csv"};
     std::uint64_t seed{k_default_seed};
+    benchmark_topology_builder topology_builder{benchmark_topology_builder::k_lbvh};
 };
 
 void print_usage(char const *argv0) {
@@ -64,6 +79,7 @@ void print_usage(char const *argv0) {
               << k_default_stack_capacity << ")\n"
               << "  --stream-sync-per-iter <0|1>  Sync stream every iteration (default: "
               << (k_default_stream_sync_per_iter ? 1 : 0) << ")\n"
+              << "  --builder <lbvh|hploc>        Topology builder (default: lbvh)\n"
               << "  --csv <path>                  CSV output path (default: smallgwn_bench.csv)\n"
               << "  --seed <u64>                  RNG seed (default: " << k_default_seed << ")\n"
               << "  --help                        Show this message\n";
@@ -198,6 +214,22 @@ parse_cli(int const argc, char const *const *argv, benchmark_cli_options &option
                 return parse_cli_result::k_error;
             }
             options.stream_sync_per_iter = (*value == "1");
+            continue;
+        }
+        if (arg == "--builder") {
+            auto const value = require_value(arg);
+            if (!value.has_value()) {
+                std::cerr << "Invalid --builder value.\n";
+                return parse_cli_result::k_error;
+            }
+            if (*value == "lbvh")
+                options.topology_builder = benchmark_topology_builder::k_lbvh;
+            else if (*value == "hploc")
+                options.topology_builder = benchmark_topology_builder::k_hploc;
+            else {
+                std::cerr << "Invalid --builder value (must be lbvh or hploc).\n";
+                return parse_cli_result::k_error;
+            }
             continue;
         }
         if (arg == "--csv") {
@@ -411,6 +443,7 @@ int main(int argc, char **argv) try {
     csv_context.timestamp = gwn::bench::gwn_now_timestamp_string();
     csv_context.gpu_name = device_prop.name;
     csv_context.cuda_runtime_version = runtime_version;
+    csv_context.topology_builder = std::string(to_string(options.topology_builder));
     csv_context.accuracy_scale = options.accuracy_scale;
     csv_context.stack_capacity = options.stack_capacity;
     csv_context.seed = options.seed;
@@ -421,6 +454,7 @@ int main(int argc, char **argv) try {
     std::cout << "  Models: " << models.size() << ", Queries/model: " << options.query_count
               << ", Warmup: " << options.warmup_iters << ", Iters: " << options.measure_iters
               << "\n";
+    std::cout << "  Topology builder: " << to_string(options.topology_builder) << "\n";
     std::cout << "  CSV: " << options.csv_path.string() << "\n\n";
 
     std::size_t successful_models = 0;
@@ -496,6 +530,42 @@ int main(int argc, char **argv) try {
         gwn::gwn_bvh_object<Real, Index> topology;
         gwn::gwn_bvh_aabb_object<Real, Index> aabb_tree;
         gwn::gwn_bvh_moment_object<Real, Index> moment_tree;
+        std::string const builder_name{to_string(options.topology_builder)};
+
+        auto build_topology = [&]() noexcept -> gwn::gwn_status {
+            if (options.topology_builder == benchmark_topology_builder::k_hploc) {
+                return gwn::gwn_bvh_topology_build_hploc<k_bvh_width, Real, Index>(
+                    geometry, topology, stream
+                );
+            }
+            return gwn::gwn_bvh_topology_build_lbvh<k_bvh_width, Real, Index>(
+                geometry, topology, stream
+            );
+        };
+
+        auto build_facade_o0 = [&]() noexcept -> gwn::gwn_status {
+            if (options.topology_builder == benchmark_topology_builder::k_hploc) {
+                return gwn::gwn_bvh_facade_build_topology_aabb_moment_hploc<
+                    0, k_bvh_width, Real, Index>(
+                    geometry, topology, aabb_tree, moment_tree, stream
+                );
+            }
+            return gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<0, k_bvh_width, Real, Index>(
+                geometry, topology, aabb_tree, moment_tree, stream
+            );
+        };
+
+        auto build_facade_o1 = [&]() noexcept -> gwn::gwn_status {
+            if (options.topology_builder == benchmark_topology_builder::k_hploc) {
+                return gwn::gwn_bvh_facade_build_topology_aabb_moment_hploc<
+                    1, k_bvh_width, Real, Index>(
+                    geometry, topology, aabb_tree, moment_tree, stream
+                );
+            }
+            return gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<1, k_bvh_width, Real, Index>(
+                geometry, topology, aabb_tree, moment_tree, stream
+            );
+        };
 
         std::cout << "Model: " << model_path.string() << " (V=" << mesh.vertex_x.size()
                   << ", F=" << mesh.tri_i0.size() << ", Q=" << options.query_count << ")\n";
@@ -506,23 +576,15 @@ int main(int argc, char **argv) try {
         };
 
         auto const topology_stage = run_stage(
-            "topology_build_lbvh", "triangles/s", mesh.tri_i0.size(), options, mesh.vertex_x.size(),
-            mesh.tri_i0.size(), options.query_count, stream,
-            [&]() noexcept { return gwn::gwn_status::ok(); }, [&]() noexcept {
-            return gwn::gwn_bvh_topology_build_lbvh<k_bvh_width, Real, Index>(
-                geometry, topology, stream
-            );
-        }
+            std::string("topology_build_") + builder_name, "triangles/s", mesh.tri_i0.size(),
+            options, mesh.vertex_x.size(), mesh.tri_i0.size(), options.query_count, stream,
+            [&]() noexcept { return gwn::gwn_status::ok(); }, build_topology
         );
         emit_result(topology_stage);
 
         auto const refit_aabb_stage = run_stage(
             "refit_aabb", "triangles/s", mesh.tri_i0.size(), options, mesh.vertex_x.size(),
-            mesh.tri_i0.size(), options.query_count, stream, [&]() noexcept {
-            return gwn::gwn_bvh_topology_build_lbvh<k_bvh_width, Real, Index>(
-                geometry, topology, stream
-            );
-        }, [&]() noexcept {
+            mesh.tri_i0.size(), options.query_count, stream, build_topology, [&]() noexcept {
             return gwn::gwn_bvh_refit_aabb<k_bvh_width, Real, Index>(
                 geometry, topology, aabb_tree, stream
             );
@@ -531,10 +593,7 @@ int main(int argc, char **argv) try {
         emit_result(refit_aabb_stage);
 
         auto setup_topology_and_aabb = [&]() noexcept {
-            gwn::gwn_status const topology_status =
-                gwn::gwn_bvh_topology_build_lbvh<k_bvh_width, Real, Index>(
-                    geometry, topology, stream
-                );
+            gwn::gwn_status const topology_status = build_topology();
             if (!topology_status.is_ok())
                 return topology_status;
             return gwn::gwn_bvh_refit_aabb<k_bvh_width, Real, Index>(
@@ -567,32 +626,20 @@ int main(int argc, char **argv) try {
         auto const facade_o0_stage = run_stage(
             "facade_o0", "triangles/s", mesh.tri_i0.size(), options, mesh.vertex_x.size(),
             mesh.tri_i0.size(), options.query_count, stream,
-            [&]() noexcept { return gwn::gwn_status::ok(); }, [&]() noexcept {
-            return gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<0, k_bvh_width, Real, Index>(
-                geometry, topology, aabb_tree, moment_tree, stream
-            );
-        }
+            [&]() noexcept { return gwn::gwn_status::ok(); }, build_facade_o0
         );
         emit_result(facade_o0_stage);
 
         auto const facade_o1_stage = run_stage(
             "facade_o1", "triangles/s", mesh.tri_i0.size(), options, mesh.vertex_x.size(),
             mesh.tri_i0.size(), options.query_count, stream,
-            [&]() noexcept { return gwn::gwn_status::ok(); }, [&]() noexcept {
-            return gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<1, k_bvh_width, Real, Index>(
-                geometry, topology, aabb_tree, moment_tree, stream
-            );
-        }
+            [&]() noexcept { return gwn::gwn_status::ok(); }, build_facade_o1
         );
         emit_result(facade_o1_stage);
 
         auto const query_o0_stage = run_stage(
             "query_taylor_o0", "queries/s", options.query_count, options, mesh.vertex_x.size(),
-            mesh.tri_i0.size(), options.query_count, stream, [&]() noexcept {
-            return gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<0, k_bvh_width, Real, Index>(
-                geometry, topology, aabb_tree, moment_tree, stream
-            );
-        }, [&]() noexcept {
+            mesh.tri_i0.size(), options.query_count, stream, build_facade_o0, [&]() noexcept {
             return run_taylor_query_with_stack_capacity<0>(
                 options.stack_capacity, geometry.accessor(), topology.accessor(),
                 moment_tree.accessor(), d_qx.span(), d_qy.span(), d_qz.span(), d_out.span(),
@@ -604,11 +651,7 @@ int main(int argc, char **argv) try {
 
         auto const query_o1_stage = run_stage(
             "query_taylor_o1", "queries/s", options.query_count, options, mesh.vertex_x.size(),
-            mesh.tri_i0.size(), options.query_count, stream, [&]() noexcept {
-            return gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<1, k_bvh_width, Real, Index>(
-                geometry, topology, aabb_tree, moment_tree, stream
-            );
-        }, [&]() noexcept {
+            mesh.tri_i0.size(), options.query_count, stream, build_facade_o1, [&]() noexcept {
             return run_taylor_query_with_stack_capacity<1>(
                 options.stack_capacity, geometry.accessor(), topology.accessor(),
                 moment_tree.accessor(), d_qx.span(), d_qy.span(), d_qz.span(), d_out.span(),

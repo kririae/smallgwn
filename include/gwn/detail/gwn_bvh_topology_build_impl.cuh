@@ -5,18 +5,19 @@
 #include <cstddef>
 
 #include "gwn/detail/gwn_bvh_status_helpers.cuh"
+#include "gwn/detail/gwn_bvh_topology_build_hploc.cuh"
 #include "gwn/detail/gwn_bvh_topology_build_lbvh.cuh"
 
 namespace gwn {
 namespace detail {
 
-template <int Width, class Real, class Index>
-gwn_status gwn_bvh_topology_build_lbvh_impl(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh_topology_accessor<Width, Real, Index> &topology,
-    cudaStream_t const stream = gwn_default_stream()
+template <int Width, class Real, class Index, class BuildBinaryFn>
+gwn_status gwn_bvh_topology_build_from_binary_impl(
+    char const *entry_name, gwn_geometry_accessor<Real, Index> const &geometry,
+    gwn_bvh_topology_accessor<Width, Real, Index> &topology, BuildBinaryFn &&build_binary_fn,
+    cudaStream_t const stream
 ) noexcept {
-    return gwn_try_translate_status("gwn_bvh_topology_build_lbvh_impl", [&]() -> gwn_status {
+    return gwn_try_translate_status(entry_name, [&]() -> gwn_status {
         static_assert(Width >= 2, "BVH width must be at least 2.");
 
         if (!geometry.is_valid()) {
@@ -46,8 +47,9 @@ gwn_status gwn_bvh_topology_build_lbvh_impl(
             gwn_device_array<Index> sorted_primitive_indices{};
             gwn_device_array<gwn_binary_node<Index>> binary_nodes{};
             gwn_device_array<Index> binary_internal_parent{};
-            GWN_RETURN_ON_ERROR(gwn_bvh_topology_build_binary_lbvh(
-                geometry, sorted_primitive_indices, binary_nodes, binary_internal_parent, stream
+            Index root_internal_index = gwn_invalid_index<Index>();
+            GWN_RETURN_ON_ERROR(build_binary_fn(
+                sorted_primitive_indices, binary_nodes, binary_internal_parent, root_internal_index
             ));
 
             GWN_RETURN_ON_ERROR(
@@ -75,7 +77,7 @@ gwn_status gwn_bvh_topology_build_lbvh_impl(
                 cuda::std::span<Index const>(
                     binary_internal_parent.data(), binary_internal_parent.size()
                 ),
-                staging_topology, stream
+                staging_topology, root_internal_index, stream
             )));
 
             staging_topology.root_kind = gwn_bvh_child_kind::k_internal;
@@ -88,6 +90,50 @@ gwn_status gwn_bvh_topology_build_lbvh_impl(
             topology, release_topology, build_topology, stream
         );
     });
+}
+
+template <int Width, class Real, class Index>
+gwn_status gwn_bvh_topology_build_lbvh_impl(
+    gwn_geometry_accessor<Real, Index> const &geometry,
+    gwn_bvh_topology_accessor<Width, Real, Index> &topology,
+    cudaStream_t const stream = gwn_default_stream()
+) noexcept {
+    return gwn_bvh_topology_build_from_binary_impl<Width, Real, Index>(
+        "gwn_bvh_topology_build_lbvh_impl", geometry, topology,
+        [&](gwn_device_array<Index> &sorted_primitive_indices,
+            gwn_device_array<gwn_binary_node<Index>> &binary_nodes,
+            gwn_device_array<Index> &binary_internal_parent,
+            Index &root_internal_index) -> gwn_status {
+        GWN_RETURN_ON_ERROR(gwn_bvh_topology_build_binary_lbvh(
+            geometry, sorted_primitive_indices, binary_nodes, binary_internal_parent, stream
+        ));
+        if (geometry.triangle_count() > 1)
+            root_internal_index = Index(0);
+        return gwn_status::ok();
+    },
+        stream
+    );
+}
+
+template <int Width, class Real, class Index>
+gwn_status gwn_bvh_topology_build_hploc_impl(
+    gwn_geometry_accessor<Real, Index> const &geometry,
+    gwn_bvh_topology_accessor<Width, Real, Index> &topology,
+    cudaStream_t const stream = gwn_default_stream()
+) noexcept {
+    return gwn_bvh_topology_build_from_binary_impl<Width, Real, Index>(
+        "gwn_bvh_topology_build_hploc_impl", geometry, topology,
+        [&](gwn_device_array<Index> &sorted_primitive_indices,
+            gwn_device_array<gwn_binary_node<Index>> &binary_nodes,
+            gwn_device_array<Index> &binary_internal_parent,
+            Index &root_internal_index) -> gwn_status {
+        return gwn_bvh_topology_build_binary_hploc(
+            geometry, sorted_primitive_indices, binary_nodes, binary_internal_parent,
+            root_internal_index, stream
+        );
+    },
+        stream
+    );
 }
 
 } // namespace detail

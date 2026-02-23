@@ -41,6 +41,20 @@ gwn_status gwn_bvh_facade_build_topology_aabb_lbvh(
     return gwn_bvh_refit_aabb<Width, Real, Index>(geometry, topology, aabb_tree, stream);
 }
 
+/// \brief Build BVH topology via H-PLOC and immediately refit AABB bounds.
+template <int Width, class Real, class Index>
+gwn_status gwn_bvh_facade_build_topology_aabb_hploc(
+    gwn_geometry_object<Real, Index> const &geometry,
+    gwn_bvh_topology_object<Width, Real, Index> &topology,
+    gwn_bvh_aabb_tree_object<Width, Real, Index> &aabb_tree,
+    cudaStream_t const stream = gwn_default_stream()
+) noexcept {
+    GWN_RETURN_ON_ERROR(
+        (gwn_bvh_topology_build_hploc<Width, Real, Index>(geometry, topology, stream))
+    );
+    return gwn_bvh_refit_aabb<Width, Real, Index>(geometry, topology, aabb_tree, stream);
+}
+
 /// \brief Build BVH topology via LBVH, refit AABB bounds, and compute Taylor
 ///        moments — all in a single call.
 ///
@@ -68,6 +82,24 @@ gwn_status gwn_bvh_facade_build_topology_aabb_moment_lbvh(
     cudaStream_t const stream = gwn_default_stream()
 ) noexcept {
     GWN_RETURN_ON_ERROR((gwn_bvh_facade_build_topology_aabb_lbvh<Width, Real, Index>(
+        geometry, topology, aabb_tree, stream
+    )));
+    return gwn_bvh_refit_moment<Order, Width, Real, Index>(
+        geometry, topology, aabb_tree, moment_tree, stream
+    );
+}
+
+/// \brief Build BVH topology via H-PLOC, refit AABB bounds, and compute Taylor
+///        moments — all in a single call.
+template <int Order, int Width, class Real, class Index>
+gwn_status gwn_bvh_facade_build_topology_aabb_moment_hploc(
+    gwn_geometry_object<Real, Index> const &geometry,
+    gwn_bvh_topology_object<Width, Real, Index> &topology,
+    gwn_bvh_aabb_tree_object<Width, Real, Index> &aabb_tree,
+    gwn_bvh_moment_tree_object<Width, Real, Index> &moment_tree,
+    cudaStream_t const stream = gwn_default_stream()
+) noexcept {
+    GWN_RETURN_ON_ERROR((gwn_bvh_facade_build_topology_aabb_hploc<Width, Real, Index>(
         geometry, topology, aabb_tree, stream
     )));
     return gwn_bvh_refit_moment<Order, Width, Real, Index>(

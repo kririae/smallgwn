@@ -20,6 +20,11 @@ using gwn::tests::CudaFixture;
 
 namespace {
 
+enum class bvh_topology_builder {
+    k_lbvh,
+    k_hploc,
+};
+
 // Uploads a small mesh and returns geometry object. Returns nullopt on
 // CUDA unavailability.
 std::optional<gwn::gwn_geometry_object<Real, Index>> upload_mesh(
@@ -67,6 +72,16 @@ void verify_bvh_structure(
     }
     for (int const s : seen)
         EXPECT_EQ(s, 1);
+}
+
+template <int Width>
+gwn::gwn_status build_topology(
+    bvh_topology_builder const builder, gwn::gwn_geometry_object<Real, Index> const &geometry,
+    gwn::gwn_bvh_topology_object<Width, Real, Index> &bvh
+) {
+    if (builder == bvh_topology_builder::k_hploc)
+        return gwn::gwn_bvh_topology_build_hploc<Width, Real, Index>(geometry, bvh);
+    return gwn::gwn_bvh_topology_build_lbvh<Width, Real, Index>(geometry, bvh);
 }
 
 } // namespace
@@ -285,4 +300,72 @@ TEST_F(CudaFixture, clear_resets_bvh) {
 
     bvh.clear();
     EXPECT_FALSE(bvh.has_data());
+}
+
+TEST_F(CudaFixture, hploc_single_triangle_bvh) {
+    std::vector<Real> vx{1.0f, 0.0f, 0.0f};
+    std::vector<Real> vy{0.0f, 1.0f, 0.0f};
+    std::vector<Real> vz{0.0f, 0.0f, 1.0f};
+    std::vector<Index> i0{0}, i1{1}, i2{2};
+
+    auto maybe_geo = upload_mesh(vx, vy, vz, i0, i1, i2);
+    if (!maybe_geo.has_value())
+        GTEST_SKIP() << "CUDA unavailable";
+    auto &geometry = *maybe_geo;
+
+    gwn::gwn_bvh_object<Real, Index> bvh;
+    gwn::gwn_status const build_status =
+        build_topology<4>(bvh_topology_builder::k_hploc, geometry, bvh);
+    ASSERT_TRUE(build_status.is_ok()) << gwn::tests::status_to_debug_string(build_status);
+    ASSERT_TRUE(bvh.has_data());
+
+    auto const &acc = bvh.accessor();
+    EXPECT_TRUE(acc.is_valid());
+    EXPECT_EQ(acc.primitive_indices.size(), 1u);
+    verify_bvh_structure<4>(acc, 1);
+}
+
+TEST_F(CudaFixture, hploc_octahedron_8_triangles) {
+    std::vector<Real> vx{1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+    std::vector<Real> vy{0.0f, 0.0f, 1.0f, -1.0f, 0.0f, 0.0f};
+    std::vector<Real> vz{0.0f, 0.0f, 0.0f, 0.0f, 1.0f, -1.0f};
+    std::vector<Index> i0{0, 2, 1, 3, 2, 1, 3, 0};
+    std::vector<Index> i1{2, 1, 3, 0, 0, 2, 1, 3};
+    std::vector<Index> i2{4, 4, 4, 4, 5, 5, 5, 5};
+
+    auto maybe_geo = upload_mesh(vx, vy, vz, i0, i1, i2);
+    if (!maybe_geo.has_value())
+        GTEST_SKIP() << "CUDA unavailable";
+    auto &geometry = *maybe_geo;
+
+    gwn::gwn_bvh_object<Real, Index> bvh;
+    gwn::gwn_status const build_status =
+        build_topology<4>(bvh_topology_builder::k_hploc, geometry, bvh);
+    ASSERT_TRUE(build_status.is_ok()) << gwn::tests::status_to_debug_string(build_status);
+    ASSERT_TRUE(bvh.has_data());
+
+    auto const &acc = bvh.accessor();
+    EXPECT_TRUE(acc.is_valid());
+    EXPECT_EQ(acc.root_kind, gwn::gwn_bvh_child_kind::k_internal);
+    verify_bvh_structure<4>(acc, 8);
+}
+
+TEST_F(CudaFixture, hploc_wide8_bvh_build) {
+    std::vector<Real> vx{1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+    std::vector<Real> vy{0.0f, 0.0f, 1.0f, -1.0f, 0.0f, 0.0f};
+    std::vector<Real> vz{0.0f, 0.0f, 0.0f, 0.0f, 1.0f, -1.0f};
+    std::vector<Index> i0{0, 2, 1, 3, 2, 1, 3, 0};
+    std::vector<Index> i1{2, 1, 3, 0, 0, 2, 1, 3};
+    std::vector<Index> i2{4, 4, 4, 4, 5, 5, 5, 5};
+
+    auto maybe_geo = upload_mesh(vx, vy, vz, i0, i1, i2);
+    if (!maybe_geo.has_value())
+        GTEST_SKIP() << "CUDA unavailable";
+    auto &geometry = *maybe_geo;
+
+    gwn::gwn_bvh_topology_object<8, Real, Index> bvh8;
+    gwn::gwn_status const status = build_topology<8>(bvh_topology_builder::k_hploc, geometry, bvh8);
+    ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
+    ASSERT_TRUE(bvh8.has_data());
+    verify_bvh_structure<8>(bvh8.accessor(), 8);
 }
