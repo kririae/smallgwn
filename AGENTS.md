@@ -84,9 +84,10 @@ These instructions apply to the `smallgwn/` project tree.
   - exposed detail entry: `detail::gwn_bvh_topology_build_lbvh_impl<Width,...>`
 - Generic async refit kernels/traits live in `include/gwn/detail/gwn_bvh_refit_async.cuh`.
 - LBVH build path uses CUB for scene reduction and radix sort (NO Thrust in runtime build path).
-- `detail/gwn_bvh_topology_build_hploc.cuh` contains H-PLOC kernel/pipeline scaffolding; the experimental
-  GPU kernel path is currently disabled by `k_gwn_hploc_enable_experimental_kernel=false`, and
-  the H-PLOC host entry currently falls back to binary LBVH construction for production stability.
+- `detail/gwn_bvh_topology_build_hploc.cuh` contains the active H-PLOC GPU topology path
+  (`k_gwn_hploc_enable_experimental_kernel=true`).
+- H-PLOC kernel includes convergence guards (inner/outer iteration caps + failure flag) and returns
+  explicit `gwn_status::internal_error` on non-convergence instead of hanging.
 - Taylor build currently supports `Order=0/1`:
   - Production path uses fully GPU async upward propagation with atomics through `gwn_bvh_refit_moment`.
   - Async Taylor temporary buffers (parent/slot/arity/arrivals/pending moments) use `gwn_device_array`.
