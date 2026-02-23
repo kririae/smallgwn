@@ -306,7 +306,7 @@ TEST(smallgwn_integration_model, bvh_exact_batch_matches_cpu_on_common_models) {
         gwn::gwn_status const build_status =
             gwn::gwn_bvh_topology_build_lbvh<4, Real, Index>(geometry, bvh);
         ASSERT_TRUE(build_status.is_ok()) << gwn::tests::status_to_debug_string(build_status);
-        ASSERT_TRUE(bvh.has_bvh());
+        ASSERT_TRUE(bvh.has_data());
         assert_bvh_structure(bvh.accessor(), mesh.tri_i0.size());
 
         std::size_t const query_count = query_soa[0].size();
@@ -490,7 +490,7 @@ TEST(smallgwn_integration_model, integration_exact_and_taylor_consistency_on_com
         ASSERT_TRUE(
             (gwn::gwn_bvh_topology_build_lbvh<4, Real, Index>(geometry, bvh)
                  .is_ok()));
-        ASSERT_TRUE(bvh.has_bvh());
+        ASSERT_TRUE(bvh.has_data());
         assert_bvh_structure(bvh.accessor(), mesh.tri_i0.size());
 
         gwn::gwn_device_array<Real> d_qx, d_qy, d_qz, d_out;

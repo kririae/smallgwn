@@ -67,7 +67,7 @@ TEST_F(CudaFixture, taylor_order0_build_marks_accessor) {
     ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
 
     EXPECT_TRUE(data.accessor().template has_taylor_order<0>());
-    EXPECT_TRUE(data.has_any_data());
+    EXPECT_TRUE(data.has_data());
 }
 
 // ---------------------------------------------------------------------------
@@ -193,10 +193,10 @@ TEST_F(CudaFixture, taylor_data_clear_resets) {
                      geometry, bvh, aabb, data
     )
                      .is_ok()));
-    ASSERT_TRUE(data.has_any_data());
+    ASSERT_TRUE(data.has_data());
 
     data.clear();
-    EXPECT_FALSE(data.has_any_data());
+    EXPECT_FALSE(data.has_data());
     EXPECT_TRUE(data.accessor().empty());
 }
 
@@ -230,7 +230,7 @@ TEST_F(CudaFixture, taylor_single_triangle) {
             geometry, bvh, aabb, data
         );
     ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
-    ASSERT_TRUE(bvh.has_bvh());
+    ASSERT_TRUE(bvh.has_data());
     EXPECT_FALSE(data.accessor().template has_taylor_order<0>());
-    EXPECT_FALSE(data.has_any_data());
+    EXPECT_FALSE(data.has_data());
 }

@@ -25,7 +25,8 @@ These instructions apply to the `smallgwn/` project tree.
 ## Naming and API Rules
 - Use `gwn::` namespace and `gwn_` prefix for public symbols.
 - Avoid `_wide` naming in public API types.
-- Keep width as template parameter where relevant; width=4 aliases are `gwn_bvh_accessor`, `gwn_bvh_aabb4_accessor`, and `gwn_bvh_moment4_accessor`.
+- Keep width as template parameter where relevant; width=4 accessor aliases are `gwn_bvh_accessor`, `gwn_bvh_aabb4_accessor`, and `gwn_bvh_moment4_accessor` (no `gwn_bvh4_*` duplicates).
+- Owning-object state query uses a single unified predicate `has_data()` across all BVH object types (`gwn_bvh_topology_tree_object`, `gwn_bvh_aabb_tree_object`, `gwn_bvh_moment_tree_object`).
 
 ## Formatting Rules
 - Use `clang-format` with Chromium style via `smallgwn/.clang-format`.
@@ -65,7 +66,9 @@ These instructions apply to the `smallgwn/` project tree.
 - Internal implementation remains under flat `include/gwn/detail/` headers.
 - Detail entrypoints use `_impl` suffix (e.g. `gwn_bvh_topology_build_lbvh_impl`) to avoid public/internal naming collisions.
 - Public BVH entrypoints are object-based (`gwn_geometry_object` + BVH object types); accessor-based routines are internal-only under `gwn::detail`.
-- No `bvh4_*` convenience wrappers — use `gwn_bvh_topology_build_lbvh<4,...>` directly; the `gwn_bvh_object` / `gwn_bvh_aabb_object` / `gwn_bvh_moment_object` aliases already fix Width=4.
+- No `bvh4_*` convenience wrappers — use `gwn_bvh_topology_build_lbvh<4,...>` directly; the `gwn_bvh_object` / `gwn_bvh_aabb_object` / `gwn_bvh_moment_object` aliases already fix Width=4.  `gwn_bvh_object` is topology-only (does **not** include AABB or moment data).
+- BVH SoA node structs (`gwn_bvh_topology_node_soa`, `gwn_bvh_aabb_node_soa`, `gwn_bvh_taylor_node_soa`) use `alignas(alignof(element_type))` to make tail padding explicit.
+- Device-side BVH traversal stacks call `__trap()` on overflow rather than silently skipping nodes.
 - Public object-based APIs are plain `noexcept` (no `try`/`catch`); exception translation is done once in the `detail` layer.
 - LBVH topology build is pass-composed (all internal under `gwn::detail`):
   - binary LBVH pass (`gwn_bvh_topology_build_binary_lbvh` in `detail/gwn_bvh_topology_build_lbvh.cuh`)
@@ -80,6 +83,8 @@ These instructions apply to the `smallgwn/` project tree.
 - Winding number query APIs:
   - Exact: `gwn_compute_winding_number_batch_bvh_exact`
   - Taylor: `gwn_compute_winding_number_batch_bvh_taylor<Order,...>`
+  - Traversal stack capacity is template-configurable via `StackCapacity` (default:
+    `k_gwn_default_traversal_stack_capacity = 32`).
 
 ## Error Handling Rules
 - Prefer internal C++ exceptions only inside implementation details; public APIs should return `gwn_status` error codes.
