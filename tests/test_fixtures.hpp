@@ -14,7 +14,7 @@ namespace gwn::tests {
 // ---------------------------------------------------------------------------
 
 class CudaStreamFixture : public ::testing::Test {
-  protected:
+protected:
     cudaStream_t stream_a_{nullptr};
     cudaStream_t stream_b_{nullptr};
 
@@ -47,7 +47,7 @@ class CudaStreamFixture : public ::testing::Test {
 // ---------------------------------------------------------------------------
 
 class CudaFixture : public ::testing::Test {
-  protected:
+protected:
     void SetUp() override { SMALLGWN_SKIP_IF_NO_CUDA(); }
 };
 

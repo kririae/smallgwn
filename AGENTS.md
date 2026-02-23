@@ -55,19 +55,22 @@ These instructions apply to the `smallgwn/` project tree.
 ## Current BVH/Taylor Design
 - Topology and data are separated:
   - Topology: `gwn_bvh_topology_accessor<Width,...>` / `gwn_bvh_topology_object<Width,...>`
-  - AABB tree: `gwn_bvh_aabb_accessor<Width,...>` / `gwn_bvh_aabb_tree_object_t<Width,...>`
-  - Moment tree: `gwn_bvh_moment_accessor<Width,...>` / `gwn_bvh_moment_tree_object_t<Width,...>`
+  - AABB tree: `gwn_bvh_aabb_accessor<Width,...>` / `gwn_bvh_aabb_tree_object<Width,...>`
+  - Moment tree: `gwn_bvh_moment_accessor<Width,...>` / `gwn_bvh_moment_tree_object<Width,...>`
 - `include/gwn/gwn_bvh_build.cuh` keeps public build APIs, while internal build passes/functors live in flat `include/gwn/detail/` headers.
 - Public BVH build/refit entrypoints are object-based (`gwn_geometry_object` + BVH object types); accessor-based build/refit APIs are internal-only under `gwn::detail`.
-- LBVH topology build is pass-composed:
-  - binary LBVH pass (`gwn_build_binary_lbvh_topology`)
-  - collapse pass (`gwn_collapse_binary_lbvh_topology`)
-  - exposed entry: `gwn_build_bvh_topology_lbvh<Width,...>` / `gwn_build_bvh4_topology_lbvh`
+- No `bvh4_*` convenience wrappers — use `gwn_build_bvh_topology_lbvh<4,...>` directly; the `gwn_bvh_object` / `gwn_bvh_aabb_object` / `gwn_bvh_moment_object` aliases already fix Width=4.
+- Public object-based APIs are plain `noexcept` (no `try`/`catch`); exception translation is done once in the `detail` layer.
+- LBVH topology build is pass-composed (all internal under `gwn::detail`):
+  - binary LBVH pass (`gwn_build_binary_lbvh_topology` in `detail/gwn_bvh_build_lbvh.cuh`)
+  - collapse pass (`gwn_collapse_binary_lbvh_topology` in `detail/gwn_bvh_build_lbvh.cuh`)
+  - exposed detail entry: `detail::gwn_build_bvh_topology_lbvh<Width,...>`
 - Generic async refit kernels/traits live in `include/gwn/detail/gwn_bvh_refit_async.cuh`.
 - LBVH build path uses CUB for scene reduction and radix sort (NO Thrust in runtime build path).
 - Taylor build currently supports `Order=0/1`:
   - Production path uses fully GPU async upward propagation with atomics through `gwn_refit_bvh_moment`.
   - Async Taylor temporary buffers (parent/slot/arity/arrivals/pending moments) use `gwn_device_array`.
+  - Each `gwn_refit_bvh_moment<Order,...>` call replaces the entire moment accessor (full replace, not merge). To maintain multiple Taylor orders simultaneously, use separate moment objects.
 - Winding number query APIs:
   - Exact: `gwn_compute_winding_number_batch_bvh_exact`
   - Taylor: `gwn_compute_winding_number_batch_bvh_taylor<Order,...>`

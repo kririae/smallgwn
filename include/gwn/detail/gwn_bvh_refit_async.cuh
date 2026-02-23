@@ -206,7 +206,8 @@ template <int Width, class Real, class Index> struct gwn_prepare_refit_topology_
 
     __device__ void operator()(std::size_t const node_id) const {
         if (node_id >= topology.nodes.size() || node_id >= arrays.internal_parent.size() ||
-            node_id >= arrays.internal_parent_slot.size() || node_id >= arrays.internal_arity.size()) {
+            node_id >= arrays.internal_parent_slot.size() ||
+            node_id >= arrays.internal_arity.size()) {
             mark_error();
             return;
         }
@@ -300,9 +301,8 @@ template <int Width, class Real, class Index> struct gwn_aabb_refit_traits {
             }
         }
 
-        if (!has_bounds) {
+        if (!has_bounds)
             payload = gwn_aabb<Real>{Real(0), Real(0), Real(0), Real(0), Real(0), Real(0)};
-        }
         return true;
     }
 
@@ -366,7 +366,9 @@ template <int Order, int Width, class Real, class Index> struct gwn_moment_refit
 
             Index const primitive_id = topology.primitive_indices[sorted_slot_u];
             payload_type primitive_payload{};
-            if (!gwn_compute_triangle_taylor_raw_moment<Order>(geometry, primitive_id, primitive_payload))
+            if (!gwn_compute_triangle_taylor_raw_moment<Order>(
+                    geometry, primitive_id, primitive_payload
+                ))
                 continue;
             gwn_accumulate_taylor_moment(payload, primitive_payload);
         }
@@ -428,9 +430,8 @@ template <int Order, int Width, class Real, class Index> struct gwn_moment_refit
             average_z = (bounds.min_z + bounds.max_z) * Real(0.5);
         }
 
-        node.child_max_p_dist2[child_slot] = gwn_bounds_max_p_dist2(
-            bounds, average_x, average_y, average_z
-        );
+        node.child_max_p_dist2[child_slot] =
+            gwn_bounds_max_p_dist2(bounds, average_x, average_y, average_z);
         node.child_average_x[child_slot] = average_x;
         node.child_average_y[child_slot] = average_y;
         node.child_average_z[child_slot] = average_z;
@@ -493,9 +494,8 @@ template <class Traits, int Width, class Real, class Index> struct gwn_refit_fro
             atomicExch(error_flag, 1u);
     }
 
-    __device__ bool finalize_parent(
-        std::size_t const node_id, payload_type &parent_payload
-    ) const noexcept {
+    __device__ bool
+    finalize_parent(std::size_t const node_id, payload_type &parent_payload) const noexcept {
         if (node_id >= topology.nodes.size())
             return false;
 
@@ -540,12 +540,14 @@ template <class Traits, int Width, class Real, class Index> struct gwn_refit_fro
                 mark_error();
                 return;
             }
-            if (current_slot >= Width || !pending.is_valid(parent_id, static_cast<int>(current_slot))) {
+            if (current_slot >= Width ||
+                !pending.is_valid(parent_id, static_cast<int>(current_slot))) {
                 mark_error();
                 return;
             }
 
-            pending.pending[pending.index(parent_id, static_cast<int>(current_slot))] = current_payload;
+            pending.pending[pending.index(parent_id, static_cast<int>(current_slot))] =
+                current_payload;
             __threadfence();
 
             unsigned int const previous_arrivals =
@@ -610,7 +612,9 @@ template <class Traits, int Width, class Real, class Index> struct gwn_refit_fro
             return;
         }
 
-        propagate_up(static_cast<Index>(node_id), static_cast<std::uint8_t>(child_slot), leaf_payload);
+        propagate_up(
+            static_cast<Index>(node_id), static_cast<std::uint8_t>(child_slot), leaf_payload
+        );
     }
 };
 
@@ -726,9 +730,9 @@ gwn_status gwn_run_refit_pass(
     GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
         cudaMemsetAsync(internal_arity.data(), 0, node_count * sizeof(std::uint8_t), stream)
     ));
-    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemsetAsync(
-        internal_arrivals.data(), 0, node_count * sizeof(unsigned int), stream
-    )));
+    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
+        cudaMemsetAsync(internal_arrivals.data(), 0, node_count * sizeof(unsigned int), stream)
+    ));
     GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
         cudaMemsetAsync(pending_payloads.data(), 0, pending_count * sizeof(payload_type), stream)
     ));

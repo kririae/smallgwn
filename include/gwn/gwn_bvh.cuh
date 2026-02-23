@@ -424,10 +424,4 @@ using gwn_bvh_moment_object = gwn_bvh_moment_tree_object<4, Real, Index>;
 template <int Width, class Real = float, class Index = std::int64_t>
 using gwn_bvh_topology_object = gwn_bvh_topology_tree_object<Width, Real, Index>;
 
-template <int Width, class Real = float, class Index = std::int64_t>
-using gwn_bvh_aabb_tree_object_t = gwn_bvh_aabb_tree_object<Width, Real, Index>;
-
-template <int Width, class Real = float, class Index = std::int64_t>
-using gwn_bvh_moment_tree_object_t = gwn_bvh_moment_tree_object<Width, Real, Index>;
-
 } // namespace gwn

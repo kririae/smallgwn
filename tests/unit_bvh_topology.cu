@@ -88,7 +88,7 @@ TEST_F(CudaFixture, single_triangle_bvh) {
 
     gwn::gwn_bvh_object<Real, Index> bvh;
     gwn::gwn_status const build_status =
-        gwn::gwn_build_bvh4_topology_lbvh<Real, Index>(geometry, bvh);
+        gwn::gwn_build_bvh_topology_lbvh<4, Real, Index>(geometry, bvh);
     ASSERT_TRUE(build_status.is_ok()) << gwn::tests::status_to_debug_string(build_status);
     ASSERT_TRUE(bvh.has_bvh());
 
@@ -115,7 +115,7 @@ TEST_F(CudaFixture, two_triangle_bvh) {
 
     gwn::gwn_bvh_object<Real, Index> bvh;
     gwn::gwn_status const build_status =
-        gwn::gwn_build_bvh4_topology_lbvh<Real, Index>(geometry, bvh);
+        gwn::gwn_build_bvh_topology_lbvh<4, Real, Index>(geometry, bvh);
     ASSERT_TRUE(build_status.is_ok()) << gwn::tests::status_to_debug_string(build_status);
     ASSERT_TRUE(bvh.has_bvh());
 
@@ -141,7 +141,7 @@ TEST_F(CudaFixture, octahedron_8_triangles) {
 
     gwn::gwn_bvh_object<Real, Index> bvh;
     gwn::gwn_status const build_status =
-        gwn::gwn_build_bvh4_topology_lbvh<Real, Index>(geometry, bvh);
+        gwn::gwn_build_bvh_topology_lbvh<4, Real, Index>(geometry, bvh);
     ASSERT_TRUE(build_status.is_ok()) << gwn::tests::status_to_debug_string(build_status);
     ASSERT_TRUE(bvh.has_bvh());
 
@@ -212,7 +212,7 @@ TEST_F(CudaFixture, coplanar_triangles_build_succeeds) {
     auto &geometry = *maybe_geo;
 
     gwn::gwn_bvh_object<Real, Index> bvh;
-    gwn::gwn_status const status = gwn::gwn_build_bvh4_topology_lbvh<Real, Index>(geometry, bvh);
+    gwn::gwn_status const status = gwn::gwn_build_bvh_topology_lbvh<4, Real, Index>(geometry, bvh);
     ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
     ASSERT_TRUE(bvh.has_bvh());
     verify_bvh_structure<4>(bvh.accessor(), 2);
@@ -234,7 +234,7 @@ TEST_F(CudaFixture, zero_area_triangle_build_succeeds) {
     auto &geometry = *maybe_geo;
 
     gwn::gwn_bvh_object<Real, Index> bvh;
-    gwn::gwn_status const status = gwn::gwn_build_bvh4_topology_lbvh<Real, Index>(geometry, bvh);
+    gwn::gwn_status const status = gwn::gwn_build_bvh_topology_lbvh<4, Real, Index>(geometry, bvh);
     ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
     ASSERT_TRUE(bvh.has_bvh());
 }
@@ -255,11 +255,11 @@ TEST_F(CudaFixture, rebuild_replaces_previous_bvh) {
     auto &geometry = *maybe_geo;
 
     gwn::gwn_bvh_object<Real, Index> bvh;
-    ASSERT_TRUE((gwn::gwn_build_bvh4_topology_lbvh<Real, Index>(geometry, bvh).is_ok()));
+    ASSERT_TRUE((gwn::gwn_build_bvh_topology_lbvh<4, Real, Index>(geometry, bvh).is_ok()));
     ASSERT_TRUE(bvh.has_bvh());
 
     // Rebuild (should succeed overwriting previous).
-    ASSERT_TRUE((gwn::gwn_build_bvh4_topology_lbvh<Real, Index>(geometry, bvh).is_ok()));
+    ASSERT_TRUE((gwn::gwn_build_bvh_topology_lbvh<4, Real, Index>(geometry, bvh).is_ok()));
     ASSERT_TRUE(bvh.has_bvh());
     verify_bvh_structure<4>(bvh.accessor(), 1);
 }
@@ -280,7 +280,7 @@ TEST_F(CudaFixture, clear_resets_bvh) {
     auto &geometry = *maybe_geo;
 
     gwn::gwn_bvh_object<Real, Index> bvh;
-    ASSERT_TRUE((gwn::gwn_build_bvh4_topology_lbvh<Real, Index>(geometry, bvh).is_ok()));
+    ASSERT_TRUE((gwn::gwn_build_bvh_topology_lbvh<4, Real, Index>(geometry, bvh).is_ok()));
     ASSERT_TRUE(bvh.has_bvh());
 
     bvh.clear();

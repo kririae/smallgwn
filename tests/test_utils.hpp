@@ -61,7 +61,7 @@ is_cuda_runtime_unavailable_message(std::string_view const message) noexcept {
 // gwn_status debug formatting.
 // ---------------------------------------------------------------------------
 
-[[nodiscard]] inline std::string status_to_debug_string(gwn::gwn_status const& status) {
+[[nodiscard]] inline std::string status_to_debug_string(gwn::gwn_status const &status) {
     std::ostringstream out;
     out << status.message();
     if (status.has_location()) {
@@ -75,12 +75,12 @@ is_cuda_runtime_unavailable_message(std::string_view const message) noexcept {
 // Environment helpers.
 // ---------------------------------------------------------------------------
 
-[[nodiscard]] inline int get_env_positive_int(char const* name, int const default_value) {
-    char const* value = std::getenv(name);
+[[nodiscard]] inline int get_env_positive_int(char const *name, int const default_value) {
+    char const *value = std::getenv(name);
     if (value == nullptr || *value == '\0')
         return default_value;
     int parsed = 0;
-    char const* end = value + std::char_traits<char>::length(value);
+    char const *end = value + std::char_traits<char>::length(value);
     auto const [ptr, ec] = std::from_chars(value, end, parsed);
     if (ec != std::errc() || ptr != end || parsed <= 0)
         return default_value;
@@ -88,12 +88,12 @@ is_cuda_runtime_unavailable_message(std::string_view const message) noexcept {
 }
 
 [[nodiscard]] inline std::size_t
-get_env_positive_size_t(char const* name, std::size_t default_value) {
-    char const* value = std::getenv(name);
+get_env_positive_size_t(char const *name, std::size_t default_value) {
+    char const *value = std::getenv(name);
     if (value == nullptr || *value == '\0')
         return default_value;
     std::size_t parsed = 0;
-    char const* end = value + std::char_traits<char>::length(value);
+    char const *end = value + std::char_traits<char>::length(value);
     auto const [ptr, ec] = std::from_chars(value, end, parsed);
     if (ec != std::errc() || ptr != end || parsed == 0)
         return default_value;
@@ -125,8 +125,8 @@ parse_obj_index(std::string_view const token, std::size_t const vertex_count) {
         return std::nullopt;
 
     Index raw = 0;
-    char const* begin = index_token.data();
-    char const* end = index_token.data() + index_token.size();
+    char const *begin = index_token.data();
+    char const *end = index_token.data() + index_token.size();
     auto const [ptr, ec] = std::from_chars(begin, end, raw);
     if (ec != std::errc() || ptr != end || raw == 0)
         return std::nullopt;
@@ -138,8 +138,7 @@ parse_obj_index(std::string_view const token, std::size_t const vertex_count) {
     return resolved;
 }
 
-[[nodiscard]] inline std::optional<HostMesh>
-load_obj_mesh(std::filesystem::path const& path) {
+[[nodiscard]] inline std::optional<HostMesh> load_obj_mesh(std::filesystem::path const &path) {
     std::ifstream input(path);
     if (!input.is_open())
         return std::nullopt;
@@ -197,7 +196,7 @@ load_obj_mesh(std::filesystem::path const& path) {
 // ---------------------------------------------------------------------------
 
 [[nodiscard]] inline std::optional<std::filesystem::path> find_model_data_dir() {
-    if (char const* env = std::getenv("SMALLGWN_MODEL_DATA_DIR"); env != nullptr && *env != '\0') {
+    if (char const *env = std::getenv("SMALLGWN_MODEL_DATA_DIR"); env != nullptr && *env != '\0') {
         std::filesystem::path const path(env);
         if (std::filesystem::is_directory(path))
             return path;
@@ -211,9 +210,9 @@ load_obj_mesh(std::filesystem::path const& path) {
 }
 
 [[nodiscard]] inline std::vector<std::filesystem::path>
-collect_obj_model_paths(std::filesystem::path const& model_dir) {
+collect_obj_model_paths(std::filesystem::path const &model_dir) {
     std::vector<std::filesystem::path> model_paths{};
-    for (auto const& entry : std::filesystem::directory_iterator(model_dir)) {
+    for (auto const &entry : std::filesystem::directory_iterator(model_dir)) {
         if (!entry.is_regular_file())
             continue;
         std::filesystem::path const path = entry.path();
@@ -228,14 +227,14 @@ collect_obj_model_paths(std::filesystem::path const& model_dir) {
 [[nodiscard]] inline std::vector<std::filesystem::path> collect_model_paths() {
     std::vector<std::filesystem::path> model_paths{};
 
-    if (char const* path_env = std::getenv("SMALLGWN_MODEL_PATH");
+    if (char const *path_env = std::getenv("SMALLGWN_MODEL_PATH");
         path_env != nullptr && *path_env != '\0') {
         std::filesystem::path const path(path_env);
         if (std::filesystem::is_regular_file(path) && path.extension() == ".obj")
             model_paths.push_back(path);
     }
 
-    if (char const* dir_env = std::getenv("SMALLGWN_MODEL_DATA_DIR");
+    if (char const *dir_env = std::getenv("SMALLGWN_MODEL_DATA_DIR");
         dir_env != nullptr && *dir_env != '\0') {
         std::filesystem::path const path(dir_env);
         if (std::filesystem::is_directory(path)) {
@@ -259,20 +258,20 @@ collect_obj_model_paths(std::filesystem::path const& model_dir) {
 // CUDA skip macros for GTest.
 // ---------------------------------------------------------------------------
 
-#define SMALLGWN_SKIP_IF_NO_CUDA()                                                          \
-    do {                                                                                     \
-        cudaError_t const __cuda_check_result = cudaFree(nullptr);                           \
-        if (gwn::tests::is_cuda_runtime_unavailable(__cuda_check_result))                    \
-            GTEST_SKIP() << "CUDA runtime unavailable: " << cudaGetErrorString(__cuda_check_result); \
+#define SMALLGWN_SKIP_IF_NO_CUDA()                                                                 \
+    do {                                                                                           \
+        cudaError_t const __cuda_check_result = cudaFree(nullptr);                                 \
+        if (gwn::tests::is_cuda_runtime_unavailable(__cuda_check_result))                          \
+            GTEST_SKIP() << "CUDA runtime unavailable: "                                           \
+                         << cudaGetErrorString(__cuda_check_result);                               \
     } while (false)
 
-#define SMALLGWN_SKIP_IF_STATUS_CUDA_UNAVAILABLE(status)                                    \
-    do {                                                                                     \
-        if (!(status).is_ok() &&                                                             \
-            (status).error() == gwn::gwn_error::cuda_runtime_error &&                        \
-            gwn::tests::is_cuda_runtime_unavailable_message((status).message())) {            \
-            GTEST_SKIP() << "CUDA runtime unavailable: " << (status).message();              \
-        }                                                                                    \
+#define SMALLGWN_SKIP_IF_STATUS_CUDA_UNAVAILABLE(status)                                           \
+    do {                                                                                           \
+        if (!(status).is_ok() && (status).error() == gwn::gwn_error::cuda_runtime_error &&         \
+            gwn::tests::is_cuda_runtime_unavailable_message((status).message())) {                 \
+            GTEST_SKIP() << "CUDA runtime unavailable: " << (status).message();                    \
+        }                                                                                          \
     } while (false)
 
 } // namespace gwn::tests

@@ -267,8 +267,7 @@ template <int Order, int Width, class Real, class Index>
 __device__ inline Real gwn_winding_number_point_bvh_taylor(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
-    gwn_bvh_moment_tree_accessor<Width, Real, Index> const &data_tree, Real const qx,
-    Real const qy,
+    gwn_bvh_moment_tree_accessor<Width, Real, Index> const &data_tree, Real const qx, Real const qy,
     Real const qz, Real const accuracy_scale
 ) noexcept {
     static_assert(
@@ -444,7 +443,7 @@ gwn_make_winding_number_batch_bvh_exact_functor(
 
 template <int Order, int Width, class Real, class Index>
 [[nodiscard]] inline gwn_winding_number_batch_bvh_taylor_functor<Order, Width, Real, Index>
-    gwn_make_winding_number_batch_bvh_taylor_functor(
+gwn_make_winding_number_batch_bvh_taylor_functor(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
     gwn_bvh_moment_tree_accessor<Width, Real, Index> const &data_tree,
@@ -600,10 +599,9 @@ template <int Order, class Real, class Index = std::int64_t>
 gwn_status gwn_compute_winding_number_batch_bvh_taylor(
     gwn_geometry_accessor<Real, Index> const &geometry, gwn_bvh_accessor<Real, Index> const &bvh,
     gwn_bvh_moment4_accessor<Real, Index> const &data_tree,
-    cuda::std::span<Real const> const query_x,
-    cuda::std::span<Real const> const query_y, cuda::std::span<Real const> const query_z,
-    cuda::std::span<Real> const output, Real const accuracy_scale = Real(2),
-    cudaStream_t const stream = gwn_default_stream()
+    cuda::std::span<Real const> const query_x, cuda::std::span<Real const> const query_y,
+    cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output,
+    Real const accuracy_scale = Real(2), cudaStream_t const stream = gwn_default_stream()
 ) noexcept {
     return gwn_compute_winding_number_batch_bvh_taylor<Order, 4, Real, Index>(
         geometry, bvh, data_tree, query_x, query_y, query_z, output, accuracy_scale, stream
