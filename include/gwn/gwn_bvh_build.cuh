@@ -12,10 +12,8 @@
 #include <vector>
 
 #include <thrust/device_ptr.h>
-#include <thrust/device_vector.h>
 #include <thrust/execution_policy.h>
 #include <thrust/extrema.h>
-#include <thrust/memory.h>
 #include <thrust/sort.h>
 
 #include "gwn_bvh.cuh"
@@ -631,18 +629,15 @@ gwn_status gwn_build_bvh_lbvh(
     Real const scene_inv_z =
         (scene_max_z > scene_min_z) ? Real(1) / (scene_max_z - scene_min_z) : Real(1);
 
-    thrust::device_vector<gwn_aabb<Real>> primitive_aabbs(primitive_count);
-    thrust::device_vector<std::uint32_t> morton_codes(primitive_count);
-    thrust::device_vector<Index> sorted_primitive_indices(primitive_count);
-    auto const primitive_aabbs_span = cuda::std::span<gwn_aabb<Real>>(
-        thrust::raw_pointer_cast(primitive_aabbs.data()), primitive_count
-    );
-    auto const morton_codes_span = cuda::std::span<std::uint32_t>(
-        thrust::raw_pointer_cast(morton_codes.data()), primitive_count
-    );
-    auto const sorted_primitive_indices_span = cuda::std::span<Index>(
-        thrust::raw_pointer_cast(sorted_primitive_indices.data()), primitive_count
-    );
+    gwn_device_array<gwn_aabb<Real>> primitive_aabbs{};
+    gwn_device_array<std::uint32_t> morton_codes{};
+    gwn_device_array<Index> sorted_primitive_indices{};
+    GWN_RETURN_ON_ERROR(primitive_aabbs.resize(primitive_count, stream));
+    GWN_RETURN_ON_ERROR(morton_codes.resize(primitive_count, stream));
+    GWN_RETURN_ON_ERROR(sorted_primitive_indices.resize(primitive_count, stream));
+    auto const primitive_aabbs_span = primitive_aabbs.span();
+    auto const morton_codes_span = morton_codes.span();
+    auto const sorted_primitive_indices_span = sorted_primitive_indices.span();
     GWN_RETURN_ON_ERROR(
         detail::gwn_launch_linear_kernel<k_block_size>(
             primitive_count,
@@ -654,14 +649,15 @@ gwn_status gwn_build_bvh_lbvh(
         )
     );
 
+    thrust::device_ptr<std::uint32_t> const morton_begin(morton_codes.data());
+    thrust::device_ptr<Index> const sorted_primitive_indices_begin(sorted_primitive_indices.data());
     thrust::stable_sort_by_key(
-        exec, morton_codes.begin(), morton_codes.end(), sorted_primitive_indices.begin()
+        exec, morton_begin, morton_begin + primitive_count, sorted_primitive_indices_begin
     );
 
-    thrust::device_vector<gwn_aabb<Real>> sorted_aabbs(primitive_count);
-    auto const sorted_aabbs_span = cuda::std::span<gwn_aabb<Real>>(
-        thrust::raw_pointer_cast(sorted_aabbs.data()), primitive_count
-    );
+    gwn_device_array<gwn_aabb<Real>> sorted_aabbs{};
+    GWN_RETURN_ON_ERROR(sorted_aabbs.resize(primitive_count, stream));
+    auto const sorted_aabbs_span = sorted_aabbs.span();
     GWN_RETURN_ON_ERROR(
         detail::gwn_launch_linear_kernel<k_block_size>(
             primitive_count,
@@ -687,26 +683,21 @@ gwn_status gwn_build_bvh_lbvh(
     }
 
     std::size_t const binary_internal_count = primitive_count - 1;
-    thrust::device_vector<detail::gwn_binary_node<Index>> binary_nodes(binary_internal_count);
-    thrust::device_vector<Index> binary_internal_parent(binary_internal_count);
-    thrust::device_vector<std::uint8_t> binary_internal_parent_slot(binary_internal_count);
-    thrust::device_vector<Index> binary_leaf_parent(primitive_count);
-    thrust::device_vector<std::uint8_t> binary_leaf_parent_slot(primitive_count);
-    auto const binary_nodes_span = cuda::std::span<detail::gwn_binary_node<Index>>(
-        thrust::raw_pointer_cast(binary_nodes.data()), binary_internal_count
-    );
-    auto const binary_internal_parent_span = cuda::std::span<Index>(
-        thrust::raw_pointer_cast(binary_internal_parent.data()), binary_internal_count
-    );
-    auto const binary_internal_parent_slot_span = cuda::std::span<std::uint8_t>(
-        thrust::raw_pointer_cast(binary_internal_parent_slot.data()), binary_internal_count
-    );
-    auto const binary_leaf_parent_span = cuda::std::span<Index>(
-        thrust::raw_pointer_cast(binary_leaf_parent.data()), primitive_count
-    );
-    auto const binary_leaf_parent_slot_span = cuda::std::span<std::uint8_t>(
-        thrust::raw_pointer_cast(binary_leaf_parent_slot.data()), primitive_count
-    );
+    gwn_device_array<detail::gwn_binary_node<Index>> binary_nodes{};
+    gwn_device_array<Index> binary_internal_parent{};
+    gwn_device_array<std::uint8_t> binary_internal_parent_slot{};
+    gwn_device_array<Index> binary_leaf_parent{};
+    gwn_device_array<std::uint8_t> binary_leaf_parent_slot{};
+    GWN_RETURN_ON_ERROR(binary_nodes.resize(binary_internal_count, stream));
+    GWN_RETURN_ON_ERROR(binary_internal_parent.resize(binary_internal_count, stream));
+    GWN_RETURN_ON_ERROR(binary_internal_parent_slot.resize(binary_internal_count, stream));
+    GWN_RETURN_ON_ERROR(binary_leaf_parent.resize(primitive_count, stream));
+    GWN_RETURN_ON_ERROR(binary_leaf_parent_slot.resize(primitive_count, stream));
+    auto const binary_nodes_span = binary_nodes.span();
+    auto const binary_internal_parent_span = binary_internal_parent.span();
+    auto const binary_internal_parent_slot_span = binary_internal_parent_slot.span();
+    auto const binary_leaf_parent_span = binary_leaf_parent.span();
+    auto const binary_leaf_parent_slot_span = binary_leaf_parent_slot.span();
     GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemsetAsync(
         binary_internal_parent_span.data(), 0xff, binary_internal_count * sizeof(Index), stream
     )));
@@ -753,22 +744,18 @@ gwn_status gwn_build_bvh_lbvh(
     if (root_internal_index == Index(-1))
         return gwn_status::internal_error("Binary BVH topology root internal node was not found.");
 
-    thrust::device_vector<gwn_aabb<Real>> binary_internal_bounds(binary_internal_count);
-    thrust::device_vector<gwn_aabb<Real>> binary_pending_left(binary_internal_count);
-    thrust::device_vector<gwn_aabb<Real>> binary_pending_right(binary_internal_count);
-    thrust::device_vector<unsigned int> binary_child_arrivals(binary_internal_count);
-    auto const binary_internal_bounds_span = cuda::std::span<gwn_aabb<Real>>(
-        thrust::raw_pointer_cast(binary_internal_bounds.data()), binary_internal_count
-    );
-    auto const binary_pending_left_span = cuda::std::span<gwn_aabb<Real>>(
-        thrust::raw_pointer_cast(binary_pending_left.data()), binary_internal_count
-    );
-    auto const binary_pending_right_span = cuda::std::span<gwn_aabb<Real>>(
-        thrust::raw_pointer_cast(binary_pending_right.data()), binary_internal_count
-    );
-    auto const binary_child_arrivals_span = cuda::std::span<unsigned int>(
-        thrust::raw_pointer_cast(binary_child_arrivals.data()), binary_internal_count
-    );
+    gwn_device_array<gwn_aabb<Real>> binary_internal_bounds{};
+    gwn_device_array<gwn_aabb<Real>> binary_pending_left{};
+    gwn_device_array<gwn_aabb<Real>> binary_pending_right{};
+    gwn_device_array<unsigned int> binary_child_arrivals{};
+    GWN_RETURN_ON_ERROR(binary_internal_bounds.resize(binary_internal_count, stream));
+    GWN_RETURN_ON_ERROR(binary_pending_left.resize(binary_internal_count, stream));
+    GWN_RETURN_ON_ERROR(binary_pending_right.resize(binary_internal_count, stream));
+    GWN_RETURN_ON_ERROR(binary_child_arrivals.resize(binary_internal_count, stream));
+    auto const binary_internal_bounds_span = binary_internal_bounds.span();
+    auto const binary_pending_left_span = binary_pending_left.span();
+    auto const binary_pending_right_span = binary_pending_right.span();
+    auto const binary_child_arrivals_span = binary_child_arrivals.span();
     GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemsetAsync(
         binary_child_arrivals_span.data(), 0, binary_internal_count * sizeof(unsigned int), stream
     )));
@@ -804,18 +791,15 @@ gwn_status gwn_build_bvh_lbvh(
     static_assert(
         (Width & (Width - 1)) == 0, "BVH collapse currently requires power-of-two Width."
     );
-    thrust::device_vector<std::uint8_t> collapse_internal_is_wide_root(binary_internal_count);
-    thrust::device_vector<Index> collapse_internal_wide_node_id(binary_internal_count);
-    thrust::device_vector<Index> collapse_wide_node_binary_root(binary_internal_count);
-    auto const collapse_internal_is_wide_root_span = cuda::std::span<std::uint8_t>(
-        thrust::raw_pointer_cast(collapse_internal_is_wide_root.data()), binary_internal_count
-    );
-    auto const collapse_internal_wide_node_id_span = cuda::std::span<Index>(
-        thrust::raw_pointer_cast(collapse_internal_wide_node_id.data()), binary_internal_count
-    );
-    auto const collapse_wide_node_binary_root_span = cuda::std::span<Index>(
-        thrust::raw_pointer_cast(collapse_wide_node_binary_root.data()), binary_internal_count
-    );
+    gwn_device_array<std::uint8_t> collapse_internal_is_wide_root{};
+    gwn_device_array<Index> collapse_internal_wide_node_id{};
+    gwn_device_array<Index> collapse_wide_node_binary_root{};
+    GWN_RETURN_ON_ERROR(collapse_internal_is_wide_root.resize(binary_internal_count, stream));
+    GWN_RETURN_ON_ERROR(collapse_internal_wide_node_id.resize(binary_internal_count, stream));
+    GWN_RETURN_ON_ERROR(collapse_wide_node_binary_root.resize(binary_internal_count, stream));
+    auto const collapse_internal_is_wide_root_span = collapse_internal_is_wide_root.span();
+    auto const collapse_internal_wide_node_id_span = collapse_internal_wide_node_id.span();
+    auto const collapse_wide_node_binary_root_span = collapse_wide_node_binary_root.span();
 
     GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemsetAsync(
         collapse_internal_is_wide_root_span.data(), 0, binary_internal_count * sizeof(std::uint8_t),
@@ -2074,9 +2058,12 @@ gwn_status gwn_build_bvh4_lbvh_taylor_levelwise(
         if (level_nodes.empty())
             continue;
 
-        thrust::device_vector<Index> level_node_ids_device(level_nodes.begin(), level_nodes.end());
+        gwn_device_array<Index> level_node_ids_device{};
+        GWN_RETURN_ON_ERROR(level_node_ids_device.copy_from_host(
+            cuda::std::span<Index const>(level_nodes.data(), level_nodes.size()), stream
+        ));
         auto const level_node_ids_span = cuda::std::span<Index const>(
-            thrust::raw_pointer_cast(level_node_ids_device.data()), level_node_ids_device.size()
+            level_node_ids_device.data(), level_node_ids_device.size()
         );
 
         GWN_RETURN_ON_ERROR(
