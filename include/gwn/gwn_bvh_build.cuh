@@ -11,10 +11,8 @@
 #include <limits>
 #include <vector>
 
-#include <thrust/device_ptr.h>
-#include <thrust/execution_policy.h>
-#include <thrust/extrema.h>
-#include <thrust/sort.h>
+#include <cub/device/device_radix_sort.cuh>
+#include <cub/device/device_reduce.cuh>
 
 #include "gwn_bvh.cuh"
 #include "gwn_geometry.cuh"
@@ -72,6 +70,58 @@ template <class Real>
     Real const dy = std::max(bounds.max_y - bounds.min_y, Real(0));
     Real const dz = std::max(bounds.max_z - bounds.min_z, Real(0));
     return dx * dy + dy * dz + dz * dx;
+}
+
+template <class Real>
+gwn_status gwn_reduce_minmax_cub(
+    cuda::std::span<Real const> const values, gwn_device_array<Real> &min_result,
+    gwn_device_array<Real> &max_result, gwn_device_array<std::uint8_t> &temp_storage,
+    Real &host_min, Real &host_max, cudaStream_t const stream
+) noexcept {
+    if (values.empty())
+        return gwn_status::invalid_argument("CUB reduction input span is empty.");
+    if (values.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+        return gwn_status::invalid_argument("CUB reduction input exceeds int32 item count.");
+
+    int const item_count = static_cast<int>(values.size());
+    std::size_t min_temp_bytes = 0;
+    std::size_t max_temp_bytes = 0;
+    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
+        cub::DeviceReduce::Min(
+            nullptr, min_temp_bytes, values.data(), min_result.data(), item_count, stream
+        )
+    ));
+    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
+        cub::DeviceReduce::Max(
+            nullptr, max_temp_bytes, values.data(), max_result.data(), item_count, stream
+        )
+    ));
+
+    std::size_t const required_temp_bytes = std::max(min_temp_bytes, max_temp_bytes);
+    if (temp_storage.size() < required_temp_bytes)
+        GWN_RETURN_ON_ERROR(temp_storage.resize(required_temp_bytes, stream));
+
+    std::size_t temp_storage_bytes = required_temp_bytes;
+
+    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
+        cub::DeviceReduce::Min(
+            temp_storage.data(), temp_storage_bytes, values.data(), min_result.data(), item_count,
+            stream
+        )
+    ));
+    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
+        cub::DeviceReduce::Max(
+            temp_storage.data(), temp_storage_bytes, values.data(), max_result.data(), item_count,
+            stream
+        )
+    ));
+    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
+        cudaMemcpyAsync(&host_min, min_result.data(), sizeof(Real), cudaMemcpyDeviceToHost, stream)
+    ));
+    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
+        cudaMemcpyAsync(&host_max, max_result.data(), sizeof(Real), cudaMemcpyDeviceToHost, stream)
+    ));
+    return gwn_status::ok();
 }
 
 template <class Real, class Index> struct gwn_compute_triangle_aabbs_and_morton_functor {
@@ -582,44 +632,35 @@ gwn_status gwn_build_bvh_lbvh(
         return gwn_status::ok();
     };
 
-    auto exec = thrust::cuda::par.on(stream);
-    thrust::device_ptr<Real const> vx_ptr(geometry.vertex_x.data());
-    thrust::device_ptr<Real const> vy_ptr(geometry.vertex_y.data());
-    thrust::device_ptr<Real const> vz_ptr(geometry.vertex_z.data());
-    auto const x_pair = thrust::minmax_element(exec, vx_ptr, vx_ptr + geometry.vertex_count());
-    auto const y_pair = thrust::minmax_element(exec, vy_ptr, vy_ptr + geometry.vertex_count());
-    auto const z_pair = thrust::minmax_element(exec, vz_ptr, vz_ptr + geometry.vertex_count());
-
     Real scene_min_x = Real(0);
     Real scene_max_x = Real(0);
     Real scene_min_y = Real(0);
     Real scene_max_y = Real(0);
     Real scene_min_z = Real(0);
     Real scene_max_z = Real(0);
-    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemcpyAsync(
-        &scene_min_x, thrust::raw_pointer_cast(x_pair.first), sizeof(Real), cudaMemcpyDeviceToHost,
-        stream
-    )));
-    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemcpyAsync(
-        &scene_max_x, thrust::raw_pointer_cast(x_pair.second), sizeof(Real), cudaMemcpyDeviceToHost,
-        stream
-    )));
-    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemcpyAsync(
-        &scene_min_y, thrust::raw_pointer_cast(y_pair.first), sizeof(Real), cudaMemcpyDeviceToHost,
-        stream
-    )));
-    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemcpyAsync(
-        &scene_max_y, thrust::raw_pointer_cast(y_pair.second), sizeof(Real), cudaMemcpyDeviceToHost,
-        stream
-    )));
-    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemcpyAsync(
-        &scene_min_z, thrust::raw_pointer_cast(z_pair.first), sizeof(Real), cudaMemcpyDeviceToHost,
-        stream
-    )));
-    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemcpyAsync(
-        &scene_max_z, thrust::raw_pointer_cast(z_pair.second), sizeof(Real), cudaMemcpyDeviceToHost,
-        stream
-    )));
+    gwn_device_array<Real> scene_axis_min{};
+    gwn_device_array<Real> scene_axis_max{};
+    gwn_device_array<std::uint8_t> scene_reduce_temp{};
+    GWN_RETURN_ON_ERROR(scene_axis_min.resize(1, stream));
+    GWN_RETURN_ON_ERROR(scene_axis_max.resize(1, stream));
+    GWN_RETURN_ON_ERROR(
+        detail::gwn_reduce_minmax_cub(
+            geometry.vertex_x, scene_axis_min, scene_axis_max, scene_reduce_temp, scene_min_x,
+            scene_max_x, stream
+        )
+    );
+    GWN_RETURN_ON_ERROR(
+        detail::gwn_reduce_minmax_cub(
+            geometry.vertex_y, scene_axis_min, scene_axis_max, scene_reduce_temp, scene_min_y,
+            scene_max_y, stream
+        )
+    );
+    GWN_RETURN_ON_ERROR(
+        detail::gwn_reduce_minmax_cub(
+            geometry.vertex_z, scene_axis_min, scene_axis_max, scene_reduce_temp, scene_min_z,
+            scene_max_z, stream
+        )
+    );
     GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaStreamSynchronize(stream)));
 
     Real const scene_inv_x =
@@ -631,29 +672,52 @@ gwn_status gwn_build_bvh_lbvh(
 
     gwn_device_array<gwn_aabb<Real>> primitive_aabbs{};
     gwn_device_array<std::uint32_t> morton_codes{};
-    gwn_device_array<Index> sorted_primitive_indices{};
+    gwn_device_array<Index> primitive_indices{};
     GWN_RETURN_ON_ERROR(primitive_aabbs.resize(primitive_count, stream));
     GWN_RETURN_ON_ERROR(morton_codes.resize(primitive_count, stream));
-    GWN_RETURN_ON_ERROR(sorted_primitive_indices.resize(primitive_count, stream));
+    GWN_RETURN_ON_ERROR(primitive_indices.resize(primitive_count, stream));
     auto const primitive_aabbs_span = primitive_aabbs.span();
     auto const morton_codes_span = morton_codes.span();
-    auto const sorted_primitive_indices_span = sorted_primitive_indices.span();
+    auto const primitive_indices_span = primitive_indices.span();
     GWN_RETURN_ON_ERROR(
         detail::gwn_launch_linear_kernel<k_block_size>(
             primitive_count,
             detail::gwn_compute_triangle_aabbs_and_morton_functor<Real, Index>{
                 geometry, scene_min_x, scene_min_y, scene_min_z, scene_inv_x, scene_inv_y,
-                scene_inv_z, primitive_aabbs_span, morton_codes_span, sorted_primitive_indices_span
+                scene_inv_z, primitive_aabbs_span, morton_codes_span, primitive_indices_span
             },
             stream
         )
     );
 
-    thrust::device_ptr<std::uint32_t> const morton_begin(morton_codes.data());
-    thrust::device_ptr<Index> const sorted_primitive_indices_begin(sorted_primitive_indices.data());
-    thrust::stable_sort_by_key(
-        exec, morton_begin, morton_begin + primitive_count, sorted_primitive_indices_begin
-    );
+    if (primitive_count > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+        return gwn_status::invalid_argument("CUB radix sort input exceeds int32 item count.");
+    int const radix_item_count = static_cast<int>(primitive_count);
+    gwn_device_array<std::uint32_t> sorted_morton_codes{};
+    gwn_device_array<Index> sorted_primitive_indices{};
+    gwn_device_array<std::uint8_t> radix_sort_temp{};
+    GWN_RETURN_ON_ERROR(sorted_morton_codes.resize(primitive_count, stream));
+    GWN_RETURN_ON_ERROR(sorted_primitive_indices.resize(primitive_count, stream));
+
+    std::size_t radix_sort_temp_bytes = 0;
+    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
+        cub::DeviceRadixSort::SortPairs(
+            nullptr, radix_sort_temp_bytes, morton_codes_span.data(), sorted_morton_codes.data(),
+            primitive_indices_span.data(), sorted_primitive_indices.data(), radix_item_count, 0,
+            static_cast<int>(sizeof(std::uint32_t) * 8), stream
+        )
+    ));
+    GWN_RETURN_ON_ERROR(radix_sort_temp.resize(radix_sort_temp_bytes, stream));
+    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
+        cub::DeviceRadixSort::SortPairs(
+            radix_sort_temp.data(), radix_sort_temp_bytes, morton_codes_span.data(),
+            sorted_morton_codes.data(), primitive_indices_span.data(),
+            sorted_primitive_indices.data(), radix_item_count, 0,
+            static_cast<int>(sizeof(std::uint32_t) * 8), stream
+        )
+    ));
+    auto const sorted_morton_codes_span = sorted_morton_codes.span();
+    auto const sorted_primitive_indices_span = sorted_primitive_indices.span();
 
     gwn_device_array<gwn_aabb<Real>> sorted_aabbs{};
     GWN_RETURN_ON_ERROR(sorted_aabbs.resize(primitive_count, stream));
@@ -715,7 +779,7 @@ gwn_status gwn_build_bvh_lbvh(
         detail::gwn_launch_linear_kernel<k_block_size>(
             binary_internal_count,
             detail::gwn_build_binary_topology_functor<Index>{
-                morton_codes_span, binary_nodes_span, binary_internal_parent_span,
+                sorted_morton_codes_span, binary_nodes_span, binary_internal_parent_span,
                 binary_internal_parent_slot_span, binary_leaf_parent_span,
                 binary_leaf_parent_slot_span
             },
