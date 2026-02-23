@@ -381,26 +381,6 @@ template <int Value> struct gwn_log2_pow2 {
     static constexpr int value = 1 + gwn_log2_pow2<(Value >> 1)>::value;
 };
 
-template <class Index> struct gwn_collapse_mark_root_pass_functor {
-    cuda::std::span<std::uint8_t> internal_is_wide_root{};
-    cuda::std::span<Index> internal_wide_node_id{};
-    cuda::std::span<Index> wide_node_binary_root{};
-    Index root_internal_index{};
-
-    __device__ void operator()(std::size_t const) const {
-        if (root_internal_index < Index(0))
-            return;
-        std::size_t const root_id = static_cast<std::size_t>(root_internal_index);
-        if (root_id >= internal_is_wide_root.size() || root_id >= internal_wide_node_id.size() ||
-            wide_node_binary_root.empty()) {
-            return;
-        }
-        internal_is_wide_root[root_id] = std::uint8_t(1);
-        internal_wide_node_id[root_id] = Index(0);
-        wide_node_binary_root[0] = root_internal_index;
-    }
-};
-
 template <int Width, class Index> struct gwn_collapse_summarize_pass_functor {
     static constexpr int k_collapse_depth = gwn_log2_pow2<Width>::value;
 
@@ -787,26 +767,7 @@ gwn_status gwn_build_bvh_lbvh(
         )
     );
 
-    std::vector<Index> host_internal_parent(binary_internal_count, Index(-1));
-    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemcpyAsync(
-        host_internal_parent.data(), binary_internal_parent_span.data(),
-        binary_internal_count * sizeof(Index), cudaMemcpyDeviceToHost, stream
-    )));
-    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaStreamSynchronize(stream)));
-
-    Index root_internal_index = Index(-1);
-    for (std::size_t node_id = 0; node_id < host_internal_parent.size(); ++node_id) {
-        if (host_internal_parent[node_id] != Index(-1))
-            continue;
-        if (root_internal_index != Index(-1)) {
-            return gwn_status::internal_error(
-                "Binary BVH topology produced multiple root internal nodes."
-            );
-        }
-        root_internal_index = static_cast<Index>(node_id);
-    }
-    if (root_internal_index == Index(-1))
-        return gwn_status::internal_error("Binary BVH topology root internal node was not found.");
+    Index const root_internal_index = Index(0);
 
     gwn_device_array<gwn_aabb<Real>> binary_internal_bounds{};
     gwn_device_array<gwn_aabb<Real>> binary_pending_left{};
@@ -889,17 +850,22 @@ gwn_status gwn_build_bvh_lbvh(
         collapse_wide_count, &collapse_wide_count_init, sizeof(unsigned int),
         cudaMemcpyHostToDevice, stream
     )));
+    std::uint8_t const collapse_root_is_wide = std::uint8_t(1);
+    Index const collapse_root_wide_node_id = Index(0);
+    Index const collapse_root_binary_root = root_internal_index;
+    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemcpyAsync(
+        collapse_internal_is_wide_root_span.data(), &collapse_root_is_wide, sizeof(std::uint8_t),
+        cudaMemcpyHostToDevice, stream
+    )));
+    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemcpyAsync(
+        collapse_internal_wide_node_id_span.data(), &collapse_root_wide_node_id, sizeof(Index),
+        cudaMemcpyHostToDevice, stream
+    )));
+    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemcpyAsync(
+        collapse_wide_node_binary_root_span.data(), &collapse_root_binary_root, sizeof(Index),
+        cudaMemcpyHostToDevice, stream
+    )));
 
-    GWN_RETURN_ON_ERROR(
-        detail::gwn_launch_linear_kernel<k_block_size>(
-            1,
-            detail::gwn_collapse_mark_root_pass_functor<Index>{
-                collapse_internal_is_wide_root_span, collapse_internal_wide_node_id_span,
-                collapse_wide_node_binary_root_span, root_internal_index
-            },
-            stream
-        )
-    );
     GWN_RETURN_ON_ERROR(
         detail::gwn_launch_linear_kernel<k_block_size>(
             binary_internal_count,
