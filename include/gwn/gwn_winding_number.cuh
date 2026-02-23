@@ -20,6 +20,7 @@
 namespace gwn {
 
 template <class Real> using gwn_vec3 = Eigen::Matrix<Real, 3, 1>;
+inline constexpr int k_gwn_default_traversal_stack_capacity = 32;
 
 template <class Real>
 __host__ __device__ inline Real gwn_signed_solid_angle_triangle(
@@ -112,20 +113,21 @@ __device__ inline Real gwn_winding_number_point(
     return omega_sum / (Real(4) * k_pi);
 }
 
-template <int Width, class Real, class Index>
+template <
+    int Width, class Real, class Index, int StackCapacity = k_gwn_default_traversal_stack_capacity>
 __device__ inline Real gwn_winding_number_point_bvh_exact(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh, Real const qx, Real const qy,
     Real const qz
 ) noexcept {
     static_assert(Width >= 2, "BVH width must be at least 2.");
+    static_assert(StackCapacity > 0, "Traversal stack capacity must be positive.");
 
     if (!geometry.is_valid() || !bvh.is_valid())
         return Real(0);
 
     constexpr Real k_pi = Real(3.141592653589793238462643383279502884L);
-    constexpr int k_stack_capacity = 256;
-    Index stack[k_stack_capacity];
+    Index stack[StackCapacity];
     int stack_size = 0;
 
     gwn_vec3<Real> const query(qx, qy, qz);
@@ -164,8 +166,9 @@ __device__ inline Real gwn_winding_number_point_bvh_exact(
                 continue;
 
             if (child_kind == gwn_bvh_child_kind::k_internal) {
-                if (stack_size < k_stack_capacity)
-                    stack[stack_size++] = node.child_index[child_slot];
+                if (stack_size >= StackCapacity)
+                    __trap();
+                stack[stack_size++] = node.child_index[child_slot];
                 continue;
             }
 
@@ -209,7 +212,8 @@ template <class Real, class Index> struct gwn_winding_number_batch_functor {
     }
 };
 
-template <int Width, class Real, class Index> struct gwn_winding_number_batch_bvh_exact_functor {
+template <int Width, class Real, class Index, int StackCapacity>
+struct gwn_winding_number_batch_bvh_exact_functor {
     gwn_geometry_accessor<Real, Index> geometry{};
     gwn_bvh_topology_accessor<Width, Real, Index> bvh{};
     cuda::std::span<Real const> query_x{};
@@ -218,7 +222,7 @@ template <int Width, class Real, class Index> struct gwn_winding_number_batch_bv
     cuda::std::span<Real> output{};
 
     __device__ void operator()(std::size_t const query_id) const {
-        output[query_id] = gwn_winding_number_point_bvh_exact<Width>(
+        output[query_id] = gwn_winding_number_point_bvh_exact<Width, Real, Index, StackCapacity>(
             geometry, bvh, query_x[query_id], query_y[query_id], query_z[query_id]
         );
     }
@@ -263,7 +267,9 @@ template <int Order, int Width, class Real, class Index>
     return gwn_taylor_nodes_getter<Order, Width, Real, Index>::get(data_tree);
 }
 
-template <int Order, int Width, class Real, class Index>
+template <
+    int Order, int Width, class Real, class Index,
+    int StackCapacity = k_gwn_default_traversal_stack_capacity>
 __device__ inline Real gwn_winding_number_point_bvh_taylor(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
@@ -274,19 +280,23 @@ __device__ inline Real gwn_winding_number_point_bvh_taylor(
         Order == 0 || Order == 1,
         "gwn_winding_number_point_bvh_taylor currently supports Order 0 and Order 1."
     );
+    static_assert(StackCapacity > 0, "Traversal stack capacity must be positive.");
 
     if (!geometry.is_valid() || !bvh.is_valid())
         return Real(0);
     if (!data_tree.is_valid_for(bvh) || !data_tree.template has_taylor_order<Order>())
-        return gwn_winding_number_point_bvh_exact<Width>(geometry, bvh, qx, qy, qz);
+        return gwn_winding_number_point_bvh_exact<Width, Real, Index, StackCapacity>(
+            geometry, bvh, qx, qy, qz
+        );
 
     auto const taylor_nodes = gwn_get_taylor_nodes<Order, Width>(data_tree);
     if (taylor_nodes.size() != bvh.nodes.size())
-        return gwn_winding_number_point_bvh_exact<Width>(geometry, bvh, qx, qy, qz);
+        return gwn_winding_number_point_bvh_exact<Width, Real, Index, StackCapacity>(
+            geometry, bvh, qx, qy, qz
+        );
 
     constexpr Real k_pi = Real(3.141592653589793238462643383279502884L);
-    constexpr int k_stack_capacity = 256;
-    Index stack[k_stack_capacity];
+    Index stack[StackCapacity];
     int stack_size = 0;
 
     Real omega_sum = Real(0);
@@ -370,8 +380,9 @@ __device__ inline Real gwn_winding_number_point_bvh_taylor(
             }
 
             if (child_kind == gwn_bvh_child_kind::k_internal) {
-                if (stack_size < k_stack_capacity)
-                    stack[stack_size++] = node.child_index[child_slot];
+                if (stack_size >= StackCapacity)
+                    __trap();
+                stack[stack_size++] = node.child_index[child_slot];
                 continue;
             }
 
@@ -397,7 +408,7 @@ __device__ inline Real gwn_winding_number_point_bvh_taylor(
     return omega_sum / (Real(4) * k_pi);
 }
 
-template <int Order, int Width, class Real, class Index>
+template <int Order, int Width, class Real, class Index, int StackCapacity>
 struct gwn_winding_number_batch_bvh_taylor_functor {
     gwn_geometry_accessor<Real, Index> geometry{};
     gwn_bvh_topology_accessor<Width, Real, Index> bvh{};
@@ -409,10 +420,11 @@ struct gwn_winding_number_batch_bvh_taylor_functor {
     Real accuracy_scale{};
 
     __device__ void operator()(std::size_t const query_id) const {
-        output[query_id] = gwn_winding_number_point_bvh_taylor<Order, Width>(
-            geometry, bvh, data_tree, query_x[query_id], query_y[query_id], query_z[query_id],
-            accuracy_scale
-        );
+        output[query_id] =
+            gwn_winding_number_point_bvh_taylor<Order, Width, Real, Index, StackCapacity>(
+                geometry, bvh, data_tree, query_x[query_id], query_y[query_id], query_z[query_id],
+                accuracy_scale
+            );
     }
 };
 
@@ -428,21 +440,22 @@ gwn_make_winding_number_batch_functor(
     };
 }
 
-template <int Width, class Real, class Index>
-[[nodiscard]] inline gwn_winding_number_batch_bvh_exact_functor<Width, Real, Index>
+template <int Width, class Real, class Index, int StackCapacity>
+[[nodiscard]] inline gwn_winding_number_batch_bvh_exact_functor<Width, Real, Index, StackCapacity>
 gwn_make_winding_number_batch_bvh_exact_functor(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
     cuda::std::span<Real const> const query_x, cuda::std::span<Real const> const query_y,
     cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output
 ) {
-    return gwn_winding_number_batch_bvh_exact_functor<Width, Real, Index>{geometry, bvh,
-                                                                          query_x,  query_y,
-                                                                          query_z,  output};
+    return gwn_winding_number_batch_bvh_exact_functor<Width, Real, Index, StackCapacity>{
+        geometry, bvh, query_x, query_y, query_z, output
+    };
 }
 
-template <int Order, int Width, class Real, class Index>
-[[nodiscard]] inline gwn_winding_number_batch_bvh_taylor_functor<Order, Width, Real, Index>
+template <int Order, int Width, class Real, class Index, int StackCapacity>
+[[nodiscard]] inline gwn_winding_number_batch_bvh_taylor_functor<
+    Order, Width, Real, Index, StackCapacity>
 gwn_make_winding_number_batch_bvh_taylor_functor(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
@@ -451,7 +464,7 @@ gwn_make_winding_number_batch_bvh_taylor_functor(
     cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output,
     Real const accuracy_scale
 ) {
-    return gwn_winding_number_batch_bvh_taylor_functor<Order, Width, Real, Index>{
+    return gwn_winding_number_batch_bvh_taylor_functor<Order, Width, Real, Index, StackCapacity>{
         geometry, bvh, data_tree, query_x, query_y, query_z, output, accuracy_scale
     };
 }
@@ -494,7 +507,9 @@ gwn_status gwn_compute_winding_number_batch(
 }
 
 /// \brief Compute winding numbers for a batch using exact BVH traversal.
-template <int Width, class Real, class Index = std::int64_t>
+template <
+    int Width, class Real, class Index = std::int64_t,
+    int StackCapacity = k_gwn_default_traversal_stack_capacity>
 gwn_status gwn_compute_winding_number_batch_bvh_exact(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
@@ -503,6 +518,7 @@ gwn_status gwn_compute_winding_number_batch_bvh_exact(
     cudaStream_t const stream = gwn_default_stream()
 ) noexcept {
     static_assert(Width >= 2, "BVH width must be at least 2.");
+    static_assert(StackCapacity > 0, "Traversal stack capacity must be positive.");
 
     if (!geometry.is_valid())
         return gwn_status::invalid_argument("Geometry accessor contains mismatched span lengths.");
@@ -524,7 +540,7 @@ gwn_status gwn_compute_winding_number_batch_bvh_exact(
     constexpr int k_block_size = detail::k_gwn_default_block_size;
     return detail::gwn_launch_linear_kernel<k_block_size>(
         output.size(),
-        detail::gwn_make_winding_number_batch_bvh_exact_functor<Width, Real, Index>(
+        detail::gwn_make_winding_number_batch_bvh_exact_functor<Width, Real, Index, StackCapacity>(
             geometry, bvh, query_x, query_y, query_z, output
         ),
         stream
@@ -532,14 +548,16 @@ gwn_status gwn_compute_winding_number_batch_bvh_exact(
 }
 
 /// \brief Width-4 convenience wrapper for exact BVH batch queries.
-template <class Real, class Index = std::int64_t>
+template <
+    class Real, class Index = std::int64_t,
+    int StackCapacity = k_gwn_default_traversal_stack_capacity>
 gwn_status gwn_compute_winding_number_batch_bvh_exact(
     gwn_geometry_accessor<Real, Index> const &geometry, gwn_bvh_accessor<Real, Index> const &bvh,
     cuda::std::span<Real const> const query_x, cuda::std::span<Real const> const query_y,
     cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output,
     cudaStream_t const stream = gwn_default_stream()
 ) noexcept {
-    return gwn_compute_winding_number_batch_bvh_exact<4, Real, Index>(
+    return gwn_compute_winding_number_batch_bvh_exact<4, Real, Index, StackCapacity>(
         geometry, bvh, query_x, query_y, query_z, output, stream
     );
 }
@@ -547,7 +565,9 @@ gwn_status gwn_compute_winding_number_batch_bvh_exact(
 /// \brief Compute winding numbers for a batch using Taylor-accelerated BVH traversal.
 ///
 /// \remark Falls back to exact child descent per node when the approximation criterion fails.
-template <int Order, int Width, class Real, class Index = std::int64_t>
+template <
+    int Order, int Width, class Real, class Index = std::int64_t,
+    int StackCapacity = k_gwn_default_traversal_stack_capacity>
 gwn_status gwn_compute_winding_number_batch_bvh_taylor(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
@@ -560,6 +580,7 @@ gwn_status gwn_compute_winding_number_batch_bvh_taylor(
         Order == 0 || Order == 1,
         "gwn_compute_winding_number_batch_bvh_taylor currently supports Order 0 and Order 1."
     );
+    static_assert(StackCapacity > 0, "Traversal stack capacity must be positive.");
 
     if (!geometry.is_valid())
         return gwn_status::invalid_argument("Geometry accessor contains mismatched span lengths.");
@@ -587,7 +608,8 @@ gwn_status gwn_compute_winding_number_batch_bvh_taylor(
     constexpr int k_block_size = detail::k_gwn_default_block_size;
     return detail::gwn_launch_linear_kernel<k_block_size>(
         output.size(),
-        detail::gwn_make_winding_number_batch_bvh_taylor_functor<Order, Width, Real, Index>(
+        detail::gwn_make_winding_number_batch_bvh_taylor_functor<
+            Order, Width, Real, Index, StackCapacity>(
             geometry, bvh, data_tree, query_x, query_y, query_z, output, accuracy_scale
         ),
         stream
@@ -595,7 +617,9 @@ gwn_status gwn_compute_winding_number_batch_bvh_taylor(
 }
 
 /// \brief Width-4 convenience wrapper for Taylor BVH batch queries.
-template <int Order, class Real, class Index = std::int64_t>
+template <
+    int Order, class Real, class Index = std::int64_t,
+    int StackCapacity = k_gwn_default_traversal_stack_capacity>
 gwn_status gwn_compute_winding_number_batch_bvh_taylor(
     gwn_geometry_accessor<Real, Index> const &geometry, gwn_bvh_accessor<Real, Index> const &bvh,
     gwn_bvh_moment4_accessor<Real, Index> const &data_tree,
@@ -603,7 +627,7 @@ gwn_status gwn_compute_winding_number_batch_bvh_taylor(
     cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output,
     Real const accuracy_scale = Real(2), cudaStream_t const stream = gwn_default_stream()
 ) noexcept {
-    return gwn_compute_winding_number_batch_bvh_taylor<Order, 4, Real, Index>(
+    return gwn_compute_winding_number_batch_bvh_taylor<Order, 4, Real, Index, StackCapacity>(
         geometry, bvh, data_tree, query_x, query_y, query_z, output, accuracy_scale, stream
     );
 }
