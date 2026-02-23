@@ -112,10 +112,17 @@ These instructions apply to the `smallgwn/` project tree.
   - Taylor parity includes GPU order-0/order-1 vs HDK CPU order-0/order-1 comparisons.
 - `tests/reference_cpu.cuh`: TBB-parallel CPU exact reference implementation.
 - `tests/reference_hdk/*`: Vendored HDK reference sources for parity/regression checks (keep under `tests/`, not public).
+- Benchmark executable:
+  - `smallgwn_benchmark` from `benchmarks/benchmark_main.cu`
+  - Measures: `topology_build_lbvh`, `refit_aabb`, `refit_moment_o0`, `refit_moment_o1`,
+    `facade_o0`, `facade_o1`, `query_taylor_o0`, `query_taylor_o1`
+  - Output: console summary + CSV rows (`--csv <path>`)
 
 ## Validation Workflow
 - Configure/build: `cmake -S smallgwn -B smallgwn/build && cmake --build smallgwn/build -j`
 - Run tests: `ctest --test-dir smallgwn/build --output-on-failure`
+- Run benchmark (single model): `smallgwn/build/smallgwn_benchmark --model /path/to/model.obj --queries 1000000 --warmup 5 --iters 20 --csv smallgwn_bench.csv`
+- Run benchmark (model dir): `smallgwn/build/smallgwn_benchmark --model-dir /path/to/models --queries 1000000 --warmup 5 --iters 20 --csv smallgwn_bench.csv`
 
 ## Git & Maintenance Rules
 - Use Conventional Commits (`feat:`, `fix:`, `refactor:`, `test:`, etc.).

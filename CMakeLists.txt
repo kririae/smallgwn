@@ -32,6 +32,17 @@ target_compile_features(smallgwn INTERFACE cxx_std_20)
 target_link_libraries(smallgwn INTERFACE CUDA::cudart Eigen3::Eigen TBB::tbb)
 target_compile_options(smallgwn INTERFACE "$<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>")
 
+option(SMALLGWN_BUILD_BENCHMARKS "Build smallgwn benchmark executable" ON)
+if(SMALLGWN_BUILD_BENCHMARKS)
+    add_executable(smallgwn_benchmark benchmarks/benchmark_main.cu)
+    target_link_libraries(smallgwn_benchmark PRIVATE gwn::smallgwn TBB::tbb)
+    target_include_directories(smallgwn_benchmark
+        PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests"
+    )
+endif()
+
 option(SMALLGWN_BUILD_TESTS "Build smallgwn tests" ON)
 if(SMALLGWN_BUILD_TESTS)
     include(CTest)
