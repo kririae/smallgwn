@@ -181,6 +181,15 @@ __global__ __launch_bounds__(BlockSize) void gwn_build_binary_hploc_kernel(
     auto const delta = [&](std::uint32_t const a, std::uint32_t const b) {
         MortonCode const key_a = sorted_morton_codes[a];
         MortonCode const key_b = sorted_morton_codes[b];
+        if constexpr (std::is_same_v<MortonCode, std::uint32_t>) {
+            // Tie-break equal Morton keys with primitive indices to keep
+            // parent selection stable for 32-bit Morton paths.
+            std::uint64_t const combined_a =
+                (static_cast<std::uint64_t>(key_a) << 32u) | static_cast<std::uint64_t>(a);
+            std::uint64_t const combined_b =
+                (static_cast<std::uint64_t>(key_b) << 32u) | static_cast<std::uint64_t>(b);
+            return combined_a ^ combined_b;
+        }
         std::uint64_t const key_delta = static_cast<std::uint64_t>(key_a ^ key_b);
         if (key_delta == 0)
             return std::uint64_t(a ^ b);

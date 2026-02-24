@@ -327,13 +327,14 @@ gwn_status gwn_compute_and_sort_morton(
     gwn_device_array<std::uint8_t> radix_sort_temp{};
     GWN_RETURN_ON_ERROR(sorted_morton_codes.resize(primitive_count, stream));
     GWN_RETURN_ON_ERROR(sorted_primitive_indices.resize(primitive_count, stream));
+    int const radix_sort_end_bit = static_cast<int>(sizeof(MortonCode) * 8);
 
     std::size_t radix_sort_temp_bytes = 0;
     GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
         cub::DeviceRadixSort::SortPairs(
             nullptr, radix_sort_temp_bytes, morton_codes_span.data(), sorted_morton_codes.data(),
             primitive_indices_span.data(), sorted_primitive_indices.data(), radix_item_count, 0,
-            static_cast<int>(sizeof(std::uint64_t) * 8), stream
+            radix_sort_end_bit, stream
         )
     ));
     GWN_RETURN_ON_ERROR(radix_sort_temp.resize(radix_sort_temp_bytes, stream));
@@ -341,8 +342,7 @@ gwn_status gwn_compute_and_sort_morton(
         cub::DeviceRadixSort::SortPairs(
             radix_sort_temp.data(), radix_sort_temp_bytes, morton_codes_span.data(),
             sorted_morton_codes.data(), primitive_indices_span.data(),
-            sorted_primitive_indices.data(), radix_item_count, 0,
-            static_cast<int>(sizeof(std::uint64_t) * 8), stream
+            sorted_primitive_indices.data(), radix_item_count, 0, radix_sort_end_bit, stream
         )
     ));
 

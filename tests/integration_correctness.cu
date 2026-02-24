@@ -25,6 +25,35 @@ using Real = gwn::tests::Real;
 using Index = gwn::tests::Index;
 using gwn::tests::HostMesh;
 
+enum class topology_builder {
+    k_lbvh,
+    k_hploc,
+};
+
+[[nodiscard]] char const *to_builder_name(topology_builder const builder) noexcept {
+    switch (builder) {
+    case topology_builder::k_lbvh: return "lbvh";
+    case topology_builder::k_hploc: return "hploc";
+    }
+    return "unknown";
+}
+
+template <int Order>
+gwn::gwn_status build_facade_for_builder(
+    topology_builder const builder, gwn::gwn_geometry_object<Real, Index> const &geometry,
+    gwn::gwn_bvh_object<Real, Index> &topology, gwn::gwn_bvh_aabb_object<Real, Index> &aabb,
+    gwn::gwn_bvh_moment_object<Real, Index> &moment
+) {
+    if (builder == topology_builder::k_hploc) {
+        return gwn::gwn_bvh_facade_build_topology_aabb_moment_hploc<Order, 4, Real, Index>(
+            geometry, topology, aabb, moment
+        );
+    }
+    return gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<Order, 4, Real, Index>(
+        geometry, topology, aabb, moment
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Voxel grid helpers (unique to correctness tests).
 // ---------------------------------------------------------------------------
@@ -486,6 +515,150 @@ TEST(smallgwn_integration_correctness, voxel_order1_rebuild_consistency) {
     ASSERT_GT(tested_model_count, 0u) << "No valid OBJ models were exercised.";
     EXPECT_TRUE(any_nonzero_winding)
         << "All tested models produced near-zero winding values across voxel queries.";
+}
+
+TEST(smallgwn_integration_correctness, voxel_order1_hploc_vs_lbvh_consistency_on_sampled_models) {
+    std::vector<std::filesystem::path> const model_paths = gwn::tests::collect_model_paths();
+    ASSERT_FALSE(model_paths.empty())
+        << "No model input found. Set SMALLGWN_MODEL_DATA_DIR or SMALLGWN_MODEL_PATH.";
+
+    std::size_t const model_limit =
+        gwn::tests::get_env_positive_size_t("SMALLGWN_HPLOC_COMPARE_MODEL_LIMIT", 4);
+    std::size_t const target_total_points =
+        gwn::tests::get_env_positive_size_t("SMALLGWN_HPLOC_COMPARE_TOTAL_POINTS", 2'000'000);
+    std::size_t const max_sample_count =
+        gwn::tests::get_env_positive_size_t("SMALLGWN_HPLOC_COMPARE_MAX_SAMPLES", 80'000);
+    std::size_t const min_sample_count =
+        gwn::tests::get_env_positive_size_t("SMALLGWN_HPLOC_COMPARE_MIN_SAMPLES", 16'384);
+    std::size_t const target_points_per_model =
+        std::max<std::size_t>(65'536, target_total_points / std::max<std::size_t>(1, model_limit));
+
+    constexpr Real k_accuracy_scale = Real(2);
+    constexpr Real k_max_abs_epsilon = Real(3e-1);
+    constexpr Real k_p99_abs_epsilon = Real(8e-2);
+
+    std::size_t tested_model_count = 0;
+    for (std::filesystem::path const &model_path : model_paths) {
+        if (tested_model_count >= model_limit)
+            break;
+        SCOPED_TRACE(model_path.string());
+
+        std::optional<HostMesh> const maybe_mesh = gwn::tests::load_obj_mesh(model_path);
+        if (!maybe_mesh.has_value())
+            continue;
+        HostMesh const &mesh = *maybe_mesh;
+        if (mesh.tri_i0.empty())
+            continue;
+
+        MeshBounds const bounds = compute_mesh_bounds(mesh);
+        VoxelGridSpec const grid = make_voxel_grid(bounds, target_points_per_model);
+        std::size_t const query_count = grid.count();
+        if (query_count == 0)
+            continue;
+        std::size_t const sample_floor = std::min(min_sample_count, query_count);
+        std::size_t const sample_count = std::min(query_count, max_sample_count);
+        if (sample_count < sample_floor)
+            continue;
+        std::vector<std::size_t> const sampled_indices =
+            select_sample_indices(query_count, sample_count);
+
+        std::vector<Real> query_x{};
+        std::vector<Real> query_y{};
+        std::vector<Real> query_z{};
+        fill_sampled_queries(
+            grid, std::span<std::size_t const>(sampled_indices.data(), sampled_indices.size()),
+            query_x, query_y, query_z
+        );
+
+        gwn::gwn_geometry_object<Real, Index> geometry;
+        gwn::gwn_status const upload_status = geometry.upload(
+            cuda::std::span<Real const>(mesh.vertex_x.data(), mesh.vertex_x.size()),
+            cuda::std::span<Real const>(mesh.vertex_y.data(), mesh.vertex_y.size()),
+            cuda::std::span<Real const>(mesh.vertex_z.data(), mesh.vertex_z.size()),
+            cuda::std::span<Index const>(mesh.tri_i0.data(), mesh.tri_i0.size()),
+            cuda::std::span<Index const>(mesh.tri_i1.data(), mesh.tri_i1.size()),
+            cuda::std::span<Index const>(mesh.tri_i2.data(), mesh.tri_i2.size())
+        );
+        SMALLGWN_SKIP_IF_STATUS_CUDA_UNAVAILABLE(upload_status);
+        ASSERT_TRUE(upload_status.is_ok()) << gwn::tests::status_to_debug_string(upload_status);
+
+        gwn::gwn_bvh_object<Real, Index> bvh_lbvh;
+        gwn::gwn_bvh_aabb_object<Real, Index> aabb_lbvh;
+        gwn::gwn_bvh_moment_object<Real, Index> moment_lbvh;
+        gwn::gwn_bvh_object<Real, Index> bvh_hploc;
+        gwn::gwn_bvh_aabb_object<Real, Index> aabb_hploc;
+        gwn::gwn_bvh_moment_object<Real, Index> moment_hploc;
+
+        ASSERT_TRUE((build_facade_for_builder<1>(
+                         topology_builder::k_lbvh, geometry, bvh_lbvh, aabb_lbvh, moment_lbvh
+        )
+                         .is_ok()));
+        ASSERT_TRUE((build_facade_for_builder<1>(
+                         topology_builder::k_hploc, geometry, bvh_hploc, aabb_hploc, moment_hploc
+        )
+                         .is_ok()));
+
+        gwn::gwn_device_array<Real> d_qx, d_qy, d_qz, d_out;
+        ASSERT_TRUE(d_qx.resize(sample_count).is_ok());
+        ASSERT_TRUE(d_qy.resize(sample_count).is_ok());
+        ASSERT_TRUE(d_qz.resize(sample_count).is_ok());
+        ASSERT_TRUE(d_out.resize(sample_count).is_ok());
+        ASSERT_TRUE(
+            d_qx.copy_from_host(cuda::std::span<Real const>(query_x.data(), sample_count)).is_ok()
+        );
+        ASSERT_TRUE(
+            d_qy.copy_from_host(cuda::std::span<Real const>(query_y.data(), sample_count)).is_ok()
+        );
+        ASSERT_TRUE(
+            d_qz.copy_from_host(cuda::std::span<Real const>(query_z.data(), sample_count)).is_ok()
+        );
+
+        ASSERT_TRUE((gwn::gwn_compute_winding_number_batch_bvh_taylor<1, Real, Index>(
+                         geometry.accessor(), bvh_lbvh.accessor(), moment_lbvh.accessor(),
+                         d_qx.span(), d_qy.span(), d_qz.span(), d_out.span(), k_accuracy_scale
+        )
+                         .is_ok()));
+        ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+        std::vector<Real> output_lbvh(sample_count, Real(0));
+        ASSERT_TRUE(d_out
+                        .copy_to_host(cuda::std::span<Real>(output_lbvh.data(), output_lbvh.size()))
+                        .is_ok());
+        ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+
+        ASSERT_TRUE((gwn::gwn_compute_winding_number_batch_bvh_taylor<1, Real, Index>(
+                         geometry.accessor(), bvh_hploc.accessor(), moment_hploc.accessor(),
+                         d_qx.span(), d_qy.span(), d_qz.span(), d_out.span(), k_accuracy_scale
+        )
+                         .is_ok()));
+        ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+        std::vector<Real> output_hploc(sample_count, Real(0));
+        ASSERT_TRUE(
+            d_out.copy_to_host(cuda::std::span<Real>(output_hploc.data(), output_hploc.size()))
+                .is_ok()
+        );
+        ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+
+        ErrorSummary const builder_diff = summarize_error(
+            std::span<Real const>(output_hploc.data(), output_hploc.size()),
+            std::span<Real const>(output_lbvh.data(), output_lbvh.size())
+        );
+
+        ++tested_model_count;
+        std::cout << "[gwn-correctness] builders=(" << to_builder_name(topology_builder::k_lbvh)
+                  << "," << to_builder_name(topology_builder::k_hploc)
+                  << ") model=" << model_path.filename().string()
+                  << " triangles=" << mesh.tri_i0.size() << " samples=" << sample_count
+                  << " diff(max/p99/p95/mean)=" << builder_diff.max_abs << "/"
+                  << builder_diff.p99_abs << "/" << builder_diff.p95_abs << "/"
+                  << builder_diff.mean_abs << std::endl;
+
+        EXPECT_LE(builder_diff.max_abs, k_max_abs_epsilon)
+            << "Order-1 Taylor mismatch (max) between LBVH and H-PLOC on " << model_path.string();
+        EXPECT_LE(builder_diff.p99_abs, k_p99_abs_epsilon)
+            << "Order-1 Taylor mismatch (p99) between LBVH and H-PLOC on " << model_path.string();
+    }
+
+    ASSERT_GT(tested_model_count, 0u) << "No valid OBJ models were exercised.";
 }
 
 #if 0
