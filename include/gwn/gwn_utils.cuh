@@ -18,6 +18,11 @@
 #endif
 
 namespace gwn {
+template <class Real>
+concept gwn_real_type = std::floating_point<Real>;
+
+template <class Index>
+concept gwn_index_type = std::same_as<Index, std::uint32_t> || std::same_as<Index, std::uint64_t>;
 
 /// \brief Utility base that disables copy construction/assignment.
 class gwn_noncopyable {

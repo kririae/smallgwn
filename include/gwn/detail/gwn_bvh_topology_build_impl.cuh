@@ -12,7 +12,8 @@
 namespace gwn {
 namespace detail {
 
-template <int Width, class Real, class Index, class MortonCode, class BuildBinaryFn>
+template <
+    int Width, gwn_real_type Real, gwn_index_type Index, class MortonCode, class BuildBinaryFn>
 gwn_status gwn_bvh_topology_build_from_binary_impl(
     char const *entry_name, gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> &topology, BuildBinaryFn &&build_binary_fn,
@@ -109,7 +110,7 @@ gwn_status gwn_bvh_topology_build_from_binary_impl(
     });
 }
 
-template <int Width, class Real, class Index, class MortonCode = std::uint64_t>
+template <int Width, gwn_real_type Real, gwn_index_type Index, class MortonCode = std::uint64_t>
 gwn_status gwn_bvh_topology_build_lbvh_impl(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> &topology,
@@ -135,7 +136,7 @@ gwn_status gwn_bvh_topology_build_lbvh_impl(
     );
 }
 
-template <int Width, class Real, class Index, class MortonCode = std::uint64_t>
+template <int Width, gwn_real_type Real, gwn_index_type Index, class MortonCode = std::uint64_t>
 gwn_status gwn_bvh_topology_build_hploc_impl(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> &topology,

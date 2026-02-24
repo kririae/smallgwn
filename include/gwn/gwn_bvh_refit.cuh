@@ -34,7 +34,7 @@ namespace gwn {
 /// \param[in]     stream     CUDA stream for all asynchronous work.
 ///
 /// \return \c gwn_status::ok() on success.
-template <int Width, class Real, class Index>
+template <int Width, gwn_real_type Real, gwn_index_type Index>
 gwn_status gwn_bvh_refit_aabb(
     gwn_geometry_object<Real, Index> const &geometry,
     gwn_bvh_topology_object<Width, Real, Index> const &topology,
@@ -74,7 +74,7 @@ gwn_status gwn_bvh_refit_aabb(
 /// \param[in]     stream       CUDA stream for all asynchronous work.
 ///
 /// \return \c gwn_status::ok() on success.
-template <int Order, int Width, class Real, class Index>
+template <int Order, int Width, gwn_real_type Real, gwn_index_type Index>
 gwn_status gwn_bvh_refit_moment(
     gwn_geometry_object<Real, Index> const &geometry,
     gwn_bvh_topology_object<Width, Real, Index> const &topology,

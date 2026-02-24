@@ -48,7 +48,7 @@ namespace gwn {
 ///
 /// \remark \p MortonCode only changes topology build (Morton generation/sort
 ///         and binary radix structure), not query kernel math.
-template <int Width, class Real, class Index, class MortonCode = std::uint64_t>
+template <int Width, gwn_real_type Real, gwn_index_type Index, class MortonCode = std::uint64_t>
 gwn_status gwn_bvh_topology_build_lbvh(
     gwn_geometry_object<Real, Index> const &geometry,
     gwn_bvh_topology_object<Width, Real, Index> &topology,
@@ -85,7 +85,7 @@ gwn_status gwn_bvh_topology_build_lbvh(
 ///
 /// \remark \p MortonCode only changes topology build (Morton generation/sort
 ///         and H-PLOC bottom-up hierarchy guidance), not query kernel math.
-template <int Width, class Real, class Index, class MortonCode = std::uint64_t>
+template <int Width, gwn_real_type Real, gwn_index_type Index, class MortonCode = std::uint64_t>
 gwn_status gwn_bvh_topology_build_hploc(
     gwn_geometry_object<Real, Index> const &geometry,
     gwn_bvh_topology_object<Width, Real, Index> &topology,

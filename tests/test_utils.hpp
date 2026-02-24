@@ -132,12 +132,12 @@ parse_obj_index(std::string_view const token, std::size_t const vertex_count) {
     if (ec != std::errc() || ptr != end || raw == 0)
         return std::nullopt;
 
-    std::int64_t const vertex_count_i64 = static_cast<std::int64_t>(vertex_count);
+    auto const vertex_count_i64 = static_cast<std::int64_t>(vertex_count);
     std::int64_t const resolved = (raw > 0) ? (raw - 1) : (vertex_count_i64 + raw);
     if (resolved < 0)
         return std::nullopt;
 
-    std::uint64_t const resolved_u64 = static_cast<std::uint64_t>(resolved);
+    auto const resolved_u64 = static_cast<std::uint64_t>(resolved);
     if (resolved_u64 >= static_cast<std::uint64_t>(vertex_count) ||
         resolved_u64 > static_cast<std::uint64_t>(std::numeric_limits<Index>::max())) {
         return std::nullopt;

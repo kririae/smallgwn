@@ -40,7 +40,7 @@ enum class gwn_bvh_child_kind : std::uint8_t {
 /// All six scalars are stored as plain \c Real values with no padding.  Used
 /// both for per-primitive bounds during BVH construction and for per-node AABB
 /// payload nodes in \c gwn_bvh_aabb_node_soa.
-template <class Real> struct gwn_aabb {
+template <gwn_real_type Real> struct gwn_aabb {
     Real min_x; ///< Minimum extent along the X axis.
     Real min_y; ///< Minimum extent along the Y axis.
     Real min_z; ///< Minimum extent along the Z axis.
@@ -59,7 +59,7 @@ inline constexpr std::size_t k_gwn_bvh_node_alignment =
     (Width == 4) ? std::size_t(128) : NaturalAlignment;
 
 /// \brief Topology-only BVH node (no per-child bounds payload).
-template <int Width, class Index = std::uint32_t>
+template <int Width, gwn_index_type Index = std::uint32_t>
 struct alignas(k_gwn_bvh_node_alignment<Width, alignof(Index)>) gwn_bvh_topology_node_soa {
     static_assert(Width >= 2, "BVH node width must be at least 2.");
 
@@ -69,11 +69,11 @@ struct alignas(k_gwn_bvh_node_alignment<Width, alignof(Index)>) gwn_bvh_topology
 };
 
 /// \brief Width-4 topology node alias.
-template <class Index = std::uint32_t>
+template <gwn_index_type Index = std::uint32_t>
 using gwn_bvh4_topology_node_soa = gwn_bvh_topology_node_soa<4, Index>;
 
 /// \brief AABB payload tree node aligned with a topology node.
-template <int Width, class Real>
+template <int Width, gwn_real_type Real>
 struct alignas(k_gwn_bvh_node_alignment<Width, alignof(Real)>) gwn_bvh_aabb_node_soa {
     static_assert(Width >= 2, "BVH node width must be at least 2.");
 
@@ -86,7 +86,7 @@ struct alignas(k_gwn_bvh_node_alignment<Width, alignof(Real)>) gwn_bvh_aabb_node
 };
 
 /// \brief Width-4 AABB node alias.
-template <class Real> using gwn_bvh4_aabb_node_soa = gwn_bvh_aabb_node_soa<4, Real>;
+template <gwn_real_type Real> using gwn_bvh4_aabb_node_soa = gwn_bvh_aabb_node_soa<4, Real>;
 
 /// \brief SoA node storing Taylor multipole moment coefficients per child slot.
 ///
@@ -96,14 +96,14 @@ template <class Real> using gwn_bvh4_aabb_node_soa = gwn_bvh_aabb_node_soa<4, Re
 ///
 /// The primary template is declared but not defined; only the Order = 0, 1,
 /// and 2 specialisations are provided.
-template <int Width, int Order, class Real> struct gwn_bvh_taylor_node_soa;
+template <int Width, int Order, gwn_real_type Real> struct gwn_bvh_taylor_node_soa;
 
 /// \brief Order-0 (monopole) Taylor node: area-weighted normal and far-field radius.
 ///
 /// \c child_max_p_dist2 is the squared maximum distance from the child's
 /// centroid to any of its primitive centroids, used as the far-field criterion
 /// during approximate winding-number traversal.
-template <int Width, class Real>
+template <int Width, gwn_real_type Real>
 struct alignas(k_gwn_bvh_node_alignment<Width, alignof(Real)>)
     gwn_bvh_taylor_node_soa<Width, 0, Real> {
     Real child_max_p_dist2[Width]; ///< Squared max primitive-centroid spread.
@@ -119,7 +119,7 @@ struct alignas(k_gwn_bvh_node_alignment<Width, alignof(Real)>)
 ///
 /// Extends the order-0 layout with the 6 independent components of the
 /// symmetrised area-weighted normal Jacobian \f$N_{ij} + N_{ji}\f$.
-template <int Width, class Real>
+template <int Width, gwn_real_type Real>
 struct alignas(k_gwn_bvh_node_alignment<Width, alignof(Real)>)
     gwn_bvh_taylor_node_soa<Width, 1, Real> {
     Real child_max_p_dist2[Width]; ///< Squared max primitive-centroid spread.
@@ -141,7 +141,7 @@ struct alignas(k_gwn_bvh_node_alignment<Width, alignof(Real)>)
 ///
 /// Extends the order-1 layout with 10 independent components of the
 /// symmetrised second-order moment tensor \f$N_{ijk}\f$.
-template <int Width, class Real>
+template <int Width, gwn_real_type Real>
 struct alignas(k_gwn_bvh_node_alignment<Width, alignof(Real)>)
     gwn_bvh_taylor_node_soa<Width, 2, Real> {
     Real child_max_p_dist2[Width];
@@ -170,13 +170,13 @@ struct alignas(k_gwn_bvh_node_alignment<Width, alignof(Real)>)
 };
 
 /// \brief Width-4 Taylor node alias.
-template <int Order, class Real>
+template <int Order, gwn_real_type Real>
 using gwn_bvh4_taylor_node_soa = gwn_bvh_taylor_node_soa<4, Order, Real>;
 
 /// \brief Topology tree accessor for a fixed-width BVH.
 ///
 /// \remark This tree stores only hierarchy and primitive indirection.
-template <int Width, class Real, class Index = std::uint32_t>
+template <int Width, gwn_real_type Real, gwn_index_type Index = std::uint32_t>
 struct gwn_bvh_topology_tree_accessor {
     static_assert(Width >= 2, "BVH accessor width must be at least 2.");
 
@@ -215,8 +215,8 @@ struct gwn_bvh_topology_tree_accessor {
                 gwn_is_invalid_index(root_count)) {
                 return false;
             }
-            std::size_t const begin = static_cast<std::size_t>(root_index);
-            std::size_t const count = static_cast<std::size_t>(root_count);
+            auto const begin = static_cast<std::size_t>(root_index);
+            auto const count = static_cast<std::size_t>(root_count);
             return begin <= primitive_indices.size() && count <= (primitive_indices.size() - begin);
         }
 
@@ -225,7 +225,8 @@ struct gwn_bvh_topology_tree_accessor {
 };
 
 /// \brief AABB payload tree accessor aligned to a topology tree.
-template <int Width, class Real, class Index = std::uint32_t> struct gwn_bvh_aabb_tree_accessor {
+template <int Width, gwn_real_type Real, gwn_index_type Index = std::uint32_t>
+struct gwn_bvh_aabb_tree_accessor {
     static_assert(Width >= 2, "BVH accessor width must be at least 2.");
 
     using real_type = Real;
@@ -255,7 +256,8 @@ template <int Width, class Real, class Index = std::uint32_t> struct gwn_bvh_aab
 };
 
 /// \brief Moment payload tree accessor storing Taylor data aligned to topology.
-template <int Width, class Real, class Index = std::uint32_t> struct gwn_bvh_moment_tree_accessor {
+template <int Width, gwn_real_type Real, gwn_index_type Index = std::uint32_t>
+struct gwn_bvh_moment_tree_accessor {
     static_assert(Width >= 2, "BVH accessor width must be at least 2.");
 
     using real_type = Real;
@@ -306,32 +308,32 @@ template <int Width, class Real, class Index = std::uint32_t> struct gwn_bvh_mom
 };
 
 /// \brief Topology accessor alias — use when \c Width is a template parameter.
-template <int Width, class Real, class Index = std::uint32_t>
+template <int Width, gwn_real_type Real, gwn_index_type Index = std::uint32_t>
 using gwn_bvh_topology_accessor = gwn_bvh_topology_tree_accessor<Width, Real, Index>;
 
 /// \brief AABB accessor alias — use when \c Width is a template parameter.
-template <int Width, class Real, class Index = std::uint32_t>
+template <int Width, gwn_real_type Real, gwn_index_type Index = std::uint32_t>
 using gwn_bvh_aabb_accessor = gwn_bvh_aabb_tree_accessor<Width, Real, Index>;
 
 /// \brief Moment accessor alias — use when \c Width is a template parameter.
-template <int Width, class Real, class Index = std::uint32_t>
+template <int Width, gwn_real_type Real, gwn_index_type Index = std::uint32_t>
 using gwn_bvh_moment_accessor = gwn_bvh_moment_tree_accessor<Width, Real, Index>;
 
 /// \brief Width-4 topology accessor (most common use-case).
-template <class Real, class Index = std::uint32_t>
+template <gwn_real_type Real, gwn_index_type Index = std::uint32_t>
 using gwn_bvh_accessor = gwn_bvh_topology_tree_accessor<4, Real, Index>;
 
 /// \brief Width-4 AABB accessor.
-template <class Real, class Index = std::uint32_t>
+template <gwn_real_type Real, gwn_index_type Index = std::uint32_t>
 using gwn_bvh_aabb4_accessor = gwn_bvh_aabb_tree_accessor<4, Real, Index>;
 
 /// \brief Width-4 moment accessor.
-template <class Real, class Index = std::uint32_t>
+template <gwn_real_type Real, gwn_index_type Index = std::uint32_t>
 using gwn_bvh_moment4_accessor = gwn_bvh_moment_tree_accessor<4, Real, Index>;
 
 namespace detail {
 
-template <int Width, class Real, class Index>
+template <int Width, gwn_real_type Real, gwn_index_type Index>
 void gwn_release_bvh_topology_tree_accessor(
     gwn_bvh_topology_tree_accessor<Width, Real, Index> &tree, cudaStream_t const stream
 ) noexcept {
@@ -342,14 +344,14 @@ void gwn_release_bvh_topology_tree_accessor(
     tree.root_count = 0;
 }
 
-template <int Width, class Real, class Index>
+template <int Width, gwn_real_type Real, gwn_index_type Index>
 void gwn_release_bvh_aabb_tree_accessor(
     gwn_bvh_aabb_tree_accessor<Width, Real, Index> &tree, cudaStream_t const stream
 ) noexcept {
     gwn_free_span(tree.nodes, stream);
 }
 
-template <int Width, class Real, class Index>
+template <int Width, gwn_real_type Real, gwn_index_type Index>
 void gwn_release_bvh_moment_tree_accessor(
     gwn_bvh_moment_tree_accessor<Width, Real, Index> &tree, cudaStream_t const stream
 ) noexcept {
@@ -361,7 +363,7 @@ void gwn_release_bvh_moment_tree_accessor(
 } // namespace detail
 
 /// \brief Owning host-side RAII wrapper for a topology tree accessor.
-template <int Width, class Real = float, class Index = std::uint32_t>
+template <int Width, gwn_real_type Real = float, gwn_index_type Index = std::uint32_t>
 class gwn_bvh_topology_tree_object final : public gwn_noncopyable, public gwn_stream_mixin {
 public:
     static_assert(Width >= 2, "BVH object width must be at least 2.");
@@ -408,7 +410,7 @@ private:
 };
 
 /// \brief Owning host-side RAII wrapper for an AABB payload tree accessor.
-template <int Width, class Real = float, class Index = std::uint32_t>
+template <int Width, gwn_real_type Real = float, gwn_index_type Index = std::uint32_t>
 class gwn_bvh_aabb_tree_object final : public gwn_noncopyable, public gwn_stream_mixin {
 public:
     static_assert(Width >= 2, "BVH object width must be at least 2.");
@@ -452,7 +454,7 @@ private:
 };
 
 /// \brief Owning host-side RAII wrapper for a moment payload tree accessor.
-template <int Width, class Real = float, class Index = std::uint32_t>
+template <int Width, gwn_real_type Real = float, gwn_index_type Index = std::uint32_t>
 class gwn_bvh_moment_tree_object final : public gwn_noncopyable, public gwn_stream_mixin {
 public:
     static_assert(Width >= 2, "BVH object width must be at least 2.");
@@ -501,19 +503,19 @@ private:
 ///         indirection).  AABB bounds and Taylor moment payloads are stored
 ///         in separate \c gwn_bvh_aabb_object / \c gwn_bvh_moment_object
 ///         instances.
-template <class Real = float, class Index = std::uint32_t>
+template <gwn_real_type Real = float, gwn_index_type Index = std::uint32_t>
 using gwn_bvh_object = gwn_bvh_topology_tree_object<4, Real, Index>;
 
 /// \brief Width-4 AABB payload owning object.
-template <class Real = float, class Index = std::uint32_t>
+template <gwn_real_type Real = float, gwn_index_type Index = std::uint32_t>
 using gwn_bvh_aabb_object = gwn_bvh_aabb_tree_object<4, Real, Index>;
 
 /// \brief Width-4 Taylor moment payload owning object.
-template <class Real = float, class Index = std::uint32_t>
+template <gwn_real_type Real = float, gwn_index_type Index = std::uint32_t>
 using gwn_bvh_moment_object = gwn_bvh_moment_tree_object<4, Real, Index>;
 
 /// \brief Width-parameterised topology-only BVH owning object.
-template <int Width, class Real = float, class Index = std::uint32_t>
+template <int Width, gwn_real_type Real = float, gwn_index_type Index = std::uint32_t>
 using gwn_bvh_topology_object = gwn_bvh_topology_tree_object<Width, Real, Index>;
 
 } // namespace gwn

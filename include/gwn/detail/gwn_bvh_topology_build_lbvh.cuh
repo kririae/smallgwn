@@ -16,7 +16,7 @@
 namespace gwn {
 namespace detail {
 
-template <class Index, class MortonCode = std::uint64_t>
+template <gwn_index_type Index, class MortonCode = std::uint64_t>
 gwn_status gwn_bvh_topology_build_binary_lbvh(
     cuda::std::span<MortonCode const> const sorted_morton_codes,
     gwn_device_array<gwn_binary_node<Index>> &binary_nodes,
@@ -61,7 +61,7 @@ gwn_status gwn_bvh_topology_build_binary_lbvh(
     return gwn_status::ok();
 }
 
-template <int Width, class Real, class Index>
+template <int Width, gwn_real_type Real, gwn_index_type Index>
 gwn_status gwn_bvh_topology_build_collapse_binary_lbvh(
     cuda::std::span<gwn_binary_node<Index> const> const binary_nodes,
     cuda::std::span<Index const> const binary_internal_parent,
@@ -116,7 +116,7 @@ gwn_status gwn_bvh_topology_build_collapse_binary_lbvh(
     });
     unsigned int *collapse_wide_count = static_cast<unsigned int *>(collapse_wide_count_raw);
     unsigned int const collapse_wide_count_init = 1u;
-    std::size_t const root_internal_index_u = static_cast<std::size_t>(root_internal_index);
+    auto const root_internal_index_u = static_cast<std::size_t>(root_internal_index);
     GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemcpyAsync(
         collapse_wide_count, &collapse_wide_count_init, sizeof(unsigned int),
         cudaMemcpyHostToDevice, stream

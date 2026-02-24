@@ -19,16 +19,16 @@
 
 namespace gwn {
 
-template <class Real> using gwn_vec3 = Eigen::Matrix<Real, 3, 1>;
+template <gwn_real_type Real> using gwn_vec3 = Eigen::Matrix<Real, 3, 1>;
 inline constexpr int k_gwn_default_traversal_stack_capacity = 32;
 
-template <class Real>
+template <gwn_real_type Real>
 __host__ __device__ inline Real gwn_signed_solid_angle_triangle(
     gwn_vec3<Real> const &a, gwn_vec3<Real> const &b, gwn_vec3<Real> const &c,
     gwn_vec3<Real> const &q
 ) noexcept;
 
-template <class Real, class Index>
+template <gwn_real_type Real, gwn_index_type Index>
 __device__ inline Real gwn_triangle_solid_angle_from_primitive(
     gwn_geometry_accessor<Real, Index> const &geometry, Index const primitive_id,
     gwn_vec3<Real> const &query
@@ -36,7 +36,7 @@ __device__ inline Real gwn_triangle_solid_angle_from_primitive(
     if (!gwn_index_in_bounds(primitive_id, geometry.triangle_count()))
         return Real(0);
 
-    std::size_t const triangle_id = static_cast<std::size_t>(primitive_id);
+    auto const triangle_id = static_cast<std::size_t>(primitive_id);
     Index const ia = geometry.tri_i0[triangle_id];
     Index const ib = geometry.tri_i1[triangle_id];
     Index const ic = geometry.tri_i2[triangle_id];
@@ -46,9 +46,9 @@ __device__ inline Real gwn_triangle_solid_angle_from_primitive(
         return Real(0);
     }
 
-    std::size_t const a_index = static_cast<std::size_t>(ia);
-    std::size_t const b_index = static_cast<std::size_t>(ib);
-    std::size_t const c_index = static_cast<std::size_t>(ic);
+    auto const a_index = static_cast<std::size_t>(ia);
+    auto const b_index = static_cast<std::size_t>(ib);
+    auto const c_index = static_cast<std::size_t>(ic);
 
     gwn_vec3<Real> const a(
         geometry.vertex_x[a_index], geometry.vertex_y[a_index], geometry.vertex_z[a_index]
@@ -62,7 +62,7 @@ __device__ inline Real gwn_triangle_solid_angle_from_primitive(
     return gwn_signed_solid_angle_triangle(a, b, c, query);
 }
 
-template <class Real>
+template <gwn_real_type Real>
 __host__ __device__ inline Real gwn_signed_solid_angle_triangle(
     gwn_vec3<Real> const &a, gwn_vec3<Real> const &b, gwn_vec3<Real> const &c,
     gwn_vec3<Real> const &q
@@ -89,7 +89,7 @@ __host__ __device__ inline Real gwn_signed_solid_angle_triangle(
     return Real(2) * atan2(numerator, denominator);
 }
 
-template <class Real, class Index>
+template <gwn_real_type Real, gwn_index_type Index>
 __device__ inline Real gwn_winding_number_point(
     gwn_geometry_accessor<Real, Index> const &geometry, Real const qx, Real const qy, Real const qz
 ) noexcept {
@@ -111,7 +111,8 @@ __device__ inline Real gwn_winding_number_point(
 }
 
 template <
-    int Width, class Real, class Index, int StackCapacity = k_gwn_default_traversal_stack_capacity>
+    int Width, gwn_real_type Real, gwn_index_type Index,
+    int StackCapacity = k_gwn_default_traversal_stack_capacity>
 __device__ inline Real gwn_winding_number_point_bvh_exact(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh, Real const qx, Real const qy,
@@ -190,7 +191,7 @@ __device__ inline Real gwn_winding_number_point_bvh_exact(
 
 namespace detail {
 
-template <class Real, class Index> struct gwn_winding_number_batch_functor {
+template <gwn_real_type Real, gwn_index_type Index> struct gwn_winding_number_batch_functor {
     gwn_geometry_accessor<Real, Index> geometry{};
     cuda::std::span<Real const> query_x{};
     cuda::std::span<Real const> query_y{};
@@ -204,7 +205,7 @@ template <class Real, class Index> struct gwn_winding_number_batch_functor {
     }
 };
 
-template <int Width, class Real, class Index, int StackCapacity>
+template <int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity>
 struct gwn_winding_number_batch_bvh_exact_functor {
     gwn_geometry_accessor<Real, Index> geometry{};
     gwn_bvh_topology_accessor<Width, Real, Index> bvh{};
@@ -220,9 +221,10 @@ struct gwn_winding_number_batch_bvh_exact_functor {
     }
 };
 
-template <int Order, int Width, class Real, class Index> struct gwn_taylor_nodes_getter;
+template <int Order, int Width, gwn_real_type Real, gwn_index_type Index>
+struct gwn_taylor_nodes_getter;
 
-template <int Width, class Real, class Index>
+template <int Width, gwn_real_type Real, gwn_index_type Index>
 struct gwn_taylor_nodes_getter<0, Width, Real, Index> {
     using span_type = cuda::std::span<gwn_bvh_taylor_node_soa<Width, 0, Real> const>;
 
@@ -232,7 +234,7 @@ struct gwn_taylor_nodes_getter<0, Width, Real, Index> {
     }
 };
 
-template <int Width, class Real, class Index>
+template <int Width, gwn_real_type Real, gwn_index_type Index>
 struct gwn_taylor_nodes_getter<1, Width, Real, Index> {
     using span_type = cuda::std::span<gwn_bvh_taylor_node_soa<Width, 1, Real> const>;
 
@@ -242,7 +244,7 @@ struct gwn_taylor_nodes_getter<1, Width, Real, Index> {
     }
 };
 
-template <int Width, class Real, class Index>
+template <int Width, gwn_real_type Real, gwn_index_type Index>
 struct gwn_taylor_nodes_getter<2, Width, Real, Index> {
     using span_type = cuda::std::span<gwn_bvh_taylor_node_soa<Width, 2, Real> const>;
 
@@ -252,7 +254,7 @@ struct gwn_taylor_nodes_getter<2, Width, Real, Index> {
     }
 };
 
-template <int Order, int Width, class Real, class Index>
+template <int Order, int Width, gwn_real_type Real, gwn_index_type Index>
 [[nodiscard]] __host__ __device__
     typename gwn_taylor_nodes_getter<Order, Width, Real, Index>::span_type
     gwn_get_taylor_nodes(gwn_bvh_moment_tree_accessor<Width, Real, Index> const &data_tree) {
@@ -260,7 +262,7 @@ template <int Order, int Width, class Real, class Index>
 }
 
 template <
-    int Order, int Width, class Real, class Index,
+    int Order, int Width, gwn_real_type Real, gwn_index_type Index,
     int StackCapacity = k_gwn_default_traversal_stack_capacity>
 __device__ inline Real gwn_winding_number_point_bvh_taylor(
     gwn_geometry_accessor<Real, Index> const &geometry,
@@ -400,7 +402,7 @@ __device__ inline Real gwn_winding_number_point_bvh_taylor(
     return omega_sum / (Real(4) * k_pi);
 }
 
-template <int Order, int Width, class Real, class Index, int StackCapacity>
+template <int Order, int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity>
 struct gwn_winding_number_batch_bvh_taylor_functor {
     gwn_geometry_accessor<Real, Index> geometry{};
     gwn_bvh_topology_accessor<Width, Real, Index> bvh{};
@@ -420,7 +422,7 @@ struct gwn_winding_number_batch_bvh_taylor_functor {
     }
 };
 
-template <class Real, class Index>
+template <gwn_real_type Real, gwn_index_type Index>
 [[nodiscard]] inline gwn_winding_number_batch_functor<Real, Index>
 gwn_make_winding_number_batch_functor(
     gwn_geometry_accessor<Real, Index> const &geometry, cuda::std::span<Real const> const query_x,
@@ -432,7 +434,7 @@ gwn_make_winding_number_batch_functor(
     };
 }
 
-template <int Width, class Real, class Index, int StackCapacity>
+template <int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity>
 [[nodiscard]] inline gwn_winding_number_batch_bvh_exact_functor<Width, Real, Index, StackCapacity>
 gwn_make_winding_number_batch_bvh_exact_functor(
     gwn_geometry_accessor<Real, Index> const &geometry,
@@ -445,7 +447,7 @@ gwn_make_winding_number_batch_bvh_exact_functor(
     };
 }
 
-template <int Order, int Width, class Real, class Index, int StackCapacity>
+template <int Order, int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity>
 [[nodiscard]] inline gwn_winding_number_batch_bvh_taylor_functor<
     Order, Width, Real, Index, StackCapacity>
 gwn_make_winding_number_batch_bvh_taylor_functor(
@@ -464,7 +466,7 @@ gwn_make_winding_number_batch_bvh_taylor_functor(
 } // namespace detail
 
 /// \brief Compute winding numbers for a batch of query points by direct triangle summation.
-template <class Real, class Index = std::uint32_t>
+template <gwn_real_type Real, gwn_index_type Index = std::uint32_t>
 gwn_status gwn_compute_winding_number_batch(
     gwn_geometry_accessor<Real, Index> const &geometry, cuda::std::span<Real const> const query_x,
     cuda::std::span<Real const> const query_y, cuda::std::span<Real const> const query_z,
@@ -500,7 +502,7 @@ gwn_status gwn_compute_winding_number_batch(
 
 /// \brief Compute winding numbers for a batch using exact BVH traversal.
 template <
-    int Width, class Real, class Index = std::uint32_t,
+    int Width, gwn_real_type Real, gwn_index_type Index = std::uint32_t,
     int StackCapacity = k_gwn_default_traversal_stack_capacity>
 gwn_status gwn_compute_winding_number_batch_bvh_exact(
     gwn_geometry_accessor<Real, Index> const &geometry,
@@ -541,7 +543,7 @@ gwn_status gwn_compute_winding_number_batch_bvh_exact(
 
 /// \brief Width-4 convenience wrapper for exact BVH batch queries.
 template <
-    class Real, class Index = std::uint32_t,
+    gwn_real_type Real, gwn_index_type Index = std::uint32_t,
     int StackCapacity = k_gwn_default_traversal_stack_capacity>
 gwn_status gwn_compute_winding_number_batch_bvh_exact(
     gwn_geometry_accessor<Real, Index> const &geometry, gwn_bvh_accessor<Real, Index> const &bvh,
@@ -558,7 +560,7 @@ gwn_status gwn_compute_winding_number_batch_bvh_exact(
 ///
 /// \remark Falls back to exact child descent per node when the approximation criterion fails.
 template <
-    int Order, int Width, class Real, class Index = std::uint32_t,
+    int Order, int Width, gwn_real_type Real, gwn_index_type Index = std::uint32_t,
     int StackCapacity = k_gwn_default_traversal_stack_capacity>
 gwn_status gwn_compute_winding_number_batch_bvh_taylor(
     gwn_geometry_accessor<Real, Index> const &geometry,
@@ -609,7 +611,7 @@ gwn_status gwn_compute_winding_number_batch_bvh_taylor(
 
 /// \brief Width-4 convenience wrapper for Taylor BVH batch queries.
 template <
-    int Order, class Real, class Index = std::uint32_t,
+    int Order, gwn_real_type Real, gwn_index_type Index = std::uint32_t,
     int StackCapacity = k_gwn_default_traversal_stack_capacity>
 gwn_status gwn_compute_winding_number_batch_bvh_taylor(
     gwn_geometry_accessor<Real, Index> const &geometry, gwn_bvh_accessor<Real, Index> const &bvh,

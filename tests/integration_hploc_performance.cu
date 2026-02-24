@@ -51,7 +51,7 @@ struct TimingSummary {
     std::sort(timings_ms.begin(), timings_ms.end());
     auto const percentile = [&](double const q) {
         double const pos = q * static_cast<double>(timings_ms.size() - 1);
-        std::size_t const lo = static_cast<std::size_t>(pos);
+        auto const lo = static_cast<std::size_t>(pos);
         std::size_t const hi = std::min<std::size_t>(timings_ms.size() - 1, lo + 1);
         double const t = pos - static_cast<double>(lo);
         return static_cast<double>(timings_ms[lo]) * (1.0 - t) +

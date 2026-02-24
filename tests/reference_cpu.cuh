@@ -71,9 +71,9 @@ inline Real reference_winding_number_point(
             continue;
         }
 
-        std::size_t const a_index = static_cast<std::size_t>(ia);
-        std::size_t const b_index = static_cast<std::size_t>(ib);
-        std::size_t const c_index = static_cast<std::size_t>(ic);
+        auto const a_index = static_cast<std::size_t>(ia);
+        auto const b_index = static_cast<std::size_t>(ib);
+        auto const c_index = static_cast<std::size_t>(ic);
 
         reference_vec3<Real> const a(vertex_x[a_index], vertex_y[a_index], vertex_z[a_index]);
         reference_vec3<Real> const b(vertex_x[b_index], vertex_y[b_index], vertex_z[b_index]);
@@ -156,9 +156,9 @@ inline gwn_status reference_winding_number_batch_hdk_taylor(
         Index const ic = tri_i2[triangle_id];
         if (gwn_is_invalid_index(ia) || gwn_is_invalid_index(ib) || gwn_is_invalid_index(ic))
             return gwn_status::invalid_argument("Triangle index must be non-negative.");
-        std::size_t const a = static_cast<std::size_t>(ia);
-        std::size_t const b = static_cast<std::size_t>(ib);
-        std::size_t const c = static_cast<std::size_t>(ic);
+        auto const a = static_cast<std::size_t>(ia);
+        auto const b = static_cast<std::size_t>(ib);
+        auto const c = static_cast<std::size_t>(ic);
         if (a >= vertex_count || b >= vertex_count || c >= vertex_count)
             return gwn_status::invalid_argument("Triangle index exceeds vertex count.");
         triangle_points[3 * triangle_id + 0] = static_cast<int>(a);

@@ -146,9 +146,9 @@ struct RunningErrorStats {
     extent_z = std::max(max_z - min_z, k_min_extent);
 
     Real const max_extent = std::max({extent_x, extent_y, extent_z, k_min_extent});
-    double const ratio_x = static_cast<double>(extent_x / max_extent);
-    double const ratio_y = static_cast<double>(extent_y / max_extent);
-    double const ratio_z = static_cast<double>(extent_z / max_extent);
+    auto const ratio_x = static_cast<double>(extent_x / max_extent);
+    auto const ratio_y = static_cast<double>(extent_y / max_extent);
+    auto const ratio_z = static_cast<double>(extent_z / max_extent);
     double const ratio_volume = std::max(ratio_x * ratio_y * ratio_z, 1e-12);
 
     auto const to_dim = [](double const value) {
@@ -235,7 +235,7 @@ compute_center_linear_index(VoxelGridSpec const &grid, MeshBounds const &bounds)
     Real const center_z = (bounds.min_z + bounds.max_z) * Real(0.5);
 
     auto const to_index = [](Real const center, Real const origin, Real const step, std::size_t n) {
-        double const raw_index = static_cast<double>((center - origin) / step);
+        auto const raw_index = static_cast<double>((center - origin) / step);
         long long index = static_cast<long long>(std::floor(raw_index));
         if (index < 0)
             index = 0;
@@ -340,7 +340,7 @@ summarize_error(std::span<Real const> const lhs, std::span<Real const> const rhs
 
     std::sort(absolute_errors.begin(), absolute_errors.end());
     auto const percentile = [&](double const q) {
-        std::size_t const idx = static_cast<std::size_t>(
+        auto const idx = static_cast<std::size_t>(
             std::floor(q * static_cast<double>(absolute_errors.size() - 1))
         );
         return absolute_errors[idx];
