@@ -38,7 +38,7 @@ namespace gwn {
 /// \param[in]     stream     CUDA stream for all asynchronous work.
 ///
 /// \return \c gwn_status::ok() on success.
-template <int Width, class Real, class Index, class MortonCode = std::uint64_t>
+template <int Width, gwn_real_type Real, gwn_index_type Index, class MortonCode = std::uint64_t>
 gwn_status gwn_bvh_facade_build_topology_aabb_lbvh(
     gwn_geometry_object<Real, Index> const &geometry,
     gwn_bvh_topology_object<Width, Real, Index> &topology,
@@ -69,7 +69,7 @@ gwn_status gwn_bvh_facade_build_topology_aabb_lbvh(
 /// \param[in]     stream     CUDA stream for all asynchronous work.
 ///
 /// \return \c gwn_status::ok() on success.
-template <int Width, class Real, class Index, class MortonCode = std::uint64_t>
+template <int Width, gwn_real_type Real, gwn_index_type Index, class MortonCode = std::uint64_t>
 gwn_status gwn_bvh_facade_build_topology_aabb_hploc(
     gwn_geometry_object<Real, Index> const &geometry,
     gwn_bvh_topology_object<Width, Real, Index> &topology,
@@ -103,7 +103,9 @@ gwn_status gwn_bvh_facade_build_topology_aabb_hploc(
 /// \param[in]     stream       CUDA stream for all asynchronous work.
 ///
 /// \return \c gwn_status::ok() on success.
-template <int Order, int Width, class Real, class Index, class MortonCode = std::uint64_t>
+template <
+    int Order, int Width, gwn_real_type Real, gwn_index_type Index,
+    class MortonCode = std::uint64_t>
 gwn_status gwn_bvh_facade_build_topology_aabb_moment_lbvh(
     gwn_geometry_object<Real, Index> const &geometry,
     gwn_bvh_topology_object<Width, Real, Index> &topology,
@@ -140,7 +142,9 @@ gwn_status gwn_bvh_facade_build_topology_aabb_moment_lbvh(
 /// \param[in]     stream       CUDA stream for all asynchronous work.
 ///
 /// \return \c gwn_status::ok() on success.
-template <int Order, int Width, class Real, class Index, class MortonCode = std::uint64_t>
+template <
+    int Order, int Width, gwn_real_type Real, gwn_index_type Index,
+    class MortonCode = std::uint64_t>
 gwn_status gwn_bvh_facade_build_topology_aabb_moment_hploc(
     gwn_geometry_object<Real, Index> const &geometry,
     gwn_bvh_topology_object<Width, Real, Index> &topology,

@@ -216,8 +216,8 @@ void assert_bvh_structure_wide(
         ASSERT_TRUE(accessor.nodes.empty());
         ASSERT_GE(accessor.root_index, Index(0));
         ASSERT_GE(accessor.root_count, Index(0));
-        std::size_t const begin = static_cast<std::size_t>(accessor.root_index);
-        std::size_t const count = static_cast<std::size_t>(accessor.root_count);
+        auto const begin = static_cast<std::size_t>(accessor.root_index);
+        auto const count = static_cast<std::size_t>(accessor.root_count);
         ASSERT_LE(begin, primitive_count);
         ASSERT_LE(count, primitive_count - begin);
         return;
@@ -263,8 +263,8 @@ void assert_bvh_structure_wide(
             ASSERT_GE(node.child_index[slot], Index(0));
             ASSERT_GE(node.child_count[slot], Index(0));
 
-            std::size_t const begin = static_cast<std::size_t>(node.child_index[slot]);
-            std::size_t const count = static_cast<std::size_t>(node.child_count[slot]);
+            auto const begin = static_cast<std::size_t>(node.child_index[slot]);
+            auto const count = static_cast<std::size_t>(node.child_count[slot]);
             ASSERT_LE(begin, primitive_count);
             ASSERT_LE(count, primitive_count - begin);
             for (std::size_t i = begin; i < begin + count; ++i)

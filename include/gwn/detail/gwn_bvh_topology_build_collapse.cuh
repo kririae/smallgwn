@@ -17,7 +17,7 @@ template <int Value> struct gwn_log2_pow2 {
     static constexpr int value = 1 + gwn_log2_pow2<(Value >> 1)>::value;
 };
 
-template <int Width, class Index> struct gwn_collapse_summarize_pass_functor {
+template <int Width, gwn_index_type Index> struct gwn_collapse_summarize_pass_functor {
     static constexpr int k_collapse_depth = gwn_log2_pow2<Width>::value;
 
     cuda::std::span<Index const> internal_parent{};
@@ -34,7 +34,7 @@ template <int Width, class Index> struct gwn_collapse_summarize_pass_functor {
             return;
         }
 
-        Index const internal_id = static_cast<Index>(internal_id_u);
+        auto const internal_id = static_cast<Index>(internal_id_u);
         if (internal_id == root_internal_index)
             return;
 
@@ -42,7 +42,7 @@ template <int Width, class Index> struct gwn_collapse_summarize_pass_functor {
         std::size_t hop_count = 0;
         Index cursor = internal_id;
         while (gwn_is_valid_index(cursor) && cursor != root_internal_index) {
-            std::size_t const cursor_u = static_cast<std::size_t>(cursor);
+            auto const cursor_u = static_cast<std::size_t>(cursor);
             if (cursor_u >= internal_parent.size())
                 return;
             if (hop_count++ > internal_parent.size())
@@ -65,7 +65,7 @@ template <int Width, class Index> struct gwn_collapse_summarize_pass_functor {
     }
 };
 
-template <int Width, class Index> struct gwn_collapse_emit_nodes_pass_functor {
+template <int Width, gwn_index_type Index> struct gwn_collapse_emit_nodes_pass_functor {
     static_assert(Width >= 2, "BVH width must be at least 2.");
     static constexpr int k_stack_capacity = Width * 2 + 8;
 
@@ -135,7 +135,7 @@ template <int Width, class Index> struct gwn_collapse_emit_nodes_pass_functor {
                 continue;
             }
 
-            std::size_t const internal_index_u = static_cast<std::size_t>(ref.index);
+            auto const internal_index_u = static_cast<std::size_t>(ref.index);
             bool const is_child_wide_root = (ref.index != binary_root) &&
                                             (internal_index_u < internal_is_wide_root.size()) &&
                                             (internal_is_wide_root[internal_index_u] != 0);

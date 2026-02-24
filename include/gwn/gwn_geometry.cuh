@@ -12,7 +12,7 @@
 
 namespace gwn {
 
-template <class Real, class Index = std::uint32_t> struct gwn_geometry_accessor {
+template <gwn_real_type Real, gwn_index_type Index = std::uint32_t> struct gwn_geometry_accessor {
     using real_type = Real;
     using index_type = Index;
 
@@ -47,7 +47,7 @@ void gwn_release_spans(cudaStream_t const stream, Spans &...spans) noexcept {
     (gwn_free_span(spans, stream), ...);
 }
 
-template <class Real, class Index>
+template <gwn_real_type Real, gwn_index_type Index>
 void gwn_release_accessor(
     gwn_geometry_accessor<Real, Index> &accessor, cudaStream_t const stream
 ) noexcept {
@@ -57,7 +57,7 @@ void gwn_release_accessor(
     );
 }
 
-template <class Real, class Index>
+template <gwn_real_type Real, gwn_index_type Index>
 gwn_status gwn_upload_accessor(
     gwn_geometry_accessor<Real, Index> &accessor, cuda::std::span<Real const> x,
     cuda::std::span<Real const> y, cuda::std::span<Real const> z, cuda::std::span<Index const> i0,
@@ -98,11 +98,8 @@ gwn_status gwn_upload_accessor(
 ///
 /// \remark `clear()` and destructor release memory on the currently bound stream.
 /// \remark The bound stream is updated after successful `upload(..., stream)`.
-template <class Real = float, class Index = std::uint32_t>
+template <gwn_real_type Real = float, gwn_index_type Index = std::uint32_t>
 class gwn_geometry_object final : public gwn_noncopyable, public gwn_stream_mixin {
-    static_assert(std::is_floating_point_v<Real>, "Real must be a floating-point type.");
-    static_assert(std::is_integral_v<Index>, "Index must be an integral type.");
-
 public:
     using real_type = Real;
     using index_type = Index;

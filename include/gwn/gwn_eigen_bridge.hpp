@@ -18,7 +18,9 @@
 
 namespace gwn {
 
-template <class Real = float, class Index = std::uint32_t, class DerivedV, class DerivedF>
+template <
+    gwn_real_type Real = float, gwn_index_type Index = std::uint32_t, class DerivedV,
+    class DerivedF>
 gwn_status gwn_upload_from_eigen(
     gwn_geometry_object<Real, Index> &object, Eigen::MatrixBase<DerivedV> const &vertices,
     Eigen::MatrixBase<DerivedF> const &triangles, cudaStream_t const stream = gwn_default_stream()
@@ -31,8 +33,8 @@ gwn_status gwn_upload_from_eigen(
     if (vertex_count < 0 || triangle_count < 0)
         return gwn_status::invalid_argument("Eigen inputs cannot have negative sizes.");
 
-    std::size_t const vertex_count_u = static_cast<std::size_t>(vertex_count);
-    std::size_t const triangle_count_u = static_cast<std::size_t>(triangle_count);
+    auto const vertex_count_u = static_cast<std::size_t>(vertex_count);
+    auto const triangle_count_u = static_cast<std::size_t>(triangle_count);
     if (vertex_count_u > 0 &&
         (vertex_count_u - 1) > static_cast<std::size_t>(std::numeric_limits<Index>::max())) {
         return gwn_status::invalid_argument("Vertex count exceeds index range.");
@@ -68,7 +70,7 @@ gwn_status gwn_upload_from_eigen(
                 return false;
         }
 
-        std::uint64_t const value_u64 = static_cast<std::uint64_t>(value);
+        auto const value_u64 = static_cast<std::uint64_t>(value);
         if (value_u64 > static_cast<std::uint64_t>(std::numeric_limits<Index>::max()) ||
             value_u64 >= static_cast<std::uint64_t>(vertex_count_u)) {
             return false;

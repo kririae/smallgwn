@@ -62,7 +62,7 @@ struct gwn_benchmark_stage_result {
 
     double const clamped_q = std::clamp(q, 0.0, 1.0);
     double const pos = clamped_q * static_cast<double>(samples.size() - 1);
-    std::size_t const lo = static_cast<std::size_t>(pos);
+    auto const lo = static_cast<std::size_t>(pos);
     std::size_t const hi = std::min<std::size_t>(samples.size() - 1, lo + 1);
     double const t = pos - static_cast<double>(lo);
 

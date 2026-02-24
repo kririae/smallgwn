@@ -12,9 +12,9 @@
 namespace gwn {
 namespace detail {
 
-template <int Order, class Real> struct gwn_device_taylor_moment;
+template <int Order, gwn_real_type Real> struct gwn_device_taylor_moment;
 
-template <class Real> struct gwn_device_taylor_moment<0, Real> {
+template <gwn_real_type Real> struct gwn_device_taylor_moment<0, Real> {
     Real area = Real(0);
     Real area_p_x = Real(0);
     Real area_p_y = Real(0);
@@ -24,7 +24,8 @@ template <class Real> struct gwn_device_taylor_moment<0, Real> {
     Real n_z = Real(0);
 };
 
-template <class Real> struct gwn_device_taylor_moment<1, Real> : gwn_device_taylor_moment<0, Real> {
+template <gwn_real_type Real>
+struct gwn_device_taylor_moment<1, Real> : gwn_device_taylor_moment<0, Real> {
     Real nx_x = Real(0);
     Real nx_y = Real(0);
     Real nx_z = Real(0);
@@ -36,7 +37,7 @@ template <class Real> struct gwn_device_taylor_moment<1, Real> : gwn_device_tayl
     Real nz_z = Real(0);
 };
 
-template <int Order, class Real>
+template <int Order, gwn_real_type Real>
 __host__ __device__ inline void gwn_accumulate_taylor_moment(
     gwn_device_taylor_moment<Order, Real> &dst, gwn_device_taylor_moment<Order, Real> const &src
 ) noexcept {
@@ -60,7 +61,7 @@ __host__ __device__ inline void gwn_accumulate_taylor_moment(
     }
 }
 
-template <class Real>
+template <gwn_real_type Real>
 [[nodiscard]] __host__ __device__ inline Real gwn_bounds_max_p_dist2(
     gwn_aabb<Real> const &bounds, Real const average_x, Real const average_y, Real const average_z
 ) noexcept {
@@ -70,7 +71,7 @@ template <class Real>
     return dx * dx + dy * dy + dz * dz;
 }
 
-template <class Real, class Index>
+template <gwn_real_type Real, gwn_index_type Index>
 __device__ inline bool gwn_compute_triangle_aabb(
     gwn_geometry_accessor<Real, Index> const &geometry, Index const primitive_id,
     gwn_aabb<Real> &bounds
@@ -78,7 +79,7 @@ __device__ inline bool gwn_compute_triangle_aabb(
     if (!gwn_index_in_bounds(primitive_id, geometry.triangle_count()))
         return false;
 
-    std::size_t const triangle_id = static_cast<std::size_t>(primitive_id);
+    auto const triangle_id = static_cast<std::size_t>(primitive_id);
     Index const ia = geometry.tri_i0[triangle_id];
     Index const ib = geometry.tri_i1[triangle_id];
     Index const ic = geometry.tri_i2[triangle_id];
@@ -88,9 +89,9 @@ __device__ inline bool gwn_compute_triangle_aabb(
         return false;
     }
 
-    std::size_t const a_index = static_cast<std::size_t>(ia);
-    std::size_t const b_index = static_cast<std::size_t>(ib);
-    std::size_t const c_index = static_cast<std::size_t>(ic);
+    auto const a_index = static_cast<std::size_t>(ia);
+    auto const b_index = static_cast<std::size_t>(ib);
+    auto const c_index = static_cast<std::size_t>(ic);
 
     Real const ax = geometry.vertex_x[a_index];
     Real const ay = geometry.vertex_y[a_index];
@@ -110,7 +111,7 @@ __device__ inline bool gwn_compute_triangle_aabb(
     return true;
 }
 
-template <int Order, class Real, class Index>
+template <int Order, gwn_real_type Real, gwn_index_type Index>
 __device__ inline bool gwn_compute_triangle_taylor_raw_moment(
     gwn_geometry_accessor<Real, Index> const &geometry, Index const primitive_id,
     gwn_device_taylor_moment<Order, Real> &raw_moment
@@ -118,7 +119,7 @@ __device__ inline bool gwn_compute_triangle_taylor_raw_moment(
     if (!gwn_index_in_bounds(primitive_id, geometry.triangle_count()))
         return false;
 
-    std::size_t const triangle_id = static_cast<std::size_t>(primitive_id);
+    auto const triangle_id = static_cast<std::size_t>(primitive_id);
     Index const ia = geometry.tri_i0[triangle_id];
     Index const ib = geometry.tri_i1[triangle_id];
     Index const ic = geometry.tri_i2[triangle_id];
@@ -128,9 +129,9 @@ __device__ inline bool gwn_compute_triangle_taylor_raw_moment(
         return false;
     }
 
-    std::size_t const a_index = static_cast<std::size_t>(ia);
-    std::size_t const b_index = static_cast<std::size_t>(ib);
-    std::size_t const c_index = static_cast<std::size_t>(ic);
+    auto const a_index = static_cast<std::size_t>(ia);
+    auto const b_index = static_cast<std::size_t>(ib);
+    auto const c_index = static_cast<std::size_t>(ic);
 
     Real const ax = geometry.vertex_x[a_index];
     Real const ay = geometry.vertex_y[a_index];
@@ -181,14 +182,15 @@ __device__ inline bool gwn_compute_triangle_taylor_raw_moment(
     return true;
 }
 
-template <int Width, class Index> struct gwn_refit_topology_arrays {
+template <int Width, gwn_index_type Index> struct gwn_refit_topology_arrays {
     cuda::std::span<Index> internal_parent{};
     cuda::std::span<std::uint8_t> internal_parent_slot{};
     cuda::std::span<std::uint8_t> internal_arity{};
     cuda::std::span<unsigned int> internal_arrivals{};
 };
 
-template <int Width, class Real, class Index> struct gwn_prepare_refit_topology_functor {
+template <int Width, gwn_real_type Real, gwn_index_type Index>
+struct gwn_prepare_refit_topology_functor {
     gwn_bvh_topology_accessor<Width, Real, Index> topology{};
     gwn_refit_topology_arrays<Width, Index> arrays{};
     unsigned int *error_flag = nullptr;
@@ -225,7 +227,7 @@ template <int Width, class Real, class Index> struct gwn_prepare_refit_topology_
                     mark_error();
                     continue;
                 }
-                std::size_t const child_id = static_cast<std::size_t>(child_index);
+                auto const child_id = static_cast<std::size_t>(child_index);
                 arrays.internal_parent[child_id] = static_cast<Index>(node_id);
                 arrays.internal_parent_slot[child_id] = static_cast<std::uint8_t>(child_slot);
                 continue;
@@ -237,8 +239,8 @@ template <int Width, class Real, class Index> struct gwn_prepare_refit_topology_
                 mark_error();
                 continue;
             }
-            std::size_t const begin = static_cast<std::size_t>(leaf_begin);
-            std::size_t const count = static_cast<std::size_t>(leaf_count);
+            auto const begin = static_cast<std::size_t>(leaf_begin);
+            auto const count = static_cast<std::size_t>(leaf_count);
             if (begin > topology.primitive_indices.size() ||
                 count > (topology.primitive_indices.size() - begin)) {
                 mark_error();
@@ -252,7 +254,7 @@ template <int Width, class Real, class Index> struct gwn_prepare_refit_topology_
     }
 };
 
-template <int Width, class Real, class Index> struct gwn_aabb_refit_traits {
+template <int Width, gwn_real_type Real, gwn_index_type Index> struct gwn_aabb_refit_traits {
     using payload_type = gwn_aabb<Real>;
 
     struct output_context {
@@ -275,7 +277,7 @@ template <int Width, class Real, class Index> struct gwn_aabb_refit_traits {
         payload = {};
         for (Index primitive_offset = 0; primitive_offset < count; ++primitive_offset) {
             Index const sorted_slot = begin + primitive_offset;
-            std::size_t const sorted_slot_u = static_cast<std::size_t>(sorted_slot);
+            auto const sorted_slot_u = static_cast<std::size_t>(sorted_slot);
             if (sorted_slot_u >= topology.primitive_indices.size())
                 continue;
 
@@ -325,7 +327,8 @@ template <int Width, class Real, class Index> struct gwn_aabb_refit_traits {
     }
 };
 
-template <int Order, int Width, class Real, class Index> struct gwn_moment_refit_traits {
+template <int Order, int Width, gwn_real_type Real, gwn_index_type Index>
+struct gwn_moment_refit_traits {
     using payload_type = gwn_device_taylor_moment<Order, Real>;
     using output_node_type = gwn_bvh_taylor_node_soa<Width, Order, Real>;
 
@@ -349,7 +352,7 @@ template <int Order, int Width, class Real, class Index> struct gwn_moment_refit
         payload = {};
         for (Index primitive_offset = 0; primitive_offset < count; ++primitive_offset) {
             Index const sorted_slot = begin + primitive_offset;
-            std::size_t const sorted_slot_u = static_cast<std::size_t>(sorted_slot);
+            auto const sorted_slot_u = static_cast<std::size_t>(sorted_slot);
             if (sorted_slot_u >= topology.primitive_indices.size())
                 continue;
 
@@ -449,7 +452,7 @@ template <int Order, int Width, class Real, class Index> struct gwn_moment_refit
     }
 };
 
-template <int Width, class Index, class Payload> struct gwn_refit_pending_buffer {
+template <int Width, gwn_index_type Index, class Payload> struct gwn_refit_pending_buffer {
     cuda::std::span<Payload> pending{};
 
     __device__ bool is_valid(std::size_t const node_id, int const child_slot) const noexcept {
@@ -467,7 +470,8 @@ template <int Width, class Index, class Payload> struct gwn_refit_pending_buffer
     }
 };
 
-template <class Traits, int Width, class Real, class Index> struct gwn_refit_from_leaves_functor {
+template <class Traits, int Width, gwn_real_type Real, gwn_index_type Index>
+struct gwn_refit_from_leaves_functor {
     using payload_type = typename Traits::payload_type;
     using output_context = typename Traits::output_context;
 
@@ -521,7 +525,7 @@ template <class Traits, int Width, class Real, class Index> struct gwn_refit_fro
         Index current_parent, std::uint8_t current_slot, payload_type current_payload
     ) const noexcept {
         while (gwn_is_valid_index(current_parent)) {
-            std::size_t const parent_id = static_cast<std::size_t>(current_parent);
+            auto const parent_id = static_cast<std::size_t>(current_parent);
             if (parent_id >= topology.nodes.size() || parent_id >= arrays.internal_parent.size() ||
                 parent_id >= arrays.internal_parent_slot.size() ||
                 parent_id >= arrays.internal_arity.size() ||
@@ -584,7 +588,7 @@ template <class Traits, int Width, class Real, class Index> struct gwn_refit_fro
             return;
 
         std::size_t const node_id = edge_index / std::size_t(Width);
-        int const child_slot = static_cast<int>(edge_index % std::size_t(Width));
+        auto const child_slot = static_cast<int>(edge_index % std::size_t(Width));
         if (node_id >= topology.nodes.size())
             return;
 
@@ -607,7 +611,7 @@ template <class Traits, int Width, class Real, class Index> struct gwn_refit_fro
     }
 };
 
-template <int Width, class Index> struct gwn_validate_refit_convergence_functor {
+template <int Width, gwn_index_type Index> struct gwn_validate_refit_convergence_functor {
     cuda::std::span<std::uint8_t const> internal_arity{};
     cuda::std::span<unsigned int const> internal_arrivals{};
     unsigned int *error_flag = nullptr;
@@ -619,7 +623,7 @@ template <int Width, class Index> struct gwn_validate_refit_convergence_functor 
             return;
         }
 
-        unsigned int const expected_arrivals = static_cast<unsigned int>(internal_arity[node_id]);
+        auto const expected_arrivals = static_cast<unsigned int>(internal_arity[node_id]);
         if (expected_arrivals == 0u || expected_arrivals > static_cast<unsigned int>(Width) ||
             internal_arrivals[node_id] != expected_arrivals) {
             if (error_flag != nullptr)
@@ -628,7 +632,8 @@ template <int Width, class Index> struct gwn_validate_refit_convergence_functor 
     }
 };
 
-template <class Traits, int Width, class Real, class Index> struct gwn_finalize_refit_functor {
+template <class Traits, int Width, gwn_real_type Real, gwn_index_type Index>
+struct gwn_finalize_refit_functor {
     using payload_type = typename Traits::payload_type;
     using output_context = typename Traits::output_context;
 
@@ -672,7 +677,7 @@ template <class Traits, int Width, class Real, class Index> struct gwn_finalize_
     }
 };
 
-template <class Traits, int Width, class Real, class Index>
+template <class Traits, int Width, gwn_real_type Real, gwn_index_type Index>
 gwn_status gwn_run_refit_pass(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &topology,

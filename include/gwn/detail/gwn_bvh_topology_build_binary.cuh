@@ -7,17 +7,17 @@
 
 namespace gwn {
 namespace detail {
-template <class Index> struct gwn_binary_child_ref {
+template <gwn_index_type Index> struct gwn_binary_child_ref {
     std::uint8_t kind{};
     Index index{};
 };
 
-template <class Index> struct gwn_binary_node {
+template <gwn_index_type Index> struct gwn_binary_node {
     gwn_binary_child_ref<Index> left{};
     gwn_binary_child_ref<Index> right{};
 };
 
-template <class Index, class MortonCode> struct gwn_build_binary_topology_functor {
+template <gwn_index_type Index, class MortonCode> struct gwn_build_binary_topology_functor {
     cuda::std::span<MortonCode const> morton_codes{};
     cuda::std::span<gwn_binary_node<Index>> binary_nodes{};
     cuda::std::span<Index> internal_parent{};
@@ -27,7 +27,7 @@ template <class Index, class MortonCode> struct gwn_build_binary_topology_functo
 
     [[nodiscard]] __device__ inline int
     delta(std::int64_t const i, std::int64_t const j) const noexcept {
-        std::int64_t const leaf_count = static_cast<std::int64_t>(morton_codes.size());
+        auto const leaf_count = static_cast<std::int64_t>(morton_codes.size());
         if (j < 0 || j >= leaf_count)
             return -1;
 
@@ -48,11 +48,11 @@ template <class Index, class MortonCode> struct gwn_build_binary_topology_functo
     }
 
     __device__ void operator()(std::size_t const internal_id_u) const {
-        std::int64_t const internal_id = static_cast<std::int64_t>(internal_id_u);
-        std::int64_t const leaf_count = static_cast<std::int64_t>(morton_codes.size());
+        auto const internal_id = static_cast<std::int64_t>(internal_id_u);
+        auto const leaf_count = static_cast<std::int64_t>(morton_codes.size());
         if (leaf_count <= 1)
             return;
-        Index const internal_id_index = static_cast<Index>(internal_id);
+        auto const internal_id_index = static_cast<Index>(internal_id);
 
         int const direction =
             (delta(internal_id, internal_id + 1) - delta(internal_id, internal_id - 1) >= 0) ? 1
@@ -83,8 +83,8 @@ template <class Index, class MortonCode> struct gwn_build_binary_topology_functo
         } while (step > 1);
 
         gwn_binary_node<Index> node{};
-        Index const split_index = static_cast<Index>(split);
-        Index const split_plus_one_index = static_cast<Index>(split + 1);
+        auto const split_index = static_cast<Index>(split);
+        auto const split_plus_one_index = static_cast<Index>(split + 1);
         if (split == first) {
             node.left.kind = static_cast<std::uint8_t>(gwn_bvh_child_kind::k_leaf);
             node.left.index = split_index;
@@ -119,7 +119,8 @@ template <class Index, class MortonCode> struct gwn_build_binary_topology_functo
     }
 };
 
-template <class Real, class Index> struct gwn_accumulate_binary_bounds_pass_functor {
+template <gwn_real_type Real, gwn_index_type Index>
+struct gwn_accumulate_binary_bounds_pass_functor {
     cuda::std::span<gwn_aabb<Real> const> sorted_leaf_aabbs{};
     cuda::std::span<Index const> leaf_parent{};
     cuda::std::span<std::uint8_t const> leaf_parent_slot{};
@@ -146,7 +147,7 @@ template <class Real, class Index> struct gwn_accumulate_binary_bounds_pass_func
 
         gwn_aabb<Real> merged_bounds = sorted_leaf_aabbs[leaf_id];
         while (gwn_is_valid_index(parent)) {
-            std::size_t const parent_id = static_cast<std::size_t>(parent);
+            auto const parent_id = static_cast<std::size_t>(parent);
             if (parent_id >= internal_bounds.size() || parent_id >= pending_left_bounds.size() ||
                 parent_id >= pending_right_bounds.size() ||
                 parent_id >= child_arrival_count.size() || parent_id >= internal_parent.size() ||
@@ -181,13 +182,13 @@ template <class Real, class Index> struct gwn_accumulate_binary_bounds_pass_func
     }
 };
 
-template <class Index> struct gwn_binary_parent_temporaries {
+template <gwn_index_type Index> struct gwn_binary_parent_temporaries {
     gwn_device_array<std::uint8_t> internal_parent_slot;
     gwn_device_array<Index> leaf_parent;
     gwn_device_array<std::uint8_t> leaf_parent_slot;
 };
 
-template <class Index>
+template <gwn_index_type Index>
 gwn_status gwn_prepare_binary_topology_buffers(
     std::size_t const primitive_count, gwn_device_array<gwn_binary_node<Index>> &binary_nodes,
     gwn_device_array<Index> &binary_internal_parent, gwn_binary_parent_temporaries<Index> &temps,

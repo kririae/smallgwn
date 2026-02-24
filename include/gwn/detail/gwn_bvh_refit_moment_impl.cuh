@@ -10,7 +10,7 @@
 namespace gwn {
 namespace detail {
 
-template <int Order, int Width, class Real, class Index>
+template <int Order, int Width, gwn_real_type Real, gwn_index_type Index>
 gwn_status gwn_bvh_refit_moment_impl(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &topology,
