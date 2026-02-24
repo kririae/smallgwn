@@ -24,6 +24,45 @@ using Real = gwn::tests::Real;
 using Index = gwn::tests::Index;
 using gwn::tests::HostMesh;
 
+enum class topology_builder {
+    k_lbvh,
+    k_hploc,
+};
+
+[[nodiscard]] char const *to_builder_name(topology_builder const builder) noexcept {
+    switch (builder) {
+    case topology_builder::k_lbvh: return "lbvh";
+    case topology_builder::k_hploc: return "hploc";
+    }
+    return "unknown";
+}
+
+template <int Width>
+gwn::gwn_status build_topology_for_builder(
+    topology_builder const builder, gwn::gwn_geometry_object<Real, Index> const &geometry,
+    gwn::gwn_bvh_topology_object<Width, Real, Index> &topology
+) {
+    if (builder == topology_builder::k_hploc)
+        return gwn::gwn_bvh_topology_build_hploc<Width, Real, Index>(geometry, topology);
+    return gwn::gwn_bvh_topology_build_lbvh<Width, Real, Index>(geometry, topology);
+}
+
+template <int Order>
+gwn::gwn_status build_facade_for_builder(
+    topology_builder const builder, gwn::gwn_geometry_object<Real, Index> const &geometry,
+    gwn::gwn_bvh_object<Real, Index> &topology, gwn::gwn_bvh_aabb_object<Real, Index> &aabb,
+    gwn::gwn_bvh_moment_object<Real, Index> &moment
+) {
+    if (builder == topology_builder::k_hploc) {
+        return gwn::gwn_bvh_facade_build_topology_aabb_moment_hploc<Order, 4, Real, Index>(
+            geometry, topology, aabb, moment
+        );
+    }
+    return gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<Order, 4, Real, Index>(
+        geometry, topology, aabb, moment
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Query generation helpers.
 // ---------------------------------------------------------------------------
@@ -783,6 +822,134 @@ TEST(smallgwn_integration_model, integration_taylor_matches_hdk_cpu_order0_order
         for (std::size_t qi = 0; qi < query_count; ++qi) {
             EXPECT_NEAR(gpu_order0[qi], cpu_order0[qi], k_order0_epsilon) << "query index: " << qi;
             EXPECT_NEAR(gpu_order1[qi], cpu_order1[qi], k_order1_epsilon) << "query index: " << qi;
+        }
+    }
+
+    ASSERT_GT(tested_model_count, 0u) << "No valid OBJ models were exercised.";
+}
+
+TEST(smallgwn_integration_model, integration_hploc_exact_and_taylor_consistency_sampled_models) {
+    std::vector<std::filesystem::path> const model_paths = gwn::tests::collect_model_paths();
+    ASSERT_FALSE(model_paths.empty())
+        << "No model input found. Set SMALLGWN_MODEL_DATA_DIR or SMALLGWN_MODEL_PATH.";
+
+    std::size_t const model_limit =
+        gwn::tests::get_env_positive_size_t("SMALLGWN_HPLOC_INTEGRATION_MODEL_LIMIT", 6);
+
+    constexpr Real k_order0_epsilon = Real(8e-2);
+    constexpr Real k_order1_epsilon = Real(6e-2);
+    constexpr Real k_accuracy_scale = Real(2);
+
+    std::size_t tested_model_count = 0;
+    for (std::filesystem::path const &model_path : model_paths) {
+        if (tested_model_count >= model_limit)
+            break;
+        SCOPED_TRACE(model_path.string());
+
+        std::optional<HostMesh> const maybe_mesh = gwn::tests::load_obj_mesh(model_path);
+        if (!maybe_mesh.has_value())
+            continue;
+        HostMesh const &mesh = *maybe_mesh;
+        auto const query_soa = make_integration_query_soa(mesh);
+        std::size_t const query_count = query_soa[0].size();
+        if (query_count == 0)
+            continue;
+
+        gwn::gwn_geometry_object<Real, Index> geometry;
+        gwn::gwn_status const upload_status = geometry.upload(
+            cuda::std::span<Real const>(mesh.vertex_x.data(), mesh.vertex_x.size()),
+            cuda::std::span<Real const>(mesh.vertex_y.data(), mesh.vertex_y.size()),
+            cuda::std::span<Real const>(mesh.vertex_z.data(), mesh.vertex_z.size()),
+            cuda::std::span<Index const>(mesh.tri_i0.data(), mesh.tri_i0.size()),
+            cuda::std::span<Index const>(mesh.tri_i1.data(), mesh.tri_i1.size()),
+            cuda::std::span<Index const>(mesh.tri_i2.data(), mesh.tri_i2.size())
+        );
+        SMALLGWN_SKIP_IF_STATUS_CUDA_UNAVAILABLE(upload_status);
+        ASSERT_TRUE(upload_status.is_ok()) << gwn::tests::status_to_debug_string(upload_status);
+
+        gwn::gwn_bvh_object<Real, Index> bvh;
+        gwn::gwn_bvh_aabb_object<Real, Index> bvh_aabb;
+        gwn::gwn_bvh_moment_object<Real, Index> bvh_data;
+        ASSERT_TRUE(
+            (build_topology_for_builder<4>(topology_builder::k_hploc, geometry, bvh).is_ok())
+        );
+        ASSERT_TRUE(bvh.has_data());
+        assert_bvh_structure(bvh.accessor(), mesh.tri_i0.size());
+
+        gwn::gwn_device_array<Real> d_qx, d_qy, d_qz, d_out;
+        ASSERT_TRUE(d_qx.resize(query_count).is_ok());
+        ASSERT_TRUE(d_qy.resize(query_count).is_ok());
+        ASSERT_TRUE(d_qz.resize(query_count).is_ok());
+        ASSERT_TRUE(d_out.resize(query_count).is_ok());
+        ASSERT_TRUE(
+            d_qx.copy_from_host(cuda::std::span<Real const>(query_soa[0].data(), query_count))
+                .is_ok()
+        );
+        ASSERT_TRUE(
+            d_qy.copy_from_host(cuda::std::span<Real const>(query_soa[1].data(), query_count))
+                .is_ok()
+        );
+        ASSERT_TRUE(
+            d_qz.copy_from_host(cuda::std::span<Real const>(query_soa[2].data(), query_count))
+                .is_ok()
+        );
+
+        ASSERT_TRUE((gwn::gwn_compute_winding_number_batch_bvh_exact<Real, Index>(
+                         geometry.accessor(), bvh.accessor(), d_qx.span(), d_qy.span(), d_qz.span(),
+                         d_out.span()
+        )
+                         .is_ok()));
+        ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+        std::vector<Real> exact_output(query_count, Real(0));
+        ASSERT_TRUE(
+            d_out.copy_to_host(cuda::std::span<Real>(exact_output.data(), exact_output.size()))
+                .is_ok()
+        );
+        ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+
+        ASSERT_TRUE((build_facade_for_builder<0>(
+                         topology_builder::k_hploc, geometry, bvh, bvh_aabb, bvh_data
+        )
+                         .is_ok()));
+        ASSERT_TRUE((gwn::gwn_compute_winding_number_batch_bvh_taylor<0, Real, Index>(
+                         geometry.accessor(), bvh.accessor(), bvh_data.accessor(), d_qx.span(),
+                         d_qy.span(), d_qz.span(), d_out.span(), k_accuracy_scale
+        )
+                         .is_ok()));
+        ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+        std::vector<Real> order0_output(query_count, Real(0));
+        ASSERT_TRUE(
+            d_out.copy_to_host(cuda::std::span<Real>(order0_output.data(), order0_output.size()))
+                .is_ok()
+        );
+        ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+
+        ASSERT_TRUE((build_facade_for_builder<1>(
+                         topology_builder::k_hploc, geometry, bvh, bvh_aabb, bvh_data
+        )
+                         .is_ok()));
+        ASSERT_TRUE((gwn::gwn_compute_winding_number_batch_bvh_taylor<1, Real, Index>(
+                         geometry.accessor(), bvh.accessor(), bvh_data.accessor(), d_qx.span(),
+                         d_qy.span(), d_qz.span(), d_out.span(), k_accuracy_scale
+        )
+                         .is_ok()));
+        ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+        std::vector<Real> order1_output(query_count, Real(0));
+        ASSERT_TRUE(
+            d_out.copy_to_host(cuda::std::span<Real>(order1_output.data(), order1_output.size()))
+                .is_ok()
+        );
+        ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+
+        ++tested_model_count;
+        std::cout << "[gwn-integration] builder=" << to_builder_name(topology_builder::k_hploc)
+                  << " model=" << model_path.filename().string() << " queries=" << query_count
+                  << std::endl;
+        for (std::size_t qi = 0; qi < query_count; ++qi) {
+            EXPECT_NEAR(order0_output[qi], exact_output[qi], k_order0_epsilon)
+                << "query index: " << qi;
+            EXPECT_NEAR(order1_output[qi], exact_output[qi], k_order1_epsilon)
+                << "query index: " << qi;
         }
     }
 

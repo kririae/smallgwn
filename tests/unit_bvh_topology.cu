@@ -74,14 +74,14 @@ void verify_bvh_structure(
         EXPECT_EQ(s, 1);
 }
 
-template <int Width>
+template <int Width, class MortonCode = std::uint64_t>
 gwn::gwn_status build_topology(
     bvh_topology_builder const builder, gwn::gwn_geometry_object<Real, Index> const &geometry,
     gwn::gwn_bvh_topology_object<Width, Real, Index> &bvh
 ) {
     if (builder == bvh_topology_builder::k_hploc)
-        return gwn::gwn_bvh_topology_build_hploc<Width, Real, Index>(geometry, bvh);
-    return gwn::gwn_bvh_topology_build_lbvh<Width, Real, Index>(geometry, bvh);
+        return gwn::gwn_bvh_topology_build_hploc<Width, Real, Index, MortonCode>(geometry, bvh);
+    return gwn::gwn_bvh_topology_build_lbvh<Width, Real, Index, MortonCode>(geometry, bvh);
 }
 
 } // namespace
@@ -350,6 +350,31 @@ TEST_F(CudaFixture, hploc_octahedron_8_triangles) {
     verify_bvh_structure<4>(acc, 8);
 }
 
+TEST_F(CudaFixture, hploc_octahedron_8_triangles_morton32) {
+    std::vector<Real> vx{1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+    std::vector<Real> vy{0.0f, 0.0f, 1.0f, -1.0f, 0.0f, 0.0f};
+    std::vector<Real> vz{0.0f, 0.0f, 0.0f, 0.0f, 1.0f, -1.0f};
+    std::vector<Index> i0{0, 2, 1, 3, 2, 1, 3, 0};
+    std::vector<Index> i1{2, 1, 3, 0, 0, 2, 1, 3};
+    std::vector<Index> i2{4, 4, 4, 4, 5, 5, 5, 5};
+
+    auto maybe_geo = upload_mesh(vx, vy, vz, i0, i1, i2);
+    if (!maybe_geo.has_value())
+        GTEST_SKIP() << "CUDA unavailable";
+    auto &geometry = *maybe_geo;
+
+    gwn::gwn_bvh_object<Real, Index> bvh;
+    gwn::gwn_status const build_status =
+        build_topology<4, std::uint32_t>(bvh_topology_builder::k_hploc, geometry, bvh);
+    ASSERT_TRUE(build_status.is_ok()) << gwn::tests::status_to_debug_string(build_status);
+    ASSERT_TRUE(bvh.has_data());
+
+    auto const &acc = bvh.accessor();
+    EXPECT_TRUE(acc.is_valid());
+    EXPECT_EQ(acc.root_kind, gwn::gwn_bvh_child_kind::k_internal);
+    verify_bvh_structure<4>(acc, 8);
+}
+
 TEST_F(CudaFixture, hploc_wide8_bvh_build) {
     std::vector<Real> vx{1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 0.0f};
     std::vector<Real> vy{0.0f, 0.0f, 1.0f, -1.0f, 0.0f, 0.0f};
@@ -368,4 +393,26 @@ TEST_F(CudaFixture, hploc_wide8_bvh_build) {
     ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
     ASSERT_TRUE(bvh8.has_data());
     verify_bvh_structure<8>(bvh8.accessor(), 8);
+}
+
+TEST_F(CudaFixture, hploc_repeated_centroid_triangles_morton32) {
+    constexpr std::size_t k_triangle_count = 96;
+    std::vector<Real> vx{0.0f, 1.0e-5f, 0.0f};
+    std::vector<Real> vy{0.0f, 0.0f, 1.0e-5f};
+    std::vector<Real> vz{0.0f, 0.0f, 0.0f};
+    std::vector<Index> i0(k_triangle_count, 0);
+    std::vector<Index> i1(k_triangle_count, 1);
+    std::vector<Index> i2(k_triangle_count, 2);
+
+    auto maybe_geo = upload_mesh(vx, vy, vz, i0, i1, i2);
+    if (!maybe_geo.has_value())
+        GTEST_SKIP() << "CUDA unavailable";
+    auto &geometry = *maybe_geo;
+
+    gwn::gwn_bvh_object<Real, Index> bvh;
+    gwn::gwn_status const build_status =
+        build_topology<4, std::uint32_t>(bvh_topology_builder::k_hploc, geometry, bvh);
+    ASSERT_TRUE(build_status.is_ok()) << gwn::tests::status_to_debug_string(build_status);
+    ASSERT_TRUE(bvh.has_data());
+    verify_bvh_structure<4>(bvh.accessor(), k_triangle_count);
 }

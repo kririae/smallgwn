@@ -89,6 +89,7 @@ if(SMALLGWN_BUILD_TESTS)
         smallgwn_add_test(smallgwn_integration_model_parity SOURCES tests/integration_model_parity.cu
             EXTRA_SOURCES tests/reference_hdk/UT_Array.cpp tests/reference_hdk/UT_SolidAngle.cpp)
         smallgwn_add_test(smallgwn_integration_correctness  SOURCES tests/integration_correctness.cu)
+        smallgwn_add_test(smallgwn_integration_hploc_performance SOURCES tests/integration_hploc_performance.cu)
     else()
         message(STATUS "GTest not found; test targets are skipped.")
     endif()

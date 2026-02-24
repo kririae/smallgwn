@@ -184,6 +184,70 @@ TEST_F(CudaFixture, bvh_exact_matches_cpu_reference) {
         EXPECT_NEAR(gpu_out[i], ref_out[i], k_eps) << "query " << i;
 }
 
+TEST_F(CudaFixture, bvh_exact_matches_cpu_reference_hploc) {
+    constexpr Real k_eps = 1e-4f;
+
+    std::array<Real, 6> const vx{1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+    std::array<Real, 6> const vy{0.0f, 0.0f, 1.0f, -1.0f, 0.0f, 0.0f};
+    std::array<Real, 6> const vz{0.0f, 0.0f, 0.0f, 0.0f, 1.0f, -1.0f};
+    std::array<Index, 8> const i0{0, 2, 1, 3, 2, 1, 3, 0};
+    std::array<Index, 8> const i1{2, 1, 3, 0, 0, 2, 1, 3};
+    std::array<Index, 8> const i2{4, 4, 4, 4, 5, 5, 5, 5};
+
+    std::array<Real, 4> const qx{0.0f, 2.0f, 0.2f, -1.5f};
+    std::array<Real, 4> const qy{0.0f, 0.0f, 0.2f, 0.1f};
+    std::array<Real, 4> const qz{0.0f, 0.0f, 0.2f, 0.0f};
+
+    std::vector<Real> ref_out(qx.size(), 0.0f);
+    ASSERT_TRUE((gwn::tests::reference_winding_number_batch<Real, Index>(
+                     std::span<Real const>(vx), std::span<Real const>(vy),
+                     std::span<Real const>(vz), std::span<Index const>(i0),
+                     std::span<Index const>(i1), std::span<Index const>(i2),
+                     std::span<Real const>(qx), std::span<Real const>(qy),
+                     std::span<Real const>(qz), std::span<Real>(ref_out)
+    )
+                     .is_ok()));
+
+    gwn::gwn_geometry_object<Real, Index> geometry;
+    gwn::gwn_status const upload_status = geometry.upload(
+        cuda::std::span<Real const>(vx.data(), vx.size()),
+        cuda::std::span<Real const>(vy.data(), vy.size()),
+        cuda::std::span<Real const>(vz.data(), vz.size()),
+        cuda::std::span<Index const>(i0.data(), i0.size()),
+        cuda::std::span<Index const>(i1.data(), i1.size()),
+        cuda::std::span<Index const>(i2.data(), i2.size())
+    );
+    SMALLGWN_SKIP_IF_STATUS_CUDA_UNAVAILABLE(upload_status);
+    ASSERT_TRUE(upload_status.is_ok());
+
+    gwn::gwn_bvh_object<Real, Index> bvh;
+    ASSERT_TRUE((gwn::gwn_bvh_topology_build_hploc<4, Real, Index>(geometry, bvh).is_ok()));
+
+    gwn::gwn_device_array<Real> d_qx, d_qy, d_qz, d_out;
+    ASSERT_TRUE(d_qx.resize(qx.size()).is_ok());
+    ASSERT_TRUE(d_qy.resize(qy.size()).is_ok());
+    ASSERT_TRUE(d_qz.resize(qz.size()).is_ok());
+    ASSERT_TRUE(d_out.resize(qx.size()).is_ok());
+
+    ASSERT_TRUE(d_qx.copy_from_host(cuda::std::span<Real const>(qx.data(), qx.size())).is_ok());
+    ASSERT_TRUE(d_qy.copy_from_host(cuda::std::span<Real const>(qy.data(), qy.size())).is_ok());
+    ASSERT_TRUE(d_qz.copy_from_host(cuda::std::span<Real const>(qz.data(), qz.size())).is_ok());
+
+    gwn::gwn_status const query_status =
+        gwn::gwn_compute_winding_number_batch_bvh_exact<Real, Index>(
+            geometry.accessor(), bvh.accessor(), d_qx.span(), d_qy.span(), d_qz.span(), d_out.span()
+        );
+    ASSERT_TRUE(query_status.is_ok()) << gwn::tests::status_to_debug_string(query_status);
+    ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+
+    std::vector<Real> gpu_out(qx.size(), 0.0f);
+    ASSERT_TRUE(d_out.copy_to_host(cuda::std::span<Real>(gpu_out.data(), gpu_out.size())).is_ok());
+    ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+
+    for (std::size_t i = 0; i < qx.size(); ++i)
+        EXPECT_NEAR(gpu_out[i], ref_out[i], k_eps) << "query " << i;
+}
+
 // ---------------------------------------------------------------------------
 // Degenerate: zero-area triangle produces WN=0.
 // ---------------------------------------------------------------------------

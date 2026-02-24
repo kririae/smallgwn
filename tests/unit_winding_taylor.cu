@@ -23,6 +23,11 @@ using gwn::tests::CudaFixture;
 
 namespace {
 
+enum class taylor_topology_builder {
+    k_lbvh,
+    k_hploc,
+};
+
 // Helper: upload octahedron, build BVH + Taylor, query Taylor WN.
 struct TaylorTestContext {
     gwn::gwn_geometry_object<Real, Index> geometry;
@@ -34,7 +39,10 @@ struct TaylorTestContext {
     bool ready = false;
 };
 
-void setup_octahedron_taylor(TaylorTestContext &ctx, int order) {
+void setup_octahedron_taylor(
+    TaylorTestContext &ctx, int order,
+    taylor_topology_builder const builder = taylor_topology_builder::k_lbvh
+) {
     std::vector<Real> vx{1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 0.0f};
     std::vector<Real> vy{0.0f, 0.0f, 1.0f, -1.0f, 0.0f, 0.0f};
     std::vector<Real> vz{0.0f, 0.0f, 0.0f, 0.0f, 1.0f, -1.0f};
@@ -54,14 +62,25 @@ void setup_octahedron_taylor(TaylorTestContext &ctx, int order) {
         return;
 
     gwn::gwn_status build_status;
-    if (order == 0)
+    if (builder == taylor_topology_builder::k_hploc) {
+        if (order == 0) {
+            build_status = gwn::gwn_bvh_facade_build_topology_aabb_moment_hploc<0, 4, Real, Index>(
+                ctx.geometry, ctx.bvh, ctx.aabb, ctx.data
+            );
+        } else {
+            build_status = gwn::gwn_bvh_facade_build_topology_aabb_moment_hploc<1, 4, Real, Index>(
+                ctx.geometry, ctx.bvh, ctx.aabb, ctx.data
+            );
+        }
+    } else if (order == 0) {
         build_status = gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<0, 4, Real, Index>(
             ctx.geometry, ctx.bvh, ctx.aabb, ctx.data
         );
-    else
+    } else {
         build_status = gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<1, 4, Real, Index>(
             ctx.geometry, ctx.bvh, ctx.aabb, ctx.data
         );
+    }
 
     if (!build_status.is_ok())
         return;
@@ -69,17 +88,11 @@ void setup_octahedron_taylor(TaylorTestContext &ctx, int order) {
     ctx.ready = true;
 }
 
-} // namespace
-
-// ---------------------------------------------------------------------------
-// Far-field queries: Taylor order 0 matches exact within loose tolerance.
-// ---------------------------------------------------------------------------
-
-TEST_F(CudaFixture, taylor_order0_far_field_matches_exact) {
+void run_taylor_order0_far_field_matches_exact_test(taylor_topology_builder const builder) {
     constexpr Real k_eps = 3e-2f;
 
     TaylorTestContext ctx;
-    setup_octahedron_taylor(ctx, 0);
+    setup_octahedron_taylor(ctx, 0, builder);
     if (!ctx.ready)
         GTEST_SKIP() << "CUDA unavailable";
 
@@ -128,6 +141,20 @@ TEST_F(CudaFixture, taylor_order0_far_field_matches_exact) {
 
     for (std::size_t i = 0; i < qx.size(); ++i)
         EXPECT_NEAR(gpu[i], ref[i], k_eps) << "query " << i;
+}
+
+} // namespace
+
+// ---------------------------------------------------------------------------
+// Far-field queries: Taylor order 0 matches exact within loose tolerance.
+// ---------------------------------------------------------------------------
+
+TEST_F(CudaFixture, taylor_order0_far_field_matches_exact) {
+    run_taylor_order0_far_field_matches_exact_test(taylor_topology_builder::k_lbvh);
+}
+
+TEST_F(CudaFixture, taylor_order0_far_field_matches_exact_hploc) {
+    run_taylor_order0_far_field_matches_exact_test(taylor_topology_builder::k_hploc);
 }
 
 // ---------------------------------------------------------------------------

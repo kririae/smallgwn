@@ -88,8 +88,13 @@ These instructions apply to the `smallgwn/` project tree.
   - shared collapse pass (`gwn_bvh_topology_build_collapse_binary_lbvh`) emits final wide topology.
 - Generic async refit kernels/traits live in `include/gwn/detail/gwn_bvh_refit_async.cuh`.
 - LBVH build path uses CUB for scene reduction and radix sort (NO Thrust in runtime build path).
+- Morton radix sort end-bit tracks `MortonCode` width (`sizeof(MortonCode) * 8`) so `uint32` and
+  `uint64` specializations both sort on the correct bit range.
 - `detail/gwn_bvh_topology_build_hploc.cuh` contains the production H-PLOC GPU topology path
   (no experimental runtime toggle / no LBVH fallback branch inside H-PLOC builder).
+- H-PLOC nearest-neighbour `delta` tie-break keeps a dedicated `uint32 Morton` path using a
+  combined `(morton << 32) | primitive_index` key to maintain stable parent selection under equal
+  Morton codes.
 - H-PLOC kernel includes convergence guards (inner/outer iteration caps + failure flag) and returns
   explicit `gwn_status::internal_error` on non-convergence instead of hanging.
 - Taylor build currently supports `Order=0/1`:
@@ -119,16 +124,25 @@ These instructions apply to the `smallgwn/` project tree.
   - `tests/unit_stream_mixin.cu`
   - `tests/unit_geometry.cu`
   - `tests/unit_bvh_topology.cu`
-    - includes H-PLOC topology build coverage (`hploc_*` cases)
+    - includes H-PLOC topology build coverage (`hploc_*` cases), including `uint32 Morton`
+      duplicate-centroid stress checks
   - `tests/unit_bvh_taylor.cu`
+    - includes H-PLOC facade build coverage for Taylor order 0/1
   - `tests/unit_winding_exact.cu`
+    - includes exact-query parity coverage on H-PLOC topology
   - `tests/unit_winding_taylor.cu`
+    - includes Taylor order-0 far-field parity coverage on H-PLOC topology
 - Integration tests:
   - `tests/integration_model_parity.cu`
   - `tests/integration_correctness.cu`
+  - `tests/integration_hploc_performance.cu`
   - Exact-heavy model parity/correctness cases are intentionally compiled out with `#if 0` during current refactor cycle.
   - Model-based integration tests are fail-fast on missing model data (no `GTEST_SKIP` on missing dataset path).
   - Taylor parity includes GPU order-0/order-1 vs HDK CPU order-0/order-1 comparisons.
+  - Correctness now includes sampled model checks for order-1 Taylor LBVH/H-PLOC consistency.
+  - H-PLOC performance gate enforces topology-build `p50(hploc)/p50(lbvh)` ratio on sampled
+    model inputs (default `<= 2.00`, configurable via
+    `SMALLGWN_HPLOC_TOPOLOGY_RATIO_LIMIT`; model count via `SMALLGWN_HPLOC_PERF_MODEL_LIMIT`).
 - `tests/reference_cpu.cuh`: TBB-parallel CPU exact reference implementation.
 - `tests/reference_hdk/*`: Vendored HDK reference sources for parity/regression checks (keep under `tests/`, not public).
 - Benchmark executable:
