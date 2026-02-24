@@ -126,6 +126,8 @@ These instructions apply to the `smallgwn/` project tree.
   - `tests/unit_bvh_topology.cu`
     - includes H-PLOC topology build coverage (`hploc_*` cases), including `uint32 Morton`
       duplicate-centroid stress checks
+  - `tests/unit_uint64_compile.cu`
+    - explicit template-instantiation compile coverage for `Index=uint64_t` topology builders
   - `tests/unit_bvh_taylor.cu`
     - includes H-PLOC facade build coverage for Taylor order 0/1
   - `tests/unit_winding_exact.cu`
