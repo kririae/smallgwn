@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "gwn/detail/gwn_bvh_topology_build_common.cuh"
+#include "gwn_bvh_topology_build_common.cuh"
 
 namespace gwn {
 namespace detail {
@@ -17,8 +17,8 @@ template <class Index> struct gwn_binary_node {
     gwn_binary_child_ref<Index> right{};
 };
 
-template <class Index> struct gwn_build_binary_topology_functor {
-    cuda::std::span<std::uint32_t const> morton_codes{};
+template <class Index, class MortonCode> struct gwn_build_binary_topology_functor {
+    cuda::std::span<MortonCode const> morton_codes{};
     cuda::std::span<gwn_binary_node<Index>> binary_nodes{};
     cuda::std::span<Index> internal_parent{};
     cuda::std::span<std::uint8_t> internal_parent_slot{};
@@ -31,17 +31,20 @@ template <class Index> struct gwn_build_binary_topology_functor {
         if (j < 0 || j >= leaf_count)
             return -1;
 
-        std::uint32_t const code_i = morton_codes[static_cast<std::size_t>(i)];
-        std::uint32_t const code_j = morton_codes[static_cast<std::size_t>(j)];
+        MortonCode const code_i = morton_codes[static_cast<std::size_t>(i)];
+        MortonCode const code_j = morton_codes[static_cast<std::size_t>(j)];
         if (code_i == code_j) {
-            std::uint32_t const diff = static_cast<std::uint32_t>(
-                static_cast<std::uint64_t>(i) ^ static_cast<std::uint64_t>(j)
-            );
+            std::uint64_t const diff =
+                static_cast<std::uint64_t>(i) ^ static_cast<std::uint64_t>(j);
             if (diff == 0)
-                return 64;
-            return 32 + __clz(diff);
+                return static_cast<int>(sizeof(MortonCode) * 8 + 64);
+            return static_cast<int>(sizeof(MortonCode) * 8) + __clzll(diff);
         }
-        return __clz(code_i ^ code_j);
+
+        if constexpr (sizeof(MortonCode) == sizeof(std::uint32_t))
+            return __clz(static_cast<std::uint32_t>(code_i ^ code_j));
+        else
+            return __clzll(static_cast<std::uint64_t>(code_i ^ code_j));
     }
 
     __device__ void operator()(std::size_t const internal_id_u) const {
@@ -177,6 +180,41 @@ template <class Real, class Index> struct gwn_accumulate_binary_bounds_pass_func
         }
     }
 };
+
+template <class Index> struct gwn_binary_parent_temporaries {
+    gwn_device_array<std::uint8_t> internal_parent_slot;
+    gwn_device_array<Index> leaf_parent;
+    gwn_device_array<std::uint8_t> leaf_parent_slot;
+};
+
+template <class Index>
+gwn_status gwn_prepare_binary_topology_buffers(
+    std::size_t const primitive_count, gwn_device_array<gwn_binary_node<Index>> &binary_nodes,
+    gwn_device_array<Index> &binary_internal_parent, gwn_binary_parent_temporaries<Index> &temps,
+    cudaStream_t const stream
+) noexcept {
+    std::size_t const internal_count = primitive_count - 1;
+    GWN_RETURN_ON_ERROR(binary_nodes.resize(internal_count, stream));
+    GWN_RETURN_ON_ERROR(binary_internal_parent.resize(internal_count, stream));
+    GWN_RETURN_ON_ERROR(temps.internal_parent_slot.resize(internal_count, stream));
+    GWN_RETURN_ON_ERROR(temps.leaf_parent.resize(primitive_count, stream));
+    GWN_RETURN_ON_ERROR(temps.leaf_parent_slot.resize(primitive_count, stream));
+
+    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
+        cudaMemsetAsync(binary_internal_parent.data(), 0xff, internal_count * sizeof(Index), stream)
+    ));
+    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemsetAsync(
+        temps.internal_parent_slot.data(), 0xff, internal_count * sizeof(std::uint8_t), stream
+    )));
+    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
+        cudaMemsetAsync(temps.leaf_parent.data(), 0xff, primitive_count * sizeof(Index), stream)
+    ));
+    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemsetAsync(
+        temps.leaf_parent_slot.data(), 0xff, primitive_count * sizeof(std::uint8_t), stream
+    )));
+
+    return gwn_status::ok();
+}
 
 } // namespace detail
 } // namespace gwn

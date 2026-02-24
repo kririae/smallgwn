@@ -2,19 +2,16 @@
 
 #include <cuda_runtime_api.h>
 
-#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 
-#include <cub/device/device_radix_sort.cuh>
-
-#include "gwn/detail/gwn_bvh_topology_build_binary.cuh"
-#include "gwn/detail/gwn_bvh_topology_build_common.cuh"
-#include "gwn/detail/gwn_bvh_topology_build_lbvh.cuh"
-#include "gwn/gwn_bvh.cuh"
-#include "gwn/gwn_geometry.cuh"
-#include "gwn/gwn_kernel_utils.cuh"
+#include "../gwn_bvh.cuh"
+#include "../gwn_geometry.cuh"
+#include "../gwn_kernel_utils.cuh"
+#include "gwn_bvh_topology_build_binary.cuh"
+#include "gwn_bvh_topology_build_common.cuh"
+#include "gwn_bvh_topology_build_lbvh.cuh"
 
 namespace gwn {
 namespace detail {
@@ -169,11 +166,13 @@ template <class Real, class Index> struct gwn_hploc_emit_binary_nodes_functor {
     }
 };
 
-template <int BlockSize, std::uint32_t SearchRadius, std::uint32_t MergingThreshold, class Real>
+template <
+    int BlockSize, std::uint32_t SearchRadius, std::uint32_t MergingThreshold, class Real,
+    class MortonCode>
 __global__ __launch_bounds__(BlockSize) void gwn_build_binary_hploc_kernel(
     std::uint32_t const primitive_count, gwn_hploc_node<Real> *full_nodes,
     std::uint32_t *cluster_indices, std::uint32_t *boundary_parent, unsigned int *cluster_count,
-    std::uint32_t const *sorted_morton_codes, unsigned int *failure_flag
+    MortonCode const *sorted_morton_codes, unsigned int *failure_flag
 ) {
     constexpr int k_warp_size = 32;
     static_assert((BlockSize % k_warp_size) == 0, "BlockSize must be a multiple of 32.");
@@ -181,11 +180,12 @@ __global__ __launch_bounds__(BlockSize) void gwn_build_binary_hploc_kernel(
     std::uint32_t const lane = static_cast<std::uint32_t>(threadIdx.x) & (k_warp_size - 1u);
 
     auto const delta = [&](std::uint32_t const a, std::uint32_t const b) {
-        std::uint64_t const key_a =
-            (std::uint64_t(sorted_morton_codes[a]) << 32) | std::uint64_t(a);
-        std::uint64_t const key_b =
-            (std::uint64_t(sorted_morton_codes[b]) << 32) | std::uint64_t(b);
-        return key_a ^ key_b;
+        MortonCode const key_a = sorted_morton_codes[a];
+        MortonCode const key_b = sorted_morton_codes[b];
+        std::uint64_t const key_delta = static_cast<std::uint64_t>(key_a ^ key_b);
+        if (key_delta == 0)
+            return std::uint64_t(a ^ b);
+        return key_delta;
     };
 
     auto const find_parent_id = [&](std::uint32_t const left, std::uint32_t const right) {
@@ -401,7 +401,7 @@ __global__ __launch_bounds__(BlockSize) void gwn_build_binary_hploc_kernel(
     }
 }
 
-template <class Real, class Index>
+template <class Real, class Index, class MortonCode = std::uint64_t>
 gwn_status gwn_bvh_topology_build_binary_hploc(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_device_array<Index> &sorted_primitive_indices,
@@ -419,9 +419,9 @@ gwn_status gwn_bvh_topology_build_binary_hploc(
     }
 
     if (!k_gwn_hploc_enable_experimental_kernel) {
-        GWN_RETURN_ON_ERROR(gwn_bvh_topology_build_binary_lbvh(
+        GWN_RETURN_ON_ERROR((gwn_bvh_topology_build_binary_lbvh<Real, Index, MortonCode>(
             geometry, sorted_primitive_indices, binary_nodes, binary_internal_parent, stream
-        ));
+        )));
         if (primitive_count > 1)
             root_internal_index = Index(0);
         return gwn_status::ok();
@@ -430,95 +430,23 @@ gwn_status gwn_bvh_topology_build_binary_hploc(
     if (primitive_count > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max() / 2u))
         return gwn_status::invalid_argument("H-PLOC builder primitive count exceeds uint32 range.");
 
-    constexpr int k_block_size = k_gwn_default_block_size;
+    gwn_scene_aabb<Real> scene{};
+    GWN_RETURN_ON_ERROR(gwn_compute_scene_aabb(geometry, scene, stream));
 
-    Real scene_min_x = Real(0);
-    Real scene_max_x = Real(0);
-    Real scene_min_y = Real(0);
-    Real scene_max_y = Real(0);
-    Real scene_min_z = Real(0);
-    Real scene_max_z = Real(0);
-    gwn_device_array<Real> scene_axis_min{};
-    gwn_device_array<Real> scene_axis_max{};
-    gwn_device_array<std::uint8_t> scene_reduce_temp{};
-    GWN_RETURN_ON_ERROR(scene_axis_min.resize(1, stream));
-    GWN_RETURN_ON_ERROR(scene_axis_max.resize(1, stream));
-    GWN_RETURN_ON_ERROR(gwn_reduce_minmax_cub(
-        geometry.vertex_x, scene_axis_min, scene_axis_max, scene_reduce_temp, scene_min_x,
-        scene_max_x, stream
-    ));
-    GWN_RETURN_ON_ERROR(gwn_reduce_minmax_cub(
-        geometry.vertex_y, scene_axis_min, scene_axis_max, scene_reduce_temp, scene_min_y,
-        scene_max_y, stream
-    ));
-    GWN_RETURN_ON_ERROR(gwn_reduce_minmax_cub(
-        geometry.vertex_z, scene_axis_min, scene_axis_max, scene_reduce_temp, scene_min_z,
-        scene_max_z, stream
-    ));
-    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaStreamSynchronize(stream)));
-
-    Real const scene_inv_x =
-        (scene_max_x > scene_min_x) ? Real(1) / (scene_max_x - scene_min_x) : Real(1);
-    Real const scene_inv_y =
-        (scene_max_y > scene_min_y) ? Real(1) / (scene_max_y - scene_min_y) : Real(1);
-    Real const scene_inv_z =
-        (scene_max_z > scene_min_z) ? Real(1) / (scene_max_z - scene_min_z) : Real(1);
-
+    gwn_device_array<MortonCode> sorted_morton_codes{};
     gwn_device_array<gwn_aabb<Real>> primitive_aabbs{};
-    gwn_device_array<std::uint32_t> morton_codes{};
-    gwn_device_array<Index> primitive_indices{};
-    GWN_RETURN_ON_ERROR(primitive_aabbs.resize(primitive_count, stream));
-    GWN_RETURN_ON_ERROR(morton_codes.resize(primitive_count, stream));
-    GWN_RETURN_ON_ERROR(primitive_indices.resize(primitive_count, stream));
+    GWN_RETURN_ON_ERROR((gwn_compute_and_sort_morton<MortonCode>(
+        geometry, scene, sorted_primitive_indices, sorted_morton_codes, primitive_aabbs, stream
+    )));
 
-    auto const primitive_aabbs_span = primitive_aabbs.span();
-    auto const morton_codes_span = morton_codes.span();
-    auto const primitive_indices_span = primitive_indices.span();
-    GWN_RETURN_ON_ERROR(
-        gwn_launch_linear_kernel<k_block_size>(
-            primitive_count,
-            gwn_compute_triangle_aabbs_and_morton_functor<Real, Index>{
-                geometry, scene_min_x, scene_min_y, scene_min_z, scene_inv_x, scene_inv_y,
-                scene_inv_z, primitive_aabbs_span, morton_codes_span, primitive_indices_span
-            },
-            stream
-        )
-    );
-
-    if (primitive_count > static_cast<std::size_t>(std::numeric_limits<int>::max()))
-        return gwn_status::invalid_argument("H-PLOC radix sort input exceeds int32 item count.");
-    int const radix_item_count = static_cast<int>(primitive_count);
-
-    gwn_device_array<std::uint32_t> sorted_morton_codes{};
+    constexpr int k_linear_block_size = k_gwn_default_block_size;
     gwn_device_array<gwn_aabb<Real>> sorted_leaf_aabbs{};
-    gwn_device_array<std::uint8_t> radix_sort_temp{};
-    GWN_RETURN_ON_ERROR(sorted_morton_codes.resize(primitive_count, stream));
-    GWN_RETURN_ON_ERROR(sorted_primitive_indices.resize(primitive_count, stream));
-
-    std::size_t radix_sort_temp_bytes = 0;
-    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
-        cub::DeviceRadixSort::SortPairs(
-            nullptr, radix_sort_temp_bytes, morton_codes_span.data(), sorted_morton_codes.data(),
-            primitive_indices_span.data(), sorted_primitive_indices.data(), radix_item_count, 0,
-            static_cast<int>(sizeof(std::uint32_t) * 8), stream
-        )
-    ));
-    GWN_RETURN_ON_ERROR(radix_sort_temp.resize(radix_sort_temp_bytes, stream));
-    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
-        cub::DeviceRadixSort::SortPairs(
-            radix_sort_temp.data(), radix_sort_temp_bytes, morton_codes_span.data(),
-            sorted_morton_codes.data(), primitive_indices_span.data(),
-            sorted_primitive_indices.data(), radix_item_count, 0,
-            static_cast<int>(sizeof(std::uint32_t) * 8), stream
-        )
-    ));
-
     GWN_RETURN_ON_ERROR(sorted_leaf_aabbs.resize(primitive_count, stream));
     GWN_RETURN_ON_ERROR(
-        gwn_launch_linear_kernel<k_block_size>(
+        gwn_launch_linear_kernel<k_linear_block_size>(
             primitive_count,
             gwn_gather_sorted_aabbs_functor<Real, Index>{
-                primitive_aabbs_span,
+                primitive_aabbs.span(),
                 cuda::std::span<Index const>(
                     sorted_primitive_indices.data(), sorted_primitive_indices.size()
                 ),
@@ -535,28 +463,12 @@ gwn_status gwn_bvh_topology_build_binary_hploc(
     }
 
     std::size_t const binary_internal_count = primitive_count - 1;
-    gwn_device_array<std::uint8_t> binary_internal_parent_slot{};
-    gwn_device_array<Index> binary_leaf_parent{};
-    gwn_device_array<std::uint8_t> binary_leaf_parent_slot{};
-    GWN_RETURN_ON_ERROR(binary_nodes.resize(binary_internal_count, stream));
-    GWN_RETURN_ON_ERROR(binary_internal_parent.resize(binary_internal_count, stream));
-    GWN_RETURN_ON_ERROR(binary_internal_parent_slot.resize(binary_internal_count, stream));
-    GWN_RETURN_ON_ERROR(binary_leaf_parent.resize(primitive_count, stream));
-    GWN_RETURN_ON_ERROR(binary_leaf_parent_slot.resize(primitive_count, stream));
-
-    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemsetAsync(
-        binary_internal_parent.data(), 0xff, binary_internal_count * sizeof(Index), stream
-    )));
-    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemsetAsync(
-        binary_internal_parent_slot.data(), 0xff, binary_internal_count * sizeof(std::uint8_t),
-        stream
-    )));
-    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
-        cudaMemsetAsync(binary_leaf_parent.data(), 0xff, primitive_count * sizeof(Index), stream)
+    gwn_binary_parent_temporaries<Index> temps{};
+    GWN_RETURN_ON_ERROR(gwn_prepare_binary_topology_buffers(
+        primitive_count, binary_nodes, binary_internal_parent, temps, stream
     ));
-    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemsetAsync(
-        binary_leaf_parent_slot.data(), 0xff, primitive_count * sizeof(std::uint8_t), stream
-    )));
+
+    constexpr int k_hploc_block_size = 64;
 
     gwn_device_array<gwn_hploc_node<Real>> full_nodes{};
     gwn_device_array<std::uint32_t> cluster_indices{};
@@ -570,7 +482,7 @@ gwn_status gwn_bvh_topology_build_binary_hploc(
     GWN_RETURN_ON_ERROR(failure_flag.resize(1, stream));
 
     GWN_RETURN_ON_ERROR(
-        gwn_launch_linear_kernel<k_block_size>(
+        gwn_launch_linear_kernel<k_linear_block_size>(
             primitive_count,
             gwn_hploc_init_full_nodes_functor<Real>{
                 sorted_leaf_aabbs.span(), full_nodes.span(), cluster_indices.span()
@@ -590,14 +502,14 @@ gwn_status gwn_bvh_topology_build_binary_hploc(
         gwn_cuda_to_status(cudaMemsetAsync(failure_flag.data(), 0, sizeof(unsigned int), stream))
     );
 
-    int const block_count = gwn_block_count_1d<k_block_size>(primitive_count);
+    int const block_count = gwn_block_count_1d<k_hploc_block_size>(primitive_count);
     gwn_build_binary_hploc_kernel<
-        k_block_size, k_gwn_hploc_search_radius, k_gwn_hploc_merging_threshold, Real>
-        <<<block_count, k_block_size, 0, stream>>>(
-            static_cast<std::uint32_t>(primitive_count), full_nodes.data(), cluster_indices.data(),
-            boundary_parent.data(), cluster_count.data(), sorted_morton_codes.data(),
-            failure_flag.data()
-        );
+        k_hploc_block_size, k_gwn_hploc_search_radius, k_gwn_hploc_merging_threshold, Real,
+        MortonCode><<<block_count, k_hploc_block_size, 0, stream>>>(
+        static_cast<std::uint32_t>(primitive_count), full_nodes.data(), cluster_indices.data(),
+        boundary_parent.data(), cluster_count.data(), sorted_morton_codes.data(),
+        failure_flag.data()
+    );
     GWN_RETURN_ON_ERROR(gwn_check_last_kernel());
 
     unsigned int host_cluster_count = 0u;
@@ -621,13 +533,13 @@ gwn_status gwn_bvh_topology_build_binary_hploc(
         return gwn_status::internal_error("H-PLOC builder did not converge to a single root.");
 
     GWN_RETURN_ON_ERROR(
-        gwn_launch_linear_kernel<k_block_size>(
+        gwn_launch_linear_kernel<k_linear_block_size>(
             binary_internal_count,
             gwn_hploc_emit_binary_nodes_functor<Real, Index>{
                 cuda::std::span<gwn_hploc_node<Real> const>(full_nodes.data(), full_nodes.size()),
                 binary_nodes.span(), binary_internal_parent.span(),
-                binary_internal_parent_slot.span(), binary_leaf_parent.span(),
-                binary_leaf_parent_slot.span(), static_cast<std::uint32_t>(primitive_count)
+                temps.internal_parent_slot.span(), temps.leaf_parent.span(),
+                temps.leaf_parent_slot.span(), static_cast<std::uint32_t>(primitive_count)
             },
             stream
         )
