@@ -12,7 +12,7 @@
 namespace gwn {
 namespace detail {
 
-template <int Width, class Real, class Index, class BuildBinaryFn>
+template <int Width, class Real, class Index, class MortonCode, class BuildBinaryFn>
 gwn_status gwn_bvh_topology_build_from_binary_impl(
     char const *entry_name, gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> &topology, BuildBinaryFn &&build_binary_fn,
@@ -22,8 +22,8 @@ gwn_status gwn_bvh_topology_build_from_binary_impl(
         static_assert(Width >= 2, "BVH width must be at least 2.");
 
         if (!geometry.is_valid()) {
-            return gwn_status::invalid_argument(
-                "Geometry accessor is invalid for BVH construction."
+            return gwn_bvh_invalid_argument(
+                k_gwn_bvh_phase_topology_build, "Geometry accessor is invalid for BVH construction."
             );
         }
 
@@ -32,8 +32,8 @@ gwn_status gwn_bvh_topology_build_from_binary_impl(
             return gwn_status::ok();
         }
         if (geometry.vertex_count() == 0) {
-            return gwn_status::invalid_argument(
-                "Cannot build BVH with triangles but zero vertices."
+            return gwn_bvh_invalid_argument(
+                k_gwn_bvh_phase_topology_build, "Cannot build BVH with triangles but zero vertices."
             );
         }
 
@@ -45,21 +45,32 @@ gwn_status gwn_bvh_topology_build_from_binary_impl(
 
         auto const build_topology =
             [&](gwn_bvh_topology_accessor<Width, Real, Index> &staging_topology) -> gwn_status {
-            gwn_device_array<Index> sorted_primitive_indices{};
+            gwn_topology_build_preprocess<Real, Index, MortonCode> preprocess{};
+            GWN_RETURN_ON_ERROR(
+                (gwn_bvh_topology_build_preprocess<MortonCode>(geometry, preprocess, stream))
+            );
+
             gwn_device_array<gwn_binary_node<Index>> binary_nodes{};
             gwn_device_array<Index> binary_internal_parent{};
             Index root_internal_index = gwn_invalid_index<Index>();
             GWN_RETURN_ON_ERROR(build_binary_fn(
-                sorted_primitive_indices, binary_nodes, binary_internal_parent, root_internal_index
+                preprocess, binary_nodes, binary_internal_parent, root_internal_index
             ));
 
+            if (preprocess.sorted_primitive_indices.size() != primitive_count) {
+                return gwn_bvh_internal_error(
+                    k_gwn_bvh_phase_topology_build,
+                    "Topology build preprocess generated mismatched primitive index count."
+                );
+            }
             GWN_RETURN_ON_ERROR(
                 gwn_allocate_span(staging_topology.primitive_indices, primitive_count, stream)
             );
             GWN_RETURN_ON_ERROR(gwn_copy_d2d(
                 staging_topology.primitive_indices,
                 cuda::std::span<Index const>(
-                    sorted_primitive_indices.data(), sorted_primitive_indices.size()
+                    preprocess.sorted_primitive_indices.data(),
+                    preprocess.sorted_primitive_indices.size()
                 ),
                 stream
             ));
@@ -70,6 +81,11 @@ gwn_status gwn_bvh_topology_build_from_binary_impl(
                 staging_topology.root_count = Index(1);
                 return gwn_status::ok();
             }
+            if (!gwn_index_in_bounds(root_internal_index, binary_nodes.size()))
+                return gwn_bvh_internal_error(
+                    k_gwn_bvh_phase_topology_build,
+                    "Topology build binary stage produced an invalid root index."
+                );
 
             GWN_RETURN_ON_ERROR((gwn_bvh_topology_build_collapse_binary_lbvh<Width, Real, Index>(
                 cuda::std::span<gwn_binary_node<Index> const>(
@@ -99,16 +115,19 @@ gwn_status gwn_bvh_topology_build_lbvh_impl(
     gwn_bvh_topology_accessor<Width, Real, Index> &topology,
     cudaStream_t const stream = gwn_default_stream()
 ) noexcept {
-    return gwn_bvh_topology_build_from_binary_impl<Width, Real, Index>(
+    return gwn_bvh_topology_build_from_binary_impl<Width, Real, Index, MortonCode>(
         "gwn_bvh_topology_build_lbvh_impl", geometry, topology,
-        [&](gwn_device_array<Index> &sorted_primitive_indices,
+        [&](gwn_topology_build_preprocess<Real, Index, MortonCode> const &preprocess,
             gwn_device_array<gwn_binary_node<Index>> &binary_nodes,
             gwn_device_array<Index> &binary_internal_parent,
             Index &root_internal_index) -> gwn_status {
-        GWN_RETURN_ON_ERROR((gwn_bvh_topology_build_binary_lbvh<Real, Index, MortonCode>(
-            geometry, sorted_primitive_indices, binary_nodes, binary_internal_parent, stream
+        GWN_RETURN_ON_ERROR((gwn_bvh_topology_build_binary_lbvh<Index, MortonCode>(
+            cuda::std::span<MortonCode const>(
+                preprocess.sorted_morton_codes.data(), preprocess.sorted_morton_codes.size()
+            ),
+            binary_nodes, binary_internal_parent, stream
         )));
-        if (geometry.triangle_count() > 1)
+        if (preprocess.sorted_morton_codes.size() > 1)
             root_internal_index = Index(0);
         return gwn_status::ok();
     },
@@ -122,15 +141,24 @@ gwn_status gwn_bvh_topology_build_hploc_impl(
     gwn_bvh_topology_accessor<Width, Real, Index> &topology,
     cudaStream_t const stream = gwn_default_stream()
 ) noexcept {
-    return gwn_bvh_topology_build_from_binary_impl<Width, Real, Index>(
+    return gwn_bvh_topology_build_from_binary_impl<Width, Real, Index, MortonCode>(
         "gwn_bvh_topology_build_hploc_impl", geometry, topology,
-        [&](gwn_device_array<Index> &sorted_primitive_indices,
+        [&](gwn_topology_build_preprocess<Real, Index, MortonCode> const &preprocess,
             gwn_device_array<gwn_binary_node<Index>> &binary_nodes,
             gwn_device_array<Index> &binary_internal_parent,
             Index &root_internal_index) -> gwn_status {
         return gwn_bvh_topology_build_binary_hploc<Real, Index, MortonCode>(
-            geometry, sorted_primitive_indices, binary_nodes, binary_internal_parent,
-            root_internal_index, stream
+            cuda::std::span<Index const>(
+                preprocess.sorted_primitive_indices.data(),
+                preprocess.sorted_primitive_indices.size()
+            ),
+            cuda::std::span<MortonCode const>(
+                preprocess.sorted_morton_codes.data(), preprocess.sorted_morton_codes.size()
+            ),
+            cuda::std::span<gwn_aabb<Real> const>(
+                preprocess.primitive_aabbs.data(), preprocess.primitive_aabbs.size()
+            ),
+            binary_nodes, binary_internal_parent, root_internal_index, stream
         );
     },
         stream

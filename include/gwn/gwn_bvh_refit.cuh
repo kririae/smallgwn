@@ -2,6 +2,9 @@
 
 /// \file gwn_bvh_refit.cuh
 /// \brief Public API for BVH payload refit (AABB bounds and Taylor moments).
+///
+/// \remark Public entrypoints are object-based; accessor-level refit routines
+///         are internal under \c gwn::detail.
 
 #include <cuda_runtime_api.h>
 

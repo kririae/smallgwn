@@ -3,10 +3,15 @@
 /// \file gwn_bvh_topology_build.cuh
 /// \brief Public API for BVH topology construction.
 ///
+/// \remark Public entrypoints are object-based; accessor-level build routines
+///         remain internal under \c gwn::detail.
 /// \remark Morton precision is configurable via the \p MortonCode template
 ///         parameter:
 ///         - \c std::uint32_t : 30-bit Morton (10 bits/axis), lower setup cost.
 ///         - \c std::uint64_t : 63-bit Morton (21 bits/axis), higher precision.
+/// \remark LBVH and H-PLOC share the same preprocess stage
+///         (scene bounds + Morton generation + radix sort), and only differ
+///         in the binary-builder strategy.
 
 #include <cuda_runtime_api.h>
 

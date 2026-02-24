@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <type_traits>
 
 #include "../gwn_bvh.cuh"
 #include "../gwn_geometry.cuh"
@@ -15,30 +16,23 @@
 namespace gwn {
 namespace detail {
 
-template <class Real, class Index, class MortonCode = std::uint64_t>
+template <class Index, class MortonCode = std::uint64_t>
 gwn_status gwn_bvh_topology_build_binary_lbvh(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_device_array<Index> &sorted_primitive_indices,
+    cuda::std::span<MortonCode const> const sorted_morton_codes,
     gwn_device_array<gwn_binary_node<Index>> &binary_nodes,
     gwn_device_array<Index> &binary_internal_parent,
     cudaStream_t const stream = gwn_default_stream()
 ) {
-    std::size_t const primitive_count = geometry.triangle_count();
+    static_assert(
+        std::is_same_v<MortonCode, std::uint32_t> || std::is_same_v<MortonCode, std::uint64_t>,
+        "MortonCode must be std::uint32_t or std::uint64_t."
+    );
+    std::size_t const primitive_count = sorted_morton_codes.size();
     if (primitive_count == 0) {
-        GWN_RETURN_ON_ERROR(sorted_primitive_indices.clear(stream));
         GWN_RETURN_ON_ERROR(binary_nodes.clear(stream));
         GWN_RETURN_ON_ERROR(binary_internal_parent.clear(stream));
         return gwn_status::ok();
     }
-
-    gwn_scene_aabb<Real> scene{};
-    GWN_RETURN_ON_ERROR(gwn_compute_scene_aabb(geometry, scene, stream));
-
-    gwn_device_array<MortonCode> sorted_morton_codes{};
-    gwn_device_array<gwn_aabb<Real>> primitive_aabbs{};
-    GWN_RETURN_ON_ERROR((gwn_compute_and_sort_morton<MortonCode>(
-        geometry, scene, sorted_primitive_indices, sorted_morton_codes, primitive_aabbs, stream
-    )));
 
     if (primitive_count == 1) {
         GWN_RETURN_ON_ERROR(binary_nodes.clear(stream));
@@ -56,7 +50,7 @@ gwn_status gwn_bvh_topology_build_binary_lbvh(
         gwn_launch_linear_kernel<k_block_size>(
             primitive_count - 1,
             gwn_build_binary_topology_functor<Index, MortonCode>{
-                sorted_morton_codes.span(), binary_nodes.span(), binary_internal_parent.span(),
+                sorted_morton_codes, binary_nodes.span(), binary_internal_parent.span(),
                 temps.internal_parent_slot.span(), temps.leaf_parent.span(),
                 temps.leaf_parent_slot.span()
             },
@@ -82,9 +76,13 @@ gwn_status gwn_bvh_topology_build_collapse_binary_lbvh(
     if (binary_internal_count == 0)
         return gwn_status::ok();
     if (binary_internal_parent.size() != binary_internal_count)
-        return gwn_status::internal_error("Binary topology collapse input size mismatch.");
+        return gwn_bvh_internal_error(
+            k_gwn_bvh_phase_topology_collapse, "Binary topology collapse input size mismatch."
+        );
     if (!gwn_index_in_bounds(root_internal_index, binary_internal_count))
-        return gwn_status::internal_error("Binary topology collapse root index is invalid.");
+        return gwn_bvh_internal_error(
+            k_gwn_bvh_phase_topology_collapse, "Binary topology collapse root index is invalid."
+        );
 
     constexpr int k_block_size = k_gwn_default_block_size;
 
@@ -159,7 +157,8 @@ gwn_status gwn_bvh_topology_build_collapse_binary_lbvh(
     GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaStreamSynchronize(stream)));
 
     if (host_collapse_wide_count == 0 || host_collapse_wide_count > binary_internal_count) {
-        return gwn_status::internal_error(
+        return gwn_bvh_internal_error(
+            k_gwn_bvh_phase_topology_collapse,
             "BVH collapse summarize produced invalid wide-node count."
         );
     }
@@ -204,7 +203,8 @@ gwn_status gwn_bvh_topology_build_collapse_binary_lbvh(
     )));
     GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaStreamSynchronize(stream)));
     if (host_collapse_overflow != 0) {
-        return gwn_status::internal_error(
+        return gwn_bvh_internal_error(
+            k_gwn_bvh_phase_topology_collapse,
             "BVH collapse execute pass overflowed fixed-width node capacity."
         );
     }
