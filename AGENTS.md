@@ -32,6 +32,10 @@ These instructions apply to the `smallgwn/` project tree.
 ## Formatting Rules
 - Use `clang-format` with Chromium style via `smallgwn/.clang-format`.
 - Run format after each code change touching C++/CUDA files.
+- **Internal `#include` paths must always be relative**:
+  - Headers inside `include/gwn/` (top-level) reference siblings with bare names, e.g. `"gwn_bvh.cuh"`.
+  - Headers inside `include/gwn/detail/` reference sibling detail headers with bare names (e.g. `"gwn_bvh_status_helpers.cuh"`) and parent-level headers with `../` prefix (e.g. `"../gwn_bvh.cuh"`).
+  - Never use the rooted `"gwn/..."` form inside library headers; that form is only valid for *consumers* of the library.
 
 ## Architecture & Design Rules
 - Keep public include surface focused on runtime components; CPU reference helpers belong under `tests/`.
@@ -78,14 +82,14 @@ These instructions apply to the `smallgwn/` project tree.
 - BVH SoA node structs (`gwn_bvh_topology_node_soa`, `gwn_bvh_aabb_node_soa`, `gwn_bvh_taylor_node_soa`) are 128-byte aligned for `Width=4` to keep node loads cacheline-aligned; non-4 widths keep natural element alignment.
 - Device-side BVH traversal stacks call `__trap()` on overflow rather than silently skipping nodes.
 - Public object-based APIs are plain `noexcept` (no `try`/`catch`); exception translation is done once in the `detail` layer.
-- LBVH topology build is pass-composed (all internal under `gwn::detail`):
-  - binary LBVH pass (`gwn_bvh_topology_build_binary_lbvh` in `detail/gwn_bvh_topology_build_lbvh.cuh`)
-  - collapse pass (`gwn_bvh_topology_build_collapse_binary_lbvh` in `detail/gwn_bvh_topology_build_lbvh.cuh`)
-  - exposed detail entry: `detail::gwn_bvh_topology_build_lbvh_impl<Width,...>`
+- Topology build uses a shared skeleton in `detail/gwn_bvh_topology_build_impl.cuh`:
+  - shared preprocess pass (`gwn_bvh_topology_build_preprocess`) computes scene bounds + Morton + radix sort once;
+  - builder strategy selects binary construction (`gwn_bvh_topology_build_binary_lbvh` or `gwn_bvh_topology_build_binary_hploc`);
+  - shared collapse pass (`gwn_bvh_topology_build_collapse_binary_lbvh`) emits final wide topology.
 - Generic async refit kernels/traits live in `include/gwn/detail/gwn_bvh_refit_async.cuh`.
 - LBVH build path uses CUB for scene reduction and radix sort (NO Thrust in runtime build path).
-- `detail/gwn_bvh_topology_build_hploc.cuh` contains the active H-PLOC GPU topology path
-  (`k_gwn_hploc_enable_experimental_kernel=true`).
+- `detail/gwn_bvh_topology_build_hploc.cuh` contains the production H-PLOC GPU topology path
+  (no experimental runtime toggle / no LBVH fallback branch inside H-PLOC builder).
 - H-PLOC kernel includes convergence guards (inner/outer iteration caps + failure flag) and returns
   explicit `gwn_status::internal_error` on non-convergence instead of hanging.
 - Taylor build currently supports `Order=0/1`:
@@ -102,6 +106,8 @@ These instructions apply to the `smallgwn/` project tree.
 - Prefer internal C++ exceptions only inside implementation details; public APIs should return `gwn_status` error codes.
 - **`gwn_status` is fully `noexcept`**: Factory methods (`invalid_argument`, `internal_error`, `cuda_runtime_error`) and all helpers (`gwn_cuda_to_status`, `gwn_cuda_malloc`, `gwn_cuda_free`) are `noexcept`. `std::string`/`std::format` OOM is treated as a fatal precondition violation (same policy as `operator new` in embedded/GPU contexts).
 - **`GWN_RETURN_ON_ERROR(expr)`**: Stores the result in `gwn_status_result_` (not `gwn_status`) to avoid shadowing the type name in the enclosing scope.
+- Build/refit diagnostics should use phase-prefixed helpers from `detail/gwn_bvh_status_helpers.cuh`
+  (e.g. `bvh.topology.preprocess`, `bvh.topology.binary.hploc`, `bvh.refit.moment`) for consistent logs.
 - For executable boundaries, prefer a single top-level exception translation block:
   - `int main() try { ... } catch (...) { ... }`
 - Use a dedicated `catch` block to translate exceptions to status/diagnostics, rather than scattered local catches.

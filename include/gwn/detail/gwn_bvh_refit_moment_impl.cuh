@@ -4,8 +4,8 @@
 
 #include <cstddef>
 
-#include "gwn/detail/gwn_bvh_refit_async.cuh"
-#include "gwn/detail/gwn_bvh_status_helpers.cuh"
+#include "gwn_bvh_refit_async.cuh"
+#include "gwn_bvh_status_helpers.cuh"
 
 namespace gwn {
 namespace detail {
@@ -24,11 +24,17 @@ gwn_status gwn_bvh_refit_moment_impl(
         );
 
         if (!geometry.is_valid())
-            return gwn_status::invalid_argument("Geometry accessor is invalid for moment refit.");
+            return gwn_bvh_invalid_argument(
+                k_gwn_bvh_phase_refit_moment, "Geometry accessor is invalid for moment refit."
+            );
         if (!topology.is_valid())
-            return gwn_status::invalid_argument("Topology accessor is invalid for moment refit.");
+            return gwn_bvh_invalid_argument(
+                k_gwn_bvh_phase_refit_moment, "Topology accessor is invalid for moment refit."
+            );
         if (!aabb_tree.is_valid_for(topology))
-            return gwn_status::invalid_argument("AABB tree accessor is invalid for moment refit.");
+            return gwn_bvh_invalid_argument(
+                k_gwn_bvh_phase_refit_moment, "AABB tree accessor is invalid for moment refit."
+            );
 
         auto const release_moment = [](gwn_bvh_moment_accessor<Width, Real, Index> &tree,
                                        cudaStream_t const stream_to_release) noexcept {

@@ -14,16 +14,10 @@
 #include "../gwn_bvh.cuh"
 #include "../gwn_geometry.cuh"
 #include "../gwn_kernel_utils.cuh"
+#include "gwn_bvh_status_helpers.cuh"
 
 namespace gwn {
 namespace detail {
-template <class Real, class Index> struct gwn_build_entry {
-    gwn_aabb<Real> bounds;
-    std::uint8_t kind;
-    Index index;
-    Index count;
-};
-
 template <class Real> __host__ __device__ inline Real gwn_clamp01(Real const value) noexcept {
     if (value < Real(0))
         return Real(0);
@@ -114,9 +108,13 @@ gwn_status gwn_reduce_minmax_cub(
     Real &host_min, Real &host_max, cudaStream_t const stream
 ) noexcept {
     if (values.empty())
-        return gwn_status::invalid_argument("CUB reduction input span is empty.");
+        return gwn_bvh_invalid_argument(
+            k_gwn_bvh_phase_topology_preprocess, "CUB reduction input span is empty."
+        );
     if (values.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()))
-        return gwn_status::invalid_argument("CUB reduction input exceeds int32 item count.");
+        return gwn_bvh_invalid_argument(
+            k_gwn_bvh_phase_topology_preprocess, "CUB reduction input exceeds int32 item count."
+        );
 
     int const item_count = static_cast<int>(values.size());
     std::size_t min_temp_bytes = 0;
@@ -236,6 +234,12 @@ template <class Real> struct gwn_scene_aabb {
     Real inv_x{}, inv_y{}, inv_z{};
 };
 
+template <class Real, class Index, class MortonCode> struct gwn_topology_build_preprocess {
+    gwn_device_array<Index> sorted_primitive_indices{};
+    gwn_device_array<MortonCode> sorted_morton_codes{};
+    gwn_device_array<gwn_aabb<Real>> primitive_aabbs{};
+};
+
 template <class Real, class Index>
 gwn_status gwn_compute_scene_aabb(
     gwn_geometry_accessor<Real, Index> const &geometry, gwn_scene_aabb<Real> &result,
@@ -315,7 +319,9 @@ gwn_status gwn_compute_and_sort_morton(
     );
 
     if (primitive_count > static_cast<std::size_t>(std::numeric_limits<int>::max()))
-        return gwn_status::invalid_argument("Radix sort input exceeds int32 item count.");
+        return gwn_bvh_invalid_argument(
+            k_gwn_bvh_phase_topology_preprocess, "Radix sort input exceeds int32 item count."
+        );
     int const radix_item_count = static_cast<int>(primitive_count);
 
     gwn_device_array<std::uint8_t> radix_sort_temp{};
@@ -341,6 +347,19 @@ gwn_status gwn_compute_and_sort_morton(
     ));
 
     return gwn_status::ok();
+}
+
+template <class MortonCode, class Real, class Index>
+gwn_status gwn_bvh_topology_build_preprocess(
+    gwn_geometry_accessor<Real, Index> const &geometry,
+    gwn_topology_build_preprocess<Real, Index, MortonCode> &preprocess, cudaStream_t const stream
+) noexcept {
+    gwn_scene_aabb<Real> scene{};
+    GWN_RETURN_ON_ERROR(gwn_compute_scene_aabb(geometry, scene, stream));
+    return gwn_compute_and_sort_morton<MortonCode>(
+        geometry, scene, preprocess.sorted_primitive_indices, preprocess.sorted_morton_codes,
+        preprocess.primitive_aabbs, stream
+    );
 }
 
 } // namespace detail

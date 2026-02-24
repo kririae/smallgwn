@@ -6,6 +6,8 @@
 /// These functions compose the lower-level topology-build and payload-refit
 /// steps into single calls for common use-cases.
 ///
+/// \remark Public entrypoints are object-based and forward into detail-layer
+///         accessor composition internally.
 /// \remark Morton precision is configurable by \p MortonCode and is forwarded
 ///         to topology builders. Payload refit/query math is unchanged.
 

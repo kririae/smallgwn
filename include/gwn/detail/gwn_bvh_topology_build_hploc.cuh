@@ -5,13 +5,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <type_traits>
 
 #include "../gwn_bvh.cuh"
 #include "../gwn_geometry.cuh"
 #include "../gwn_kernel_utils.cuh"
 #include "gwn_bvh_topology_build_binary.cuh"
 #include "gwn_bvh_topology_build_common.cuh"
-#include "gwn_bvh_topology_build_lbvh.cuh"
 
 namespace gwn {
 namespace detail {
@@ -19,7 +19,6 @@ namespace detail {
 inline constexpr std::uint32_t k_gwn_hploc_search_radius = 8u;
 inline constexpr std::uint32_t k_gwn_hploc_merging_threshold = 16u;
 inline constexpr std::uint32_t k_gwn_hploc_invalid_u32 = std::numeric_limits<std::uint32_t>::max();
-inline constexpr bool k_gwn_hploc_enable_experimental_kernel = true;
 
 template <class Real> struct gwn_hploc_node {
     gwn_aabb<Real> bounds{};
@@ -403,41 +402,34 @@ __global__ __launch_bounds__(BlockSize) void gwn_build_binary_hploc_kernel(
 
 template <class Real, class Index, class MortonCode = std::uint64_t>
 gwn_status gwn_bvh_topology_build_binary_hploc(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_device_array<Index> &sorted_primitive_indices,
+    cuda::std::span<Index const> const sorted_primitive_indices,
+    cuda::std::span<MortonCode const> const sorted_morton_codes,
+    cuda::std::span<gwn_aabb<Real> const> const primitive_aabbs,
     gwn_device_array<gwn_binary_node<Index>> &binary_nodes,
     gwn_device_array<Index> &binary_internal_parent, Index &root_internal_index,
     cudaStream_t const stream = gwn_default_stream()
 ) {
-    std::size_t const primitive_count = geometry.triangle_count();
+    static_assert(
+        std::is_same_v<MortonCode, std::uint32_t> || std::is_same_v<MortonCode, std::uint64_t>,
+        "MortonCode must be std::uint32_t or std::uint64_t."
+    );
+    std::size_t const primitive_count = sorted_primitive_indices.size();
     root_internal_index = gwn_invalid_index<Index>();
     if (primitive_count == 0) {
-        GWN_RETURN_ON_ERROR(sorted_primitive_indices.clear(stream));
         GWN_RETURN_ON_ERROR(binary_nodes.clear(stream));
         GWN_RETURN_ON_ERROR(binary_internal_parent.clear(stream));
         return gwn_status::ok();
     }
-
-    if (!k_gwn_hploc_enable_experimental_kernel) {
-        GWN_RETURN_ON_ERROR((gwn_bvh_topology_build_binary_lbvh<Real, Index, MortonCode>(
-            geometry, sorted_primitive_indices, binary_nodes, binary_internal_parent, stream
-        )));
-        if (primitive_count > 1)
-            root_internal_index = Index(0);
-        return gwn_status::ok();
-    }
+    if (sorted_morton_codes.size() != primitive_count || primitive_aabbs.size() != primitive_count)
+        return gwn_bvh_internal_error(
+            k_gwn_bvh_phase_topology_binary_hploc, "H-PLOC preprocess buffer size mismatch."
+        );
 
     if (primitive_count > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max() / 2u))
-        return gwn_status::invalid_argument("H-PLOC builder primitive count exceeds uint32 range.");
-
-    gwn_scene_aabb<Real> scene{};
-    GWN_RETURN_ON_ERROR(gwn_compute_scene_aabb(geometry, scene, stream));
-
-    gwn_device_array<MortonCode> sorted_morton_codes{};
-    gwn_device_array<gwn_aabb<Real>> primitive_aabbs{};
-    GWN_RETURN_ON_ERROR((gwn_compute_and_sort_morton<MortonCode>(
-        geometry, scene, sorted_primitive_indices, sorted_morton_codes, primitive_aabbs, stream
-    )));
+        return gwn_bvh_invalid_argument(
+            k_gwn_bvh_phase_topology_binary_hploc,
+            "H-PLOC builder primitive count exceeds uint32 range."
+        );
 
     constexpr int k_linear_block_size = k_gwn_default_block_size;
     gwn_device_array<gwn_aabb<Real>> sorted_leaf_aabbs{};
@@ -446,11 +438,7 @@ gwn_status gwn_bvh_topology_build_binary_hploc(
         gwn_launch_linear_kernel<k_linear_block_size>(
             primitive_count,
             gwn_gather_sorted_aabbs_functor<Real, Index>{
-                primitive_aabbs.span(),
-                cuda::std::span<Index const>(
-                    sorted_primitive_indices.data(), sorted_primitive_indices.size()
-                ),
-                sorted_leaf_aabbs.span()
+                primitive_aabbs, sorted_primitive_indices, sorted_leaf_aabbs.span()
             },
             stream
         )
@@ -524,13 +512,17 @@ gwn_status gwn_bvh_topology_build_binary_hploc(
     )));
     GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaStreamSynchronize(stream)));
     if (host_failure_flag != 0u) {
-        return gwn_status::internal_error(
+        return gwn_bvh_internal_error(
+            k_gwn_bvh_phase_topology_binary_hploc,
             "H-PLOC build kernel failed to converge; possible invalid merge state."
         );
     }
     unsigned int const expected_cluster_count = static_cast<unsigned int>(primitive_count * 2 - 1);
     if (host_cluster_count != expected_cluster_count)
-        return gwn_status::internal_error("H-PLOC builder did not converge to a single root.");
+        return gwn_bvh_internal_error(
+            k_gwn_bvh_phase_topology_binary_hploc,
+            "H-PLOC builder did not converge to a single root."
+        );
 
     GWN_RETURN_ON_ERROR(
         gwn_launch_linear_kernel<k_linear_block_size>(

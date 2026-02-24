@@ -2,7 +2,7 @@
 
 #include <cstddef>
 
-#include "gwn/detail/gwn_bvh_topology_build_binary.cuh"
+#include "gwn_bvh_topology_build_binary.cuh"
 
 namespace gwn {
 namespace detail {
