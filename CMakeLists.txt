@@ -77,6 +77,7 @@ if(SMALLGWN_BUILD_TESTS)
         smallgwn_add_test(smallgwn_unit_stream_mixin   SOURCES tests/unit_stream_mixin.cu)
         smallgwn_add_test(smallgwn_unit_geometry       SOURCES tests/unit_geometry.cu)
         smallgwn_add_test(smallgwn_unit_bvh_topology   SOURCES tests/unit_bvh_topology.cu)
+        smallgwn_add_test(smallgwn_unit_uint64_compile SOURCES tests/unit_uint64_compile.cu)
         smallgwn_add_test(smallgwn_unit_bvh_taylor     SOURCES tests/unit_bvh_taylor.cu)
 
         smallgwn_add_test(smallgwn_unit_winding_exact  SOURCES tests/unit_winding_exact.cu
