@@ -6,11 +6,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <type_traits>
 
+#include <cub/device/device_radix_sort.cuh>
 #include <cub/device/device_reduce.cuh>
 
-#include "gwn/gwn_bvh.cuh"
-#include "gwn/gwn_geometry.cuh"
+#include "../gwn_bvh.cuh"
+#include "../gwn_geometry.cuh"
+#include "../gwn_kernel_utils.cuh"
 
 namespace gwn {
 namespace detail {
@@ -29,24 +32,63 @@ template <class Real> __host__ __device__ inline Real gwn_clamp01(Real const val
     return value;
 }
 
-__host__ __device__ inline std::uint32_t
-gwn_expand_bits_10_to_30(std::uint32_t const value) noexcept {
-    std::uint32_t x = value & 0x000003ffu;
-    x = (x | (x << 16)) & 0x030000ffu;
-    x = (x | (x << 8)) & 0x0300f00fu;
-    x = (x | (x << 4)) & 0x030c30c3u;
-    x = (x | (x << 2)) & 0x09249249u;
-    return x;
-}
+/// \brief Morton encoding traits specialized by Morton code width.
+///
+/// \remark Supported types are \c std::uint32_t (10 bits/axis) and
+///         \c std::uint64_t (21 bits/axis).
+template <class MortonCode> struct gwn_morton_traits;
 
-template <class Real>
-__host__ __device__ inline std::uint32_t
-gwn_encode_morton_30(Real const nx, Real const ny, Real const nz) noexcept {
-    auto const x = static_cast<std::uint32_t>(gwn_clamp01(nx) * Real(1023));
-    auto const y = static_cast<std::uint32_t>(gwn_clamp01(ny) * Real(1023));
-    auto const z = static_cast<std::uint32_t>(gwn_clamp01(nz) * Real(1023));
-    return (gwn_expand_bits_10_to_30(x) << 2) | (gwn_expand_bits_10_to_30(y) << 1) |
-           gwn_expand_bits_10_to_30(z);
+template <> struct gwn_morton_traits<std::uint32_t> {
+    static constexpr std::uint32_t k_axis_quant_max = 1023u;
+
+    __host__ __device__ static inline std::uint32_t
+    expand_bits(std::uint32_t const value) noexcept {
+        std::uint32_t x = value & 0x000003ffu;
+        x = (x | (x << 16)) & 0x030000ffu;
+        x = (x | (x << 8)) & 0x0300f00fu;
+        x = (x | (x << 4)) & 0x030c30c3u;
+        x = (x | (x << 2)) & 0x09249249u;
+        return x;
+    }
+};
+
+template <> struct gwn_morton_traits<std::uint64_t> {
+    static constexpr std::uint64_t k_axis_quant_max = 2097151ull;
+
+    __host__ __device__ static inline std::uint64_t
+    expand_bits(std::uint64_t const value) noexcept {
+        std::uint64_t x = value & 0x1fffffu;
+        x = (x | (x << 32)) & 0x1f00000000ffffull;
+        x = (x | (x << 16)) & 0x1f0000ff0000ffull;
+        x = (x | (x << 8)) & 0x100f00f00f00f00full;
+        x = (x | (x << 4)) & 0x10c30c30c30c30c3ull;
+        x = (x | (x << 2)) & 0x1249249249249249ull;
+        return x;
+    }
+};
+
+/// \brief Encode normalized coordinates into an interleaved Morton key.
+///
+/// \tparam MortonCode Morton output type (\c std::uint32_t or \c std::uint64_t).
+/// \tparam Real       Floating-point coordinate type.
+///
+/// \param nx Normalized x in [0,1].
+/// \param ny Normalized y in [0,1].
+/// \param nz Normalized z in [0,1].
+///
+/// \return Interleaved Morton key using \p MortonCode precision.
+template <class MortonCode, class Real>
+__host__ __device__ inline MortonCode
+gwn_encode_morton(Real const nx, Real const ny, Real const nz) noexcept {
+    static_assert(
+        std::is_same_v<MortonCode, std::uint32_t> || std::is_same_v<MortonCode, std::uint64_t>,
+        "MortonCode must be std::uint32_t or std::uint64_t."
+    );
+    using traits = gwn_morton_traits<MortonCode>;
+    auto const x = static_cast<MortonCode>(gwn_clamp01(nx) * Real(traits::k_axis_quant_max));
+    auto const y = static_cast<MortonCode>(gwn_clamp01(ny) * Real(traits::k_axis_quant_max));
+    auto const z = static_cast<MortonCode>(gwn_clamp01(nz) * Real(traits::k_axis_quant_max));
+    return (traits::expand_bits(x) << 2) | (traits::expand_bits(y) << 1) | traits::expand_bits(z);
 }
 
 template <class Real>
@@ -117,7 +159,8 @@ gwn_status gwn_reduce_minmax_cub(
     return gwn_status::ok();
 }
 
-template <class Real, class Index> struct gwn_compute_triangle_aabbs_and_morton_functor {
+template <class Real, class Index, class MortonCode>
+struct gwn_compute_triangle_aabbs_and_morton_functor {
     gwn_geometry_accessor<Real, Index> geometry{};
     Real scene_min_x{};
     Real scene_min_y{};
@@ -126,7 +169,7 @@ template <class Real, class Index> struct gwn_compute_triangle_aabbs_and_morton_
     Real scene_inv_y{};
     Real scene_inv_z{};
     cuda::std::span<gwn_aabb<Real>> primitive_aabbs{};
-    cuda::std::span<std::uint32_t> morton_codes{};
+    cuda::std::span<MortonCode> morton_codes{};
     cuda::std::span<Index> primitive_indices{};
 
     __device__ void operator()(std::size_t const triangle_id) const {
@@ -168,7 +211,7 @@ template <class Real, class Index> struct gwn_compute_triangle_aabbs_and_morton_
         Real const center_x = (bounds.min_x + bounds.max_x) * Real(0.5);
         Real const center_y = (bounds.min_y + bounds.max_y) * Real(0.5);
         Real const center_z = (bounds.min_z + bounds.max_z) * Real(0.5);
-        morton_codes[triangle_id] = gwn_encode_morton_30(
+        morton_codes[triangle_id] = gwn_encode_morton<MortonCode>(
             (center_x - scene_min_x) * scene_inv_x, (center_y - scene_min_y) * scene_inv_y,
             (center_z - scene_min_z) * scene_inv_z
         );
@@ -186,6 +229,119 @@ template <class Real, class Index> struct gwn_gather_sorted_aabbs_functor {
         sorted_aabbs[primitive_id] = unsorted_aabbs[source_id];
     }
 };
+
+template <class Real> struct gwn_scene_aabb {
+    Real min_x{}, min_y{}, min_z{};
+    Real max_x{}, max_y{}, max_z{};
+    Real inv_x{}, inv_y{}, inv_z{};
+};
+
+template <class Real, class Index>
+gwn_status gwn_compute_scene_aabb(
+    gwn_geometry_accessor<Real, Index> const &geometry, gwn_scene_aabb<Real> &result,
+    cudaStream_t const stream
+) noexcept {
+    gwn_device_array<Real> axis_min{};
+    gwn_device_array<Real> axis_max{};
+    gwn_device_array<std::uint8_t> reduce_temp{};
+    GWN_RETURN_ON_ERROR(axis_min.resize(1, stream));
+    GWN_RETURN_ON_ERROR(axis_max.resize(1, stream));
+    GWN_RETURN_ON_ERROR(gwn_reduce_minmax_cub(
+        geometry.vertex_x, axis_min, axis_max, reduce_temp, result.min_x, result.max_x, stream
+    ));
+    GWN_RETURN_ON_ERROR(gwn_reduce_minmax_cub(
+        geometry.vertex_y, axis_min, axis_max, reduce_temp, result.min_y, result.max_y, stream
+    ));
+    GWN_RETURN_ON_ERROR(gwn_reduce_minmax_cub(
+        geometry.vertex_z, axis_min, axis_max, reduce_temp, result.min_z, result.max_z, stream
+    ));
+    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaStreamSynchronize(stream)));
+
+    auto const safe_inv = [](Real const lo, Real const hi) noexcept {
+        return (hi > lo) ? Real(1) / (hi - lo) : Real(1);
+    };
+    result.inv_x = safe_inv(result.min_x, result.max_x);
+    result.inv_y = safe_inv(result.min_y, result.max_y);
+    result.inv_z = safe_inv(result.min_z, result.max_z);
+    return gwn_status::ok();
+}
+
+/// \brief Compute primitive AABBs + Morton keys and radix-sort primitive order.
+///
+/// \tparam MortonCode Morton key type (\c std::uint32_t or \c std::uint64_t).
+/// \tparam Real       Floating-point coordinate type.
+/// \tparam Index      Primitive index type.
+///
+/// \param geometry                 Source geometry accessor.
+/// \param scene                    Precomputed scene bounds/inverses.
+/// \param sorted_primitive_indices Output sorted primitive indices.
+/// \param sorted_morton_codes      Output sorted Morton keys.
+/// \param primitive_aabbs          Output unsorted primitive bounds.
+/// \param stream                   CUDA stream.
+///
+/// \return \c gwn_status::ok() on success.
+template <class MortonCode, class Real, class Index>
+gwn_status gwn_compute_and_sort_morton(
+    gwn_geometry_accessor<Real, Index> const &geometry, gwn_scene_aabb<Real> const &scene,
+    gwn_device_array<Index> &sorted_primitive_indices,
+    gwn_device_array<MortonCode> &sorted_morton_codes,
+    gwn_device_array<gwn_aabb<Real>> &primitive_aabbs, cudaStream_t const stream
+) noexcept {
+    static_assert(
+        std::is_same_v<MortonCode, std::uint32_t> || std::is_same_v<MortonCode, std::uint64_t>,
+        "MortonCode must be std::uint32_t or std::uint64_t."
+    );
+    constexpr int k_block_size = k_gwn_default_block_size;
+    std::size_t const primitive_count = geometry.triangle_count();
+
+    gwn_device_array<MortonCode> morton_codes{};
+    gwn_device_array<Index> primitive_indices{};
+    GWN_RETURN_ON_ERROR(primitive_aabbs.resize(primitive_count, stream));
+    GWN_RETURN_ON_ERROR(morton_codes.resize(primitive_count, stream));
+    GWN_RETURN_ON_ERROR(primitive_indices.resize(primitive_count, stream));
+
+    auto const primitive_aabbs_span = primitive_aabbs.span();
+    auto const morton_codes_span = morton_codes.span();
+    auto const primitive_indices_span = primitive_indices.span();
+    GWN_RETURN_ON_ERROR(
+        gwn_launch_linear_kernel<k_block_size>(
+            primitive_count,
+            gwn_compute_triangle_aabbs_and_morton_functor<Real, Index, MortonCode>{
+                geometry, scene.min_x, scene.min_y, scene.min_z, scene.inv_x, scene.inv_y,
+                scene.inv_z, primitive_aabbs_span, morton_codes_span, primitive_indices_span
+            },
+            stream
+        )
+    );
+
+    if (primitive_count > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+        return gwn_status::invalid_argument("Radix sort input exceeds int32 item count.");
+    int const radix_item_count = static_cast<int>(primitive_count);
+
+    gwn_device_array<std::uint8_t> radix_sort_temp{};
+    GWN_RETURN_ON_ERROR(sorted_morton_codes.resize(primitive_count, stream));
+    GWN_RETURN_ON_ERROR(sorted_primitive_indices.resize(primitive_count, stream));
+
+    std::size_t radix_sort_temp_bytes = 0;
+    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
+        cub::DeviceRadixSort::SortPairs(
+            nullptr, radix_sort_temp_bytes, morton_codes_span.data(), sorted_morton_codes.data(),
+            primitive_indices_span.data(), sorted_primitive_indices.data(), radix_item_count, 0,
+            static_cast<int>(sizeof(std::uint64_t) * 8), stream
+        )
+    ));
+    GWN_RETURN_ON_ERROR(radix_sort_temp.resize(radix_sort_temp_bytes, stream));
+    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
+        cub::DeviceRadixSort::SortPairs(
+            radix_sort_temp.data(), radix_sort_temp_bytes, morton_codes_span.data(),
+            sorted_morton_codes.data(), primitive_indices_span.data(),
+            sorted_primitive_indices.data(), radix_item_count, 0,
+            static_cast<int>(sizeof(std::uint64_t) * 8), stream
+        )
+    ));
+
+    return gwn_status::ok();
+}
 
 } // namespace detail
 } // namespace gwn

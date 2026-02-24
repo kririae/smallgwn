@@ -2,24 +2,20 @@
 
 #include <cuda_runtime_api.h>
 
-#include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <limits>
 
-#include <cub/device/device_radix_sort.cuh>
-
-#include "gwn/detail/gwn_bvh_topology_build_binary.cuh"
-#include "gwn/detail/gwn_bvh_topology_build_collapse.cuh"
-#include "gwn/detail/gwn_bvh_topology_build_common.cuh"
-#include "gwn/gwn_bvh.cuh"
-#include "gwn/gwn_geometry.cuh"
-#include "gwn/gwn_kernel_utils.cuh"
+#include "../gwn_bvh.cuh"
+#include "../gwn_geometry.cuh"
+#include "../gwn_kernel_utils.cuh"
+#include "gwn_bvh_topology_build_binary.cuh"
+#include "gwn_bvh_topology_build_collapse.cuh"
+#include "gwn_bvh_topology_build_common.cuh"
 
 namespace gwn {
 namespace detail {
 
-template <class Real, class Index>
+template <class Real, class Index, class MortonCode = std::uint64_t>
 gwn_status gwn_bvh_topology_build_binary_lbvh(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_device_array<Index> &sorted_primitive_indices,
@@ -35,87 +31,14 @@ gwn_status gwn_bvh_topology_build_binary_lbvh(
         return gwn_status::ok();
     }
 
-    constexpr int k_block_size = k_gwn_default_block_size;
+    gwn_scene_aabb<Real> scene{};
+    GWN_RETURN_ON_ERROR(gwn_compute_scene_aabb(geometry, scene, stream));
 
-    Real scene_min_x = Real(0);
-    Real scene_max_x = Real(0);
-    Real scene_min_y = Real(0);
-    Real scene_max_y = Real(0);
-    Real scene_min_z = Real(0);
-    Real scene_max_z = Real(0);
-    gwn_device_array<Real> scene_axis_min{};
-    gwn_device_array<Real> scene_axis_max{};
-    gwn_device_array<std::uint8_t> scene_reduce_temp{};
-    GWN_RETURN_ON_ERROR(scene_axis_min.resize(1, stream));
-    GWN_RETURN_ON_ERROR(scene_axis_max.resize(1, stream));
-    GWN_RETURN_ON_ERROR(gwn_reduce_minmax_cub(
-        geometry.vertex_x, scene_axis_min, scene_axis_max, scene_reduce_temp, scene_min_x,
-        scene_max_x, stream
-    ));
-    GWN_RETURN_ON_ERROR(gwn_reduce_minmax_cub(
-        geometry.vertex_y, scene_axis_min, scene_axis_max, scene_reduce_temp, scene_min_y,
-        scene_max_y, stream
-    ));
-    GWN_RETURN_ON_ERROR(gwn_reduce_minmax_cub(
-        geometry.vertex_z, scene_axis_min, scene_axis_max, scene_reduce_temp, scene_min_z,
-        scene_max_z, stream
-    ));
-    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaStreamSynchronize(stream)));
-
-    Real const scene_inv_x =
-        (scene_max_x > scene_min_x) ? Real(1) / (scene_max_x - scene_min_x) : Real(1);
-    Real const scene_inv_y =
-        (scene_max_y > scene_min_y) ? Real(1) / (scene_max_y - scene_min_y) : Real(1);
-    Real const scene_inv_z =
-        (scene_max_z > scene_min_z) ? Real(1) / (scene_max_z - scene_min_z) : Real(1);
-
+    gwn_device_array<MortonCode> sorted_morton_codes{};
     gwn_device_array<gwn_aabb<Real>> primitive_aabbs{};
-    gwn_device_array<std::uint32_t> morton_codes{};
-    gwn_device_array<Index> primitive_indices{};
-    GWN_RETURN_ON_ERROR(primitive_aabbs.resize(primitive_count, stream));
-    GWN_RETURN_ON_ERROR(morton_codes.resize(primitive_count, stream));
-    GWN_RETURN_ON_ERROR(primitive_indices.resize(primitive_count, stream));
-
-    auto const primitive_aabbs_span = primitive_aabbs.span();
-    auto const morton_codes_span = morton_codes.span();
-    auto const primitive_indices_span = primitive_indices.span();
-    GWN_RETURN_ON_ERROR(
-        gwn_launch_linear_kernel<k_block_size>(
-            primitive_count,
-            gwn_compute_triangle_aabbs_and_morton_functor<Real, Index>{
-                geometry, scene_min_x, scene_min_y, scene_min_z, scene_inv_x, scene_inv_y,
-                scene_inv_z, primitive_aabbs_span, morton_codes_span, primitive_indices_span
-            },
-            stream
-        )
-    );
-
-    if (primitive_count > static_cast<std::size_t>(std::numeric_limits<int>::max()))
-        return gwn_status::invalid_argument("CUB radix sort input exceeds int32 item count.");
-    int const radix_item_count = static_cast<int>(primitive_count);
-
-    gwn_device_array<std::uint32_t> sorted_morton_codes{};
-    gwn_device_array<std::uint8_t> radix_sort_temp{};
-    GWN_RETURN_ON_ERROR(sorted_morton_codes.resize(primitive_count, stream));
-    GWN_RETURN_ON_ERROR(sorted_primitive_indices.resize(primitive_count, stream));
-
-    std::size_t radix_sort_temp_bytes = 0;
-    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
-        cub::DeviceRadixSort::SortPairs(
-            nullptr, radix_sort_temp_bytes, morton_codes_span.data(), sorted_morton_codes.data(),
-            primitive_indices_span.data(), sorted_primitive_indices.data(), radix_item_count, 0,
-            static_cast<int>(sizeof(std::uint32_t) * 8), stream
-        )
-    ));
-    GWN_RETURN_ON_ERROR(radix_sort_temp.resize(radix_sort_temp_bytes, stream));
-    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
-        cub::DeviceRadixSort::SortPairs(
-            radix_sort_temp.data(), radix_sort_temp_bytes, morton_codes_span.data(),
-            sorted_morton_codes.data(), primitive_indices_span.data(),
-            sorted_primitive_indices.data(), radix_item_count, 0,
-            static_cast<int>(sizeof(std::uint32_t) * 8), stream
-        )
-    ));
+    GWN_RETURN_ON_ERROR((gwn_compute_and_sort_morton<MortonCode>(
+        geometry, scene, sorted_primitive_indices, sorted_morton_codes, primitive_aabbs, stream
+    )));
 
     if (primitive_count == 1) {
         GWN_RETURN_ON_ERROR(binary_nodes.clear(stream));
@@ -123,42 +46,19 @@ gwn_status gwn_bvh_topology_build_binary_lbvh(
         return gwn_status::ok();
     }
 
-    std::size_t const binary_internal_count = primitive_count - 1;
-    gwn_device_array<std::uint8_t> binary_internal_parent_slot{};
-    gwn_device_array<Index> binary_leaf_parent{};
-    gwn_device_array<std::uint8_t> binary_leaf_parent_slot{};
-    GWN_RETURN_ON_ERROR(binary_nodes.resize(binary_internal_count, stream));
-    GWN_RETURN_ON_ERROR(binary_internal_parent.resize(binary_internal_count, stream));
-    GWN_RETURN_ON_ERROR(binary_internal_parent_slot.resize(binary_internal_count, stream));
-    GWN_RETURN_ON_ERROR(binary_leaf_parent.resize(primitive_count, stream));
-    GWN_RETURN_ON_ERROR(binary_leaf_parent_slot.resize(primitive_count, stream));
+    constexpr int k_block_size = k_gwn_default_block_size;
+    gwn_binary_parent_temporaries<Index> temps{};
+    GWN_RETURN_ON_ERROR(gwn_prepare_binary_topology_buffers(
+        primitive_count, binary_nodes, binary_internal_parent, temps, stream
+    ));
 
-    auto const sorted_morton_codes_span = sorted_morton_codes.span();
-    auto const binary_nodes_span = binary_nodes.span();
-    auto const binary_internal_parent_span = binary_internal_parent.span();
-    auto const binary_internal_parent_slot_span = binary_internal_parent_slot.span();
-    auto const binary_leaf_parent_span = binary_leaf_parent.span();
-    auto const binary_leaf_parent_slot_span = binary_leaf_parent_slot.span();
-    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemsetAsync(
-        binary_internal_parent_span.data(), 0xff, binary_internal_count * sizeof(Index), stream
-    )));
-    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemsetAsync(
-        binary_internal_parent_slot_span.data(), 0xff, binary_internal_count * sizeof(std::uint8_t),
-        stream
-    )));
-    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemsetAsync(
-        binary_leaf_parent_span.data(), 0xff, primitive_count * sizeof(Index), stream
-    )));
-    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemsetAsync(
-        binary_leaf_parent_slot_span.data(), 0xff, primitive_count * sizeof(std::uint8_t), stream
-    )));
     GWN_RETURN_ON_ERROR(
         gwn_launch_linear_kernel<k_block_size>(
-            binary_internal_count,
-            gwn_build_binary_topology_functor<Index>{
-                sorted_morton_codes_span, binary_nodes_span, binary_internal_parent_span,
-                binary_internal_parent_slot_span, binary_leaf_parent_span,
-                binary_leaf_parent_slot_span
+            primitive_count - 1,
+            gwn_build_binary_topology_functor<Index, MortonCode>{
+                sorted_morton_codes.span(), binary_nodes.span(), binary_internal_parent.span(),
+                temps.internal_parent_slot.span(), temps.leaf_parent.span(),
+                temps.leaf_parent_slot.span()
             },
             stream
         )

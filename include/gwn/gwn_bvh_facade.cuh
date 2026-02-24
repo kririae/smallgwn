@@ -5,8 +5,13 @@
 ///
 /// These functions compose the lower-level topology-build and payload-refit
 /// steps into single calls for common use-cases.
+///
+/// \remark Morton precision is configurable by \p MortonCode and is forwarded
+///         to topology builders. Payload refit/query math is unchanged.
 
 #include <cuda_runtime_api.h>
+
+#include <cstdint>
 
 #include "gwn_bvh_refit.cuh"
 #include "gwn_bvh_topology_build.cuh"
@@ -21,6 +26,9 @@ namespace gwn {
 /// \tparam Width  BVH node fan-out.
 /// \tparam Real   Floating-point type.
 /// \tparam Index  Signed integer index type.
+/// \tparam MortonCode Morton key type:
+///                    - \c std::uint32_t : 30-bit Morton.
+///                    - \c std::uint64_t : 63-bit Morton (default).
 ///
 /// \param[in]     geometry   Uploaded triangle mesh.
 /// \param[in,out] topology   Destination topology object.
@@ -28,7 +36,7 @@ namespace gwn {
 /// \param[in]     stream     CUDA stream for all asynchronous work.
 ///
 /// \return \c gwn_status::ok() on success.
-template <int Width, class Real, class Index>
+template <int Width, class Real, class Index, class MortonCode = std::uint64_t>
 gwn_status gwn_bvh_facade_build_topology_aabb_lbvh(
     gwn_geometry_object<Real, Index> const &geometry,
     gwn_bvh_topology_object<Width, Real, Index> &topology,
@@ -36,13 +44,30 @@ gwn_status gwn_bvh_facade_build_topology_aabb_lbvh(
     cudaStream_t const stream = gwn_default_stream()
 ) noexcept {
     GWN_RETURN_ON_ERROR(
-        (gwn_bvh_topology_build_lbvh<Width, Real, Index>(geometry, topology, stream))
+        (gwn_bvh_topology_build_lbvh<Width, Real, Index, MortonCode>(geometry, topology, stream))
     );
     return gwn_bvh_refit_aabb<Width, Real, Index>(geometry, topology, aabb_tree, stream);
 }
 
 /// \brief Build BVH topology via H-PLOC and immediately refit AABB bounds.
-template <int Width, class Real, class Index>
+///
+/// Equivalent to calling \c gwn_bvh_topology_build_hploc followed by
+/// \c gwn_bvh_refit_aabb on the same stream.
+///
+/// \tparam Width  BVH node fan-out.
+/// \tparam Real   Floating-point type.
+/// \tparam Index  Integer index type.
+/// \tparam MortonCode Morton key type:
+///                    - \c std::uint32_t : 30-bit Morton.
+///                    - \c std::uint64_t : 63-bit Morton (default).
+///
+/// \param[in]     geometry   Uploaded triangle mesh.
+/// \param[in,out] topology   Destination topology object.
+/// \param[in,out] aabb_tree  Destination AABB tree object.
+/// \param[in]     stream     CUDA stream for all asynchronous work.
+///
+/// \return \c gwn_status::ok() on success.
+template <int Width, class Real, class Index, class MortonCode = std::uint64_t>
 gwn_status gwn_bvh_facade_build_topology_aabb_hploc(
     gwn_geometry_object<Real, Index> const &geometry,
     gwn_bvh_topology_object<Width, Real, Index> &topology,
@@ -50,7 +75,7 @@ gwn_status gwn_bvh_facade_build_topology_aabb_hploc(
     cudaStream_t const stream = gwn_default_stream()
 ) noexcept {
     GWN_RETURN_ON_ERROR(
-        (gwn_bvh_topology_build_hploc<Width, Real, Index>(geometry, topology, stream))
+        (gwn_bvh_topology_build_hploc<Width, Real, Index, MortonCode>(geometry, topology, stream))
     );
     return gwn_bvh_refit_aabb<Width, Real, Index>(geometry, topology, aabb_tree, stream);
 }
@@ -65,6 +90,9 @@ gwn_status gwn_bvh_facade_build_topology_aabb_hploc(
 /// \tparam Width  BVH node fan-out.
 /// \tparam Real   Floating-point type.
 /// \tparam Index  Signed integer index type.
+/// \tparam MortonCode Morton key type:
+///                    - \c std::uint32_t : 30-bit Morton.
+///                    - \c std::uint64_t : 63-bit Morton (default).
 ///
 /// \param[in]     geometry     Uploaded triangle mesh.
 /// \param[in,out] topology     Destination topology object.
@@ -73,7 +101,7 @@ gwn_status gwn_bvh_facade_build_topology_aabb_hploc(
 /// \param[in]     stream       CUDA stream for all asynchronous work.
 ///
 /// \return \c gwn_status::ok() on success.
-template <int Order, int Width, class Real, class Index>
+template <int Order, int Width, class Real, class Index, class MortonCode = std::uint64_t>
 gwn_status gwn_bvh_facade_build_topology_aabb_moment_lbvh(
     gwn_geometry_object<Real, Index> const &geometry,
     gwn_bvh_topology_object<Width, Real, Index> &topology,
@@ -81,7 +109,7 @@ gwn_status gwn_bvh_facade_build_topology_aabb_moment_lbvh(
     gwn_bvh_moment_tree_object<Width, Real, Index> &moment_tree,
     cudaStream_t const stream = gwn_default_stream()
 ) noexcept {
-    GWN_RETURN_ON_ERROR((gwn_bvh_facade_build_topology_aabb_lbvh<Width, Real, Index>(
+    GWN_RETURN_ON_ERROR((gwn_bvh_facade_build_topology_aabb_lbvh<Width, Real, Index, MortonCode>(
         geometry, topology, aabb_tree, stream
     )));
     return gwn_bvh_refit_moment<Order, Width, Real, Index>(
@@ -91,7 +119,26 @@ gwn_status gwn_bvh_facade_build_topology_aabb_moment_lbvh(
 
 /// \brief Build BVH topology via H-PLOC, refit AABB bounds, and compute Taylor
 ///        moments — all in a single call.
-template <int Order, int Width, class Real, class Index>
+///
+/// Equivalent to calling \c gwn_bvh_facade_build_topology_aabb_hploc followed
+/// by \c gwn_bvh_refit_moment on the same stream.
+///
+/// \tparam Order  Taylor expansion order (currently 0 or 1).
+/// \tparam Width  BVH node fan-out.
+/// \tparam Real   Floating-point type.
+/// \tparam Index  Integer index type.
+/// \tparam MortonCode Morton key type:
+///                    - \c std::uint32_t : 30-bit Morton.
+///                    - \c std::uint64_t : 63-bit Morton (default).
+///
+/// \param[in]     geometry     Uploaded triangle mesh.
+/// \param[in,out] topology     Destination topology object.
+/// \param[in,out] aabb_tree    Destination AABB tree object.
+/// \param[in,out] moment_tree  Destination moment tree object.
+/// \param[in]     stream       CUDA stream for all asynchronous work.
+///
+/// \return \c gwn_status::ok() on success.
+template <int Order, int Width, class Real, class Index, class MortonCode = std::uint64_t>
 gwn_status gwn_bvh_facade_build_topology_aabb_moment_hploc(
     gwn_geometry_object<Real, Index> const &geometry,
     gwn_bvh_topology_object<Width, Real, Index> &topology,
@@ -99,7 +146,7 @@ gwn_status gwn_bvh_facade_build_topology_aabb_moment_hploc(
     gwn_bvh_moment_tree_object<Width, Real, Index> &moment_tree,
     cudaStream_t const stream = gwn_default_stream()
 ) noexcept {
-    GWN_RETURN_ON_ERROR((gwn_bvh_facade_build_topology_aabb_hploc<Width, Real, Index>(
+    GWN_RETURN_ON_ERROR((gwn_bvh_facade_build_topology_aabb_hploc<Width, Real, Index, MortonCode>(
         geometry, topology, aabb_tree, stream
     )));
     return gwn_bvh_refit_moment<Order, Width, Real, Index>(

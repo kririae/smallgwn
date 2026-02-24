@@ -3,10 +3,11 @@
 #include <cuda_runtime_api.h>
 
 #include <cstddef>
+#include <cstdint>
 
-#include "gwn/detail/gwn_bvh_status_helpers.cuh"
-#include "gwn/detail/gwn_bvh_topology_build_hploc.cuh"
-#include "gwn/detail/gwn_bvh_topology_build_lbvh.cuh"
+#include "gwn_bvh_status_helpers.cuh"
+#include "gwn_bvh_topology_build_hploc.cuh"
+#include "gwn_bvh_topology_build_lbvh.cuh"
 
 namespace gwn {
 namespace detail {
@@ -92,7 +93,7 @@ gwn_status gwn_bvh_topology_build_from_binary_impl(
     });
 }
 
-template <int Width, class Real, class Index>
+template <int Width, class Real, class Index, class MortonCode = std::uint64_t>
 gwn_status gwn_bvh_topology_build_lbvh_impl(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> &topology,
@@ -104,9 +105,9 @@ gwn_status gwn_bvh_topology_build_lbvh_impl(
             gwn_device_array<gwn_binary_node<Index>> &binary_nodes,
             gwn_device_array<Index> &binary_internal_parent,
             Index &root_internal_index) -> gwn_status {
-        GWN_RETURN_ON_ERROR(gwn_bvh_topology_build_binary_lbvh(
+        GWN_RETURN_ON_ERROR((gwn_bvh_topology_build_binary_lbvh<Real, Index, MortonCode>(
             geometry, sorted_primitive_indices, binary_nodes, binary_internal_parent, stream
-        ));
+        )));
         if (geometry.triangle_count() > 1)
             root_internal_index = Index(0);
         return gwn_status::ok();
@@ -115,7 +116,7 @@ gwn_status gwn_bvh_topology_build_lbvh_impl(
     );
 }
 
-template <int Width, class Real, class Index>
+template <int Width, class Real, class Index, class MortonCode = std::uint64_t>
 gwn_status gwn_bvh_topology_build_hploc_impl(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> &topology,
@@ -127,7 +128,7 @@ gwn_status gwn_bvh_topology_build_hploc_impl(
             gwn_device_array<gwn_binary_node<Index>> &binary_nodes,
             gwn_device_array<Index> &binary_internal_parent,
             Index &root_internal_index) -> gwn_status {
-        return gwn_bvh_topology_build_binary_hploc(
+        return gwn_bvh_topology_build_binary_hploc<Real, Index, MortonCode>(
             geometry, sorted_primitive_indices, binary_nodes, binary_internal_parent,
             root_internal_index, stream
         );
