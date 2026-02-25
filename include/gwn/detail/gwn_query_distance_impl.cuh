@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 
 #include "../gwn_bvh.cuh"
@@ -11,6 +12,75 @@
 
 namespace gwn {
 namespace detail {
+
+template <gwn_real_type Real>
+__device__ inline void gwn_swap_children_if_greater_impl(
+    Real &lhs_dist2, Real &rhs_dist2, int &lhs_slot, int &rhs_slot, std::uint8_t &lhs_kind,
+    std::uint8_t &rhs_kind
+) noexcept {
+    if (!(lhs_dist2 > rhs_dist2))
+        return;
+
+    Real const dist2_tmp = lhs_dist2;
+    lhs_dist2 = rhs_dist2;
+    rhs_dist2 = dist2_tmp;
+
+    int const slot_tmp = lhs_slot;
+    lhs_slot = rhs_slot;
+    rhs_slot = slot_tmp;
+
+    std::uint8_t const kind_tmp = lhs_kind;
+    lhs_kind = rhs_kind;
+    rhs_kind = kind_tmp;
+}
+
+template <int Width, gwn_real_type Real>
+__device__ inline void gwn_sort_children_by_dist2_impl(
+    Real (&child_box_dist2)[Width], int (&child_slot_order)[Width],
+    std::uint8_t (&child_kind)[Width]
+) noexcept {
+    if constexpr (Width == 2) {
+        gwn_swap_children_if_greater_impl(
+            child_box_dist2[0], child_box_dist2[1], child_slot_order[0], child_slot_order[1],
+            child_kind[0], child_kind[1]
+        );
+    } else if constexpr (Width == 4) {
+        // Optimal 4-input sorting network (5 compare-swaps).
+        gwn_swap_children_if_greater_impl(
+            child_box_dist2[0], child_box_dist2[1], child_slot_order[0], child_slot_order[1],
+            child_kind[0], child_kind[1]
+        );
+        gwn_swap_children_if_greater_impl(
+            child_box_dist2[2], child_box_dist2[3], child_slot_order[2], child_slot_order[3],
+            child_kind[2], child_kind[3]
+        );
+        gwn_swap_children_if_greater_impl(
+            child_box_dist2[0], child_box_dist2[2], child_slot_order[0], child_slot_order[2],
+            child_kind[0], child_kind[2]
+        );
+        gwn_swap_children_if_greater_impl(
+            child_box_dist2[1], child_box_dist2[3], child_slot_order[1], child_slot_order[3],
+            child_kind[1], child_kind[3]
+        );
+        gwn_swap_children_if_greater_impl(
+            child_box_dist2[1], child_box_dist2[2], child_slot_order[1], child_slot_order[2],
+            child_kind[1], child_kind[2]
+        );
+    } else {
+        // Fixed pass-count odd-even network; no data-dependent inner while loop.
+        GWN_PRAGMA_UNROLL
+        for (int pass = 0; pass < Width; ++pass) {
+            int const start = pass & 1;
+            GWN_PRAGMA_UNROLL
+            for (int i = start; (i + 1) < Width; i += 2) {
+                gwn_swap_children_if_greater_impl(
+                    child_box_dist2[i], child_box_dist2[i + 1], child_slot_order[i],
+                    child_slot_order[i + 1], child_kind[i], child_kind[i + 1]
+                );
+            }
+        }
+    }
+}
 
 template <int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity>
 __device__ inline Real gwn_unsigned_distance_point_bvh_impl(
@@ -62,11 +132,26 @@ __device__ inline Real gwn_unsigned_distance_point_bvh_impl(
 
         auto const &topo_node = bvh.nodes[static_cast<std::size_t>(node_index)];
         auto const &aabb_node = aabb_tree.nodes[static_cast<std::size_t>(node_index)];
+        int child_slot_order[Width];
+        Real child_box_dist2[Width];
+        std::uint8_t child_kind[Width];
+        std::uint8_t constexpr k_invalid_child_kind =
+            static_cast<std::uint8_t>(gwn_bvh_child_kind::k_invalid);
+        Real constexpr k_infinite_dist2 = std::numeric_limits<Real>::infinity();
+        GWN_PRAGMA_UNROLL
+        for (int i = 0; i < Width; ++i) {
+            child_slot_order[i] = 0;
+            child_box_dist2[i] = k_infinite_dist2;
+            child_kind[i] = k_invalid_child_kind;
+        }
+        int child_count = 0;
 
         GWN_PRAGMA_UNROLL
         for (int s = 0; s < Width; ++s) {
             auto const kind = static_cast<gwn_bvh_child_kind>(topo_node.child_kind[s]);
             if (kind == gwn_bvh_child_kind::k_invalid)
+                continue;
+            if (kind != gwn_bvh_child_kind::k_internal && kind != gwn_bvh_child_kind::k_leaf)
                 continue;
 
             Real const box_dist2 = gwn_aabb_min_distance_squared_impl(
@@ -77,15 +162,26 @@ __device__ inline Real gwn_unsigned_distance_point_bvh_impl(
             if (box_dist2 >= best_dist2)
                 continue;
 
-            if (kind == gwn_bvh_child_kind::k_internal) {
-                if (stack_size >= StackCapacity)
-                    gwn_trap();
-                stack[stack_size++] = topo_node.child_index[s];
+            if (child_count >= Width)
                 continue;
-            }
+            child_slot_order[child_count] = s;
+            child_box_dist2[child_count] = box_dist2;
+            child_kind[child_count] = topo_node.child_kind[s];
+            ++child_count;
+        }
 
-            if (kind != gwn_bvh_child_kind::k_leaf)
+        if (child_count > 1)
+            gwn_sort_children_by_dist2_impl<Width>(child_box_dist2, child_slot_order, child_kind);
+
+        // Visit leaves first to tighten best_dist2 before pushing internal nodes.
+        GWN_PRAGMA_UNROLL
+        for (int i = 0; i < Width; ++i) {
+            if (static_cast<gwn_bvh_child_kind>(child_kind[i]) != gwn_bvh_child_kind::k_leaf)
                 continue;
+            if (child_box_dist2[i] >= best_dist2)
+                continue;
+
+            int const s = child_slot_order[i];
 
             Index const begin = topo_node.child_index[s];
             Index const count = topo_node.child_count[s];
@@ -97,9 +193,25 @@ __device__ inline Real gwn_unsigned_distance_point_bvh_impl(
                 Real const d2 = gwn_triangle_distance_squared_from_primitive_impl<Real, Index>(
                     geometry, pi, query
                 );
-                if (d2 < best_dist2)
+                if (d2 < best_dist2) {
                     best_dist2 = d2;
+                    if (!(best_dist2 > Real(0)))
+                        return Real(0);
+                }
             }
+        }
+
+        // Push internals in reverse order so the nearest child is processed first (LIFO stack).
+        GWN_PRAGMA_UNROLL
+        for (int i = Width - 1; i >= 0; --i) {
+            if (static_cast<gwn_bvh_child_kind>(child_kind[i]) != gwn_bvh_child_kind::k_internal)
+                continue;
+            if (child_box_dist2[i] >= best_dist2)
+                continue;
+
+            if (stack_size >= StackCapacity)
+                gwn_trap();
+            stack[stack_size++] = topo_node.child_index[child_slot_order[i]];
         }
     }
 

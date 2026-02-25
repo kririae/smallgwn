@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <cstddef>
+#include <type_traits>
 
 #include "../gwn_bvh.cuh"
 #include "../gwn_geometry.cuh"
@@ -208,8 +209,10 @@ __device__ inline Real gwn_winding_number_point_bvh_taylor_impl(
                 descend = qlength2 <= taylor.child_max_p_dist2[child_slot] * accuracy_scale2;
 
             if (!descend) {
-                Real const qlength_m2 = Real(1) / qlength2;
-                Real const qlength_m1 = sqrt(qlength_m2);
+                Real qlength_m1 = Real(1) / sqrt(qlength2);
+                if constexpr (std::is_same_v<Real, float>)
+                    qlength_m1 = rsqrtf(qlength2);
+                Real const qlength_m2 = qlength_m1 * qlength_m1;
 
                 Real const qnx = qrx * qlength_m1;
                 Real const qny = qry * qlength_m1;
