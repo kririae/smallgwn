@@ -170,8 +170,8 @@ TEST(smallgwn_integration_performance, hploc_topology_build_ratio_gate) {
         ASSERT_TRUE(upload_status.is_ok()) << gwn::tests::status_to_debug_string(upload_status);
         ASSERT_EQ(cudaSuccess, cudaStreamSynchronize(stream));
 
-        gwn::gwn_bvh_object<Real, Index> topology_lbvh;
-        gwn::gwn_bvh_object<Real, Index> topology_hploc;
+        gwn::gwn_bvh4_topology_object<Real, Index> topology_lbvh;
+        gwn::gwn_bvh4_topology_object<Real, Index> topology_hploc;
         auto lbvh_build = [&]() noexcept {
             return gwn::gwn_bvh_topology_build_lbvh<4, Real, Index>(
                 geometry, topology_lbvh, stream

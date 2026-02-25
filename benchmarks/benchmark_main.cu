@@ -288,8 +288,8 @@ collect_models(benchmark_cli_options const &options) {
 template <int Order>
 gwn::gwn_status run_taylor_query_with_stack_capacity(
     int const stack_capacity, gwn::gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn::gwn_bvh_accessor<Real, Index> const &topology,
-    gwn::gwn_bvh_moment4_accessor<Real, Index> const &moment,
+    gwn::gwn_bvh4_topology_accessor<Real, Index> const &topology,
+    gwn::gwn_bvh4_moment_accessor<Real, Index> const &moment,
     cuda::std::span<Real const> const query_x, cuda::std::span<Real const> const query_y,
     cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output,
     float const accuracy_scale, cudaStream_t const stream
@@ -527,9 +527,9 @@ int main(int argc, char **argv) try {
             continue;
         }
 
-        gwn::gwn_bvh_object<Real, Index> topology;
-        gwn::gwn_bvh_aabb_object<Real, Index> aabb_tree;
-        gwn::gwn_bvh_moment_object<Real, Index> moment_tree;
+        gwn::gwn_bvh4_topology_object<Real, Index> topology;
+        gwn::gwn_bvh4_aabb_object<Real, Index> aabb_tree;
+        gwn::gwn_bvh4_moment_object<Real, Index> moment_tree;
         std::string const builder_name{to_string(options.topology_builder)};
 
         auto build_topology = [&]() noexcept -> gwn::gwn_status {

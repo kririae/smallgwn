@@ -67,44 +67,44 @@ TEST_F(CudaStreamFixture, geometry_object_clear_rebinds_stream) {
 }
 
 // ---------------------------------------------------------------------------
-// gwn_bvh_object (topology) stream binding.
+// gwn_bvh4_topology_object stream binding.
 // ---------------------------------------------------------------------------
 
 TEST_F(CudaStreamFixture, bvh_object_default_stream) {
-    gwn::gwn_bvh_object<float, std::uint32_t> bvh;
+    gwn::gwn_bvh4_topology_object<float, std::uint32_t> bvh;
     EXPECT_EQ(bvh.stream(), gwn::gwn_default_stream());
 }
 
 TEST_F(CudaStreamFixture, bvh_object_set_stream) {
-    gwn::gwn_bvh_object<float, std::uint32_t> bvh;
+    gwn::gwn_bvh4_topology_object<float, std::uint32_t> bvh;
     bvh.set_stream(stream_a_);
     EXPECT_EQ(bvh.stream(), stream_a_);
 }
 
 TEST_F(CudaStreamFixture, bvh_object_clear_rebinds_stream) {
-    gwn::gwn_bvh_object<float, std::uint32_t> bvh;
+    gwn::gwn_bvh4_topology_object<float, std::uint32_t> bvh;
     bvh.set_stream(stream_a_);
     bvh.clear(stream_b_);
     EXPECT_EQ(bvh.stream(), stream_b_);
 }
 
 // ---------------------------------------------------------------------------
-// gwn_bvh_moment_object stream binding.
+// gwn_bvh4_moment_object stream binding.
 // ---------------------------------------------------------------------------
 
 TEST_F(CudaStreamFixture, data_object_default_stream) {
-    gwn::gwn_bvh_moment_object<float, std::uint32_t> data;
+    gwn::gwn_bvh4_moment_object<float, std::uint32_t> data;
     EXPECT_EQ(data.stream(), gwn::gwn_default_stream());
 }
 
 TEST_F(CudaStreamFixture, data_object_set_stream) {
-    gwn::gwn_bvh_moment_object<float, std::uint32_t> data;
+    gwn::gwn_bvh4_moment_object<float, std::uint32_t> data;
     data.set_stream(stream_a_);
     EXPECT_EQ(data.stream(), stream_a_);
 }
 
 TEST_F(CudaStreamFixture, data_object_clear_rebinds_stream) {
-    gwn::gwn_bvh_moment_object<float, std::uint32_t> data;
+    gwn::gwn_bvh4_moment_object<float, std::uint32_t> data;
     data.set_stream(stream_a_);
     data.clear(stream_b_);
     EXPECT_EQ(data.stream(), stream_b_);
@@ -122,15 +122,15 @@ TEST_F(CudaStreamFixture, geometry_move_construct) {
 }
 
 TEST_F(CudaStreamFixture, bvh_move_construct) {
-    gwn::gwn_bvh_object<float, std::uint32_t> src;
+    gwn::gwn_bvh4_topology_object<float, std::uint32_t> src;
     src.set_stream(stream_a_);
-    gwn::gwn_bvh_object<float, std::uint32_t> dst(std::move(src));
+    gwn::gwn_bvh4_topology_object<float, std::uint32_t> dst(std::move(src));
     EXPECT_EQ(dst.stream(), stream_a_);
 }
 
 TEST_F(CudaStreamFixture, data_move_construct) {
-    gwn::gwn_bvh_moment_object<float, std::uint32_t> src;
+    gwn::gwn_bvh4_moment_object<float, std::uint32_t> src;
     src.set_stream(stream_a_);
-    gwn::gwn_bvh_moment_object<float, std::uint32_t> dst(std::move(src));
+    gwn::gwn_bvh4_moment_object<float, std::uint32_t> dst(std::move(src));
     EXPECT_EQ(dst.stream(), stream_a_);
 }

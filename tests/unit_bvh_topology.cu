@@ -101,7 +101,7 @@ TEST_F(CudaFixture, single_triangle_bvh) {
         GTEST_SKIP() << "CUDA unavailable";
     auto &geometry = *maybe_geo;
 
-    gwn::gwn_bvh_object<Real, Index> bvh;
+    gwn::gwn_bvh4_topology_object<Real, Index> bvh;
     gwn::gwn_status const build_status =
         gwn::gwn_bvh_topology_build_lbvh<4, Real, Index>(geometry, bvh);
     ASSERT_TRUE(build_status.is_ok()) << gwn::tests::status_to_debug_string(build_status);
@@ -128,7 +128,7 @@ TEST_F(CudaFixture, two_triangle_bvh) {
         GTEST_SKIP() << "CUDA unavailable";
     auto &geometry = *maybe_geo;
 
-    gwn::gwn_bvh_object<Real, Index> bvh;
+    gwn::gwn_bvh4_topology_object<Real, Index> bvh;
     gwn::gwn_status const build_status =
         gwn::gwn_bvh_topology_build_lbvh<4, Real, Index>(geometry, bvh);
     ASSERT_TRUE(build_status.is_ok()) << gwn::tests::status_to_debug_string(build_status);
@@ -154,7 +154,7 @@ TEST_F(CudaFixture, octahedron_8_triangles) {
         GTEST_SKIP() << "CUDA unavailable";
     auto &geometry = *maybe_geo;
 
-    gwn::gwn_bvh_object<Real, Index> bvh;
+    gwn::gwn_bvh4_topology_object<Real, Index> bvh;
     gwn::gwn_status const build_status =
         gwn::gwn_bvh_topology_build_lbvh<4, Real, Index>(geometry, bvh);
     ASSERT_TRUE(build_status.is_ok()) << gwn::tests::status_to_debug_string(build_status);
@@ -226,7 +226,7 @@ TEST_F(CudaFixture, coplanar_triangles_build_succeeds) {
         GTEST_SKIP() << "CUDA unavailable";
     auto &geometry = *maybe_geo;
 
-    gwn::gwn_bvh_object<Real, Index> bvh;
+    gwn::gwn_bvh4_topology_object<Real, Index> bvh;
     gwn::gwn_status const status = gwn::gwn_bvh_topology_build_lbvh<4, Real, Index>(geometry, bvh);
     ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
     ASSERT_TRUE(bvh.has_data());
@@ -248,7 +248,7 @@ TEST_F(CudaFixture, zero_area_triangle_build_succeeds) {
         GTEST_SKIP() << "CUDA unavailable";
     auto &geometry = *maybe_geo;
 
-    gwn::gwn_bvh_object<Real, Index> bvh;
+    gwn::gwn_bvh4_topology_object<Real, Index> bvh;
     gwn::gwn_status const status = gwn::gwn_bvh_topology_build_lbvh<4, Real, Index>(geometry, bvh);
     ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
     ASSERT_TRUE(bvh.has_data());
@@ -269,7 +269,7 @@ TEST_F(CudaFixture, rebuild_replaces_previous_bvh) {
         GTEST_SKIP() << "CUDA unavailable";
     auto &geometry = *maybe_geo;
 
-    gwn::gwn_bvh_object<Real, Index> bvh;
+    gwn::gwn_bvh4_topology_object<Real, Index> bvh;
     ASSERT_TRUE((gwn::gwn_bvh_topology_build_lbvh<4, Real, Index>(geometry, bvh).is_ok()));
     ASSERT_TRUE(bvh.has_data());
 
@@ -294,7 +294,7 @@ TEST_F(CudaFixture, clear_resets_bvh) {
         GTEST_SKIP() << "CUDA unavailable";
     auto &geometry = *maybe_geo;
 
-    gwn::gwn_bvh_object<Real, Index> bvh;
+    gwn::gwn_bvh4_topology_object<Real, Index> bvh;
     ASSERT_TRUE((gwn::gwn_bvh_topology_build_lbvh<4, Real, Index>(geometry, bvh).is_ok()));
     ASSERT_TRUE(bvh.has_data());
 
@@ -313,7 +313,7 @@ TEST_F(CudaFixture, hploc_single_triangle_bvh) {
         GTEST_SKIP() << "CUDA unavailable";
     auto &geometry = *maybe_geo;
 
-    gwn::gwn_bvh_object<Real, Index> bvh;
+    gwn::gwn_bvh4_topology_object<Real, Index> bvh;
     gwn::gwn_status const build_status =
         build_topology<4>(bvh_topology_builder::k_hploc, geometry, bvh);
     ASSERT_TRUE(build_status.is_ok()) << gwn::tests::status_to_debug_string(build_status);
@@ -338,7 +338,7 @@ TEST_F(CudaFixture, hploc_octahedron_8_triangles) {
         GTEST_SKIP() << "CUDA unavailable";
     auto &geometry = *maybe_geo;
 
-    gwn::gwn_bvh_object<Real, Index> bvh;
+    gwn::gwn_bvh4_topology_object<Real, Index> bvh;
     gwn::gwn_status const build_status =
         build_topology<4>(bvh_topology_builder::k_hploc, geometry, bvh);
     ASSERT_TRUE(build_status.is_ok()) << gwn::tests::status_to_debug_string(build_status);
@@ -363,7 +363,7 @@ TEST_F(CudaFixture, hploc_octahedron_8_triangles_morton32) {
         GTEST_SKIP() << "CUDA unavailable";
     auto &geometry = *maybe_geo;
 
-    gwn::gwn_bvh_object<Real, Index> bvh;
+    gwn::gwn_bvh4_topology_object<Real, Index> bvh;
     gwn::gwn_status const build_status =
         build_topology<4, std::uint32_t>(bvh_topology_builder::k_hploc, geometry, bvh);
     ASSERT_TRUE(build_status.is_ok()) << gwn::tests::status_to_debug_string(build_status);
@@ -409,7 +409,7 @@ TEST_F(CudaFixture, hploc_repeated_centroid_triangles_morton32) {
         GTEST_SKIP() << "CUDA unavailable";
     auto &geometry = *maybe_geo;
 
-    gwn::gwn_bvh_object<Real, Index> bvh;
+    gwn::gwn_bvh4_topology_object<Real, Index> bvh;
     gwn::gwn_status const build_status =
         build_topology<4, std::uint32_t>(bvh_topology_builder::k_hploc, geometry, bvh);
     ASSERT_TRUE(build_status.is_ok()) << gwn::tests::status_to_debug_string(build_status);

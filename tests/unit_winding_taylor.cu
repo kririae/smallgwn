@@ -29,9 +29,9 @@ enum class taylor_topology_builder {
 // Helper: upload octahedron, build BVH + Taylor, query Taylor WN.
 struct TaylorTestContext {
     gwn::gwn_geometry_object<Real, Index> geometry;
-    gwn::gwn_bvh_object<Real, Index> bvh;
-    gwn::gwn_bvh_aabb_object<Real, Index> aabb;
-    gwn::gwn_bvh_moment_object<Real, Index> data;
+    gwn::gwn_bvh4_topology_object<Real, Index> bvh;
+    gwn::gwn_bvh4_aabb_object<Real, Index> aabb;
+    gwn::gwn_bvh4_moment_object<Real, Index> data;
     gwn::gwn_device_array<Real> d_qx, d_qy, d_qz, d_out;
 
     bool ready = false;
@@ -191,18 +191,18 @@ TEST_F(CudaFixture, order1_more_accurate_than_order0) {
     ASSERT_TRUE(upload_status.is_ok());
 
     // Build Order=0.
-    gwn::gwn_bvh_object<Real, Index> bvh0;
-    gwn::gwn_bvh_aabb_object<Real, Index> aabb0;
-    gwn::gwn_bvh_moment_object<Real, Index> data0;
+    gwn::gwn_bvh4_topology_object<Real, Index> bvh0;
+    gwn::gwn_bvh4_aabb_object<Real, Index> aabb0;
+    gwn::gwn_bvh4_moment_object<Real, Index> data0;
     ASSERT_TRUE((gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<0, 4, Real, Index>(
                      geometry, bvh0, aabb0, data0
     )
                      .is_ok()));
 
     // Build Order=1.
-    gwn::gwn_bvh_object<Real, Index> bvh1;
-    gwn::gwn_bvh_aabb_object<Real, Index> aabb1;
-    gwn::gwn_bvh_moment_object<Real, Index> data1;
+    gwn::gwn_bvh4_topology_object<Real, Index> bvh1;
+    gwn::gwn_bvh4_aabb_object<Real, Index> aabb1;
+    gwn::gwn_bvh4_moment_object<Real, Index> data1;
     ASSERT_TRUE((gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<1, 4, Real, Index>(
                      geometry, bvh1, aabb1, data1
     )
@@ -281,18 +281,18 @@ TEST_F(CudaFixture, repeated_build_matches_order1) {
     ASSERT_TRUE(upload_status.is_ok());
 
     // Build A.
-    gwn::gwn_bvh_object<Real, Index> bvh_a;
-    gwn::gwn_bvh_aabb_object<Real, Index> aabb_a;
-    gwn::gwn_bvh_moment_object<Real, Index> data_a;
+    gwn::gwn_bvh4_topology_object<Real, Index> bvh_a;
+    gwn::gwn_bvh4_aabb_object<Real, Index> aabb_a;
+    gwn::gwn_bvh4_moment_object<Real, Index> data_a;
     ASSERT_TRUE((gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<1, 4, Real, Index>(
                      geometry, bvh_a, aabb_a, data_a
     )
                      .is_ok()));
 
     // Build B.
-    gwn::gwn_bvh_object<Real, Index> bvh_b;
-    gwn::gwn_bvh_aabb_object<Real, Index> aabb_b;
-    gwn::gwn_bvh_moment_object<Real, Index> data_b;
+    gwn::gwn_bvh4_topology_object<Real, Index> bvh_b;
+    gwn::gwn_bvh4_aabb_object<Real, Index> aabb_b;
+    gwn::gwn_bvh4_moment_object<Real, Index> data_b;
     ASSERT_TRUE((gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<1, 4, Real, Index>(
                      geometry, bvh_b, aabb_b, data_b
     )
@@ -337,8 +337,8 @@ TEST_F(CudaFixture, repeated_build_matches_order1) {
 
 TEST_F(CudaFixture, taylor_query_with_no_data_returns_error) {
     gwn::gwn_geometry_accessor<Real, Index> geometry{};
-    gwn::gwn_bvh_accessor<Real, Index> bvh{};
-    gwn::gwn_bvh_moment4_accessor<Real, Index> data{};
+    gwn::gwn_bvh4_topology_accessor<Real, Index> bvh{};
+    gwn::gwn_bvh4_moment_accessor<Real, Index> data{};
     cuda::std::span<Real const> empty{};
     cuda::std::span<Real> output{};
 
@@ -350,8 +350,8 @@ TEST_F(CudaFixture, taylor_query_with_no_data_returns_error) {
 
 TEST_F(CudaFixture, taylor_batch_mismatched_query_output) {
     gwn::gwn_geometry_accessor<Real, Index> accessor{};
-    gwn::gwn_bvh_accessor<Real, Index> bvh{};
-    gwn::gwn_bvh_moment4_accessor<Real, Index> data{};
+    gwn::gwn_bvh4_topology_accessor<Real, Index> bvh{};
+    gwn::gwn_bvh4_moment_accessor<Real, Index> data{};
     cuda::std::span<Real const> empty{};
     Real dummy[2] = {};
     cuda::std::span<Real> output(dummy, 2);
@@ -365,8 +365,8 @@ TEST_F(CudaFixture, taylor_batch_mismatched_query_output) {
 
 TEST_F(CudaFixture, taylor_empty_query_returns_ok) {
     gwn::gwn_geometry_accessor<Real, Index> accessor{};
-    gwn::gwn_bvh_accessor<Real, Index> bvh{};
-    gwn::gwn_bvh_moment4_accessor<Real, Index> data{};
+    gwn::gwn_bvh4_topology_accessor<Real, Index> bvh{};
+    gwn::gwn_bvh4_moment_accessor<Real, Index> data{};
     cuda::std::span<Real const> empty{};
     cuda::std::span<Real> output{};
 

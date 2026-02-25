@@ -50,8 +50,8 @@ gwn::gwn_status build_topology_for_builder(
 template <int Order>
 gwn::gwn_status build_facade_for_builder(
     topology_builder const builder, gwn::gwn_geometry_object<Real, Index> const &geometry,
-    gwn::gwn_bvh_object<Real, Index> &topology, gwn::gwn_bvh_aabb_object<Real, Index> &aabb,
-    gwn::gwn_bvh_moment_object<Real, Index> &moment
+    gwn::gwn_bvh4_topology_object<Real, Index> &topology, gwn::gwn_bvh4_aabb_object<Real, Index> &aabb,
+    gwn::gwn_bvh4_moment_object<Real, Index> &moment
 ) {
     if (builder == topology_builder::k_hploc) {
         return gwn::gwn_bvh_facade_build_topology_aabb_moment_hploc<Order, 4, Real, Index>(
@@ -276,7 +276,7 @@ void assert_bvh_structure_wide(
 }
 
 void assert_bvh_structure(
-    gwn::gwn_bvh_accessor<Real, Index> const &accessor, std::size_t const primitive_count
+    gwn::gwn_bvh4_topology_accessor<Real, Index> const &accessor, std::size_t const primitive_count
 ) {
     gwn::gwn_bvh_topology_accessor<4, Real, Index> topology4_accessor{};
     topology4_accessor.nodes = accessor.nodes;
@@ -341,7 +341,7 @@ TEST(smallgwn_integration_model, bvh_exact_batch_matches_cpu_on_common_models) {
         ASSERT_TRUE(upload_status.is_ok())
             << gwn::tests::status_to_debug_string(upload_status);
 
-        gwn::gwn_bvh_object<Real, Index> bvh;
+        gwn::gwn_bvh4_topology_object<Real, Index> bvh;
         gwn::gwn_status const build_status =
             gwn::gwn_bvh_topology_build_lbvh<4, Real, Index>(geometry, bvh);
         ASSERT_TRUE(build_status.is_ok()) << gwn::tests::status_to_debug_string(build_status);
@@ -413,7 +413,7 @@ TEST(smallgwn_integration_model, bvh_binary_to_wide_matches_width4_exact_queries
         ASSERT_TRUE(upload_status.is_ok()) << gwn::tests::status_to_debug_string(upload_status);
 
         gwn::gwn_bvh_topology_object<2, Real, Index> bvh2;
-        gwn::gwn_bvh_object<Real, Index> bvh4;
+        gwn::gwn_bvh4_topology_object<Real, Index> bvh4;
         gwn::gwn_bvh_topology_object<8, Real, Index> bvh8;
         ASSERT_TRUE(
             (gwn::gwn_bvh_topology_build_lbvh<2, Real, Index>(geometry, bvh2)
@@ -523,9 +523,9 @@ TEST(smallgwn_integration_model, integration_exact_and_taylor_consistency_on_com
         SMALLGWN_SKIP_IF_STATUS_CUDA_UNAVAILABLE(upload_status);
         ASSERT_TRUE(upload_status.is_ok()) << gwn::tests::status_to_debug_string(upload_status);
 
-        gwn::gwn_bvh_object<Real, Index> bvh;
-        gwn::gwn_bvh_aabb_object<Real, Index> bvh_aabb;
-        gwn::gwn_bvh_moment_object<Real, Index> bvh_data;
+        gwn::gwn_bvh4_topology_object<Real, Index> bvh;
+        gwn::gwn_bvh4_aabb_object<Real, Index> bvh_aabb;
+        gwn::gwn_bvh4_moment_object<Real, Index> bvh_data;
         ASSERT_TRUE(
             (gwn::gwn_bvh_topology_build_lbvh<4, Real, Index>(geometry, bvh)
                  .is_ok()));
@@ -650,9 +650,9 @@ TEST(smallgwn_integration_model, integration_taylor_rebuild_consistency_on_commo
         );
 
         // Build/query A.
-        gwn::gwn_bvh_object<Real, Index> bvh_a;
-        gwn::gwn_bvh_aabb_object<Real, Index> aabb_a;
-        gwn::gwn_bvh_moment_object<Real, Index> data_a;
+        gwn::gwn_bvh4_topology_object<Real, Index> bvh_a;
+        gwn::gwn_bvh4_aabb_object<Real, Index> aabb_a;
+        gwn::gwn_bvh4_moment_object<Real, Index> data_a;
         ASSERT_TRUE((gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<1, 4, Real, Index>(
                          geometry, bvh_a, aabb_a, data_a
         )
@@ -670,9 +670,9 @@ TEST(smallgwn_integration_model, integration_taylor_rebuild_consistency_on_commo
         ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
 
         // Build/query B.
-        gwn::gwn_bvh_object<Real, Index> bvh_b;
-        gwn::gwn_bvh_aabb_object<Real, Index> aabb_b;
-        gwn::gwn_bvh_moment_object<Real, Index> data_b;
+        gwn::gwn_bvh4_topology_object<Real, Index> bvh_b;
+        gwn::gwn_bvh4_aabb_object<Real, Index> aabb_b;
+        gwn::gwn_bvh4_moment_object<Real, Index> data_b;
         ASSERT_TRUE((gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<1, 4, Real, Index>(
                          geometry, bvh_b, aabb_b, data_b
         )
@@ -782,9 +782,9 @@ TEST(smallgwn_integration_model, integration_taylor_matches_hdk_cpu_order0_order
                 .is_ok()
         );
 
-        gwn::gwn_bvh_object<Real, Index> bvh;
-        gwn::gwn_bvh_aabb_object<Real, Index> aabb;
-        gwn::gwn_bvh_moment_object<Real, Index> data;
+        gwn::gwn_bvh4_topology_object<Real, Index> bvh;
+        gwn::gwn_bvh4_aabb_object<Real, Index> aabb;
+        gwn::gwn_bvh4_moment_object<Real, Index> data;
 
         ASSERT_TRUE((gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<0, 4, Real, Index>(
                          geometry, bvh, aabb, data
@@ -868,9 +868,9 @@ TEST(smallgwn_integration_model, integration_hploc_exact_and_taylor_consistency_
         SMALLGWN_SKIP_IF_STATUS_CUDA_UNAVAILABLE(upload_status);
         ASSERT_TRUE(upload_status.is_ok()) << gwn::tests::status_to_debug_string(upload_status);
 
-        gwn::gwn_bvh_object<Real, Index> bvh;
-        gwn::gwn_bvh_aabb_object<Real, Index> bvh_aabb;
-        gwn::gwn_bvh_moment_object<Real, Index> bvh_data;
+        gwn::gwn_bvh4_topology_object<Real, Index> bvh;
+        gwn::gwn_bvh4_aabb_object<Real, Index> bvh_aabb;
+        gwn::gwn_bvh4_moment_object<Real, Index> bvh_data;
         ASSERT_TRUE(
             (build_topology_for_builder<4>(topology_builder::k_hploc, geometry, bvh).is_ok())
         );

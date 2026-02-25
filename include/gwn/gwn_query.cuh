@@ -147,8 +147,9 @@ template <
     int Order, gwn_real_type Real, gwn_index_type Index = std::uint32_t,
     int StackCapacity = k_gwn_default_traversal_stack_capacity>
 gwn_status gwn_compute_winding_number_batch_bvh_taylor(
-    gwn_geometry_accessor<Real, Index> const &geometry, gwn_bvh_accessor<Real, Index> const &bvh,
-    gwn_bvh_moment4_accessor<Real, Index> const &data_tree,
+    gwn_geometry_accessor<Real, Index> const &geometry,
+    gwn_bvh4_topology_accessor<Real, Index> const &bvh,
+    gwn_bvh4_moment_accessor<Real, Index> const &data_tree,
     cuda::std::span<Real const> const query_x, cuda::std::span<Real const> const query_y,
     cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output,
     Real const accuracy_scale = Real(2), cudaStream_t const stream = gwn_default_stream()

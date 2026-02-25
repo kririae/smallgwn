@@ -53,8 +53,8 @@ std::optional<gwn::gwn_geometry_object<Real, Index>> upload_octahedron() {
 template <int Order>
 gwn::gwn_status build_taylor_tree(
     taylor_topology_builder const builder, gwn::gwn_geometry_object<Real, Index> const &geometry,
-    gwn::gwn_bvh_object<Real, Index> &bvh, gwn::gwn_bvh_aabb_object<Real, Index> &aabb,
-    gwn::gwn_bvh_moment_object<Real, Index> &data
+    gwn::gwn_bvh4_topology_object<Real, Index> &bvh, gwn::gwn_bvh4_aabb_object<Real, Index> &aabb,
+    gwn::gwn_bvh4_moment_object<Real, Index> &data
 ) {
     if (builder == taylor_topology_builder::k_hploc) {
         return gwn::gwn_bvh_facade_build_topology_aabb_moment_hploc<Order, 4, Real, Index>(
@@ -78,9 +78,9 @@ TEST_F(CudaFixture, taylor_order0_build_marks_accessor) {
         GTEST_SKIP() << "CUDA unavailable";
     auto &geometry = *maybe_geo;
 
-    gwn::gwn_bvh_object<Real, Index> bvh;
-    gwn::gwn_bvh_aabb_object<Real, Index> aabb;
-    gwn::gwn_bvh_moment_object<Real, Index> data;
+    gwn::gwn_bvh4_topology_object<Real, Index> bvh;
+    gwn::gwn_bvh4_aabb_object<Real, Index> aabb;
+    gwn::gwn_bvh4_moment_object<Real, Index> data;
     gwn::gwn_status const status =
         gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<0, 4, Real, Index>(
             geometry, bvh, aabb, data
@@ -101,9 +101,9 @@ TEST_F(CudaFixture, taylor_order1_build_marks_accessor) {
         GTEST_SKIP() << "CUDA unavailable";
     auto &geometry = *maybe_geo;
 
-    gwn::gwn_bvh_object<Real, Index> bvh;
-    gwn::gwn_bvh_aabb_object<Real, Index> aabb;
-    gwn::gwn_bvh_moment_object<Real, Index> data;
+    gwn::gwn_bvh4_topology_object<Real, Index> bvh;
+    gwn::gwn_bvh4_aabb_object<Real, Index> aabb;
+    gwn::gwn_bvh4_moment_object<Real, Index> data;
     gwn::gwn_status const status =
         gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<1, 4, Real, Index>(
             geometry, bvh, aabb, data
@@ -119,9 +119,9 @@ TEST_F(CudaFixture, taylor_order0_build_marks_accessor_hploc) {
         GTEST_SKIP() << "CUDA unavailable";
     auto &geometry = *maybe_geo;
 
-    gwn::gwn_bvh_object<Real, Index> bvh;
-    gwn::gwn_bvh_aabb_object<Real, Index> aabb;
-    gwn::gwn_bvh_moment_object<Real, Index> data;
+    gwn::gwn_bvh4_topology_object<Real, Index> bvh;
+    gwn::gwn_bvh4_aabb_object<Real, Index> aabb;
+    gwn::gwn_bvh4_moment_object<Real, Index> data;
     gwn::gwn_status const status =
         build_taylor_tree<0>(taylor_topology_builder::k_hploc, geometry, bvh, aabb, data);
     ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
@@ -136,9 +136,9 @@ TEST_F(CudaFixture, taylor_order1_build_marks_accessor_hploc) {
         GTEST_SKIP() << "CUDA unavailable";
     auto &geometry = *maybe_geo;
 
-    gwn::gwn_bvh_object<Real, Index> bvh;
-    gwn::gwn_bvh_aabb_object<Real, Index> aabb;
-    gwn::gwn_bvh_moment_object<Real, Index> data;
+    gwn::gwn_bvh4_topology_object<Real, Index> bvh;
+    gwn::gwn_bvh4_aabb_object<Real, Index> aabb;
+    gwn::gwn_bvh4_moment_object<Real, Index> data;
     gwn::gwn_status const status =
         build_taylor_tree<1>(taylor_topology_builder::k_hploc, geometry, bvh, aabb, data);
     ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
@@ -156,9 +156,9 @@ TEST_F(CudaFixture, taylor_rebuild_order1_marks_accessor) {
         GTEST_SKIP() << "CUDA unavailable";
     auto &geometry = *maybe_geo;
 
-    gwn::gwn_bvh_object<Real, Index> bvh;
-    gwn::gwn_bvh_aabb_object<Real, Index> aabb;
-    gwn::gwn_bvh_moment_object<Real, Index> data;
+    gwn::gwn_bvh4_topology_object<Real, Index> bvh;
+    gwn::gwn_bvh4_aabb_object<Real, Index> aabb;
+    gwn::gwn_bvh4_moment_object<Real, Index> data;
     gwn::gwn_status const status =
         gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<1, 4, Real, Index>(
             geometry, bvh, aabb, data
@@ -189,9 +189,9 @@ TEST_F(CudaFixture, taylor_order0_nodes_are_finite) {
         GTEST_SKIP() << "CUDA unavailable";
     auto &geometry = *maybe_geo;
 
-    gwn::gwn_bvh_object<Real, Index> bvh;
-    gwn::gwn_bvh_aabb_object<Real, Index> aabb;
-    gwn::gwn_bvh_moment_object<Real, Index> data;
+    gwn::gwn_bvh4_topology_object<Real, Index> bvh;
+    gwn::gwn_bvh4_aabb_object<Real, Index> aabb;
+    gwn::gwn_bvh4_moment_object<Real, Index> data;
     gwn::gwn_status const status =
         gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<0, 4, Real, Index>(
             geometry, bvh, aabb, data
@@ -240,9 +240,9 @@ TEST_F(CudaFixture, taylor_data_clear_resets) {
         GTEST_SKIP() << "CUDA unavailable";
     auto &geometry = *maybe_geo;
 
-    gwn::gwn_bvh_object<Real, Index> bvh;
-    gwn::gwn_bvh_aabb_object<Real, Index> aabb;
-    gwn::gwn_bvh_moment_object<Real, Index> data;
+    gwn::gwn_bvh4_topology_object<Real, Index> bvh;
+    gwn::gwn_bvh4_aabb_object<Real, Index> aabb;
+    gwn::gwn_bvh4_moment_object<Real, Index> data;
     ASSERT_TRUE((gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<0, 4, Real, Index>(
                      geometry, bvh, aabb, data
     )
@@ -276,9 +276,9 @@ TEST_F(CudaFixture, taylor_single_triangle) {
     SMALLGWN_SKIP_IF_STATUS_CUDA_UNAVAILABLE(upload_status);
     ASSERT_TRUE(upload_status.is_ok());
 
-    gwn::gwn_bvh_object<Real, Index> bvh;
-    gwn::gwn_bvh_aabb_object<Real, Index> aabb;
-    gwn::gwn_bvh_moment_object<Real, Index> data;
+    gwn::gwn_bvh4_topology_object<Real, Index> bvh;
+    gwn::gwn_bvh4_aabb_object<Real, Index> aabb;
+    gwn::gwn_bvh4_moment_object<Real, Index> data;
     gwn::gwn_status const status =
         gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<0, 4, Real, Index>(
             geometry, bvh, aabb, data

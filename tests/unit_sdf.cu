@@ -99,9 +99,9 @@ __global__ void kernel_signed_distance(
 // Helper: upload octahedron and build BVH topology + AABB + order-1 moments.
 struct SdfTestContext {
     gwn::gwn_geometry_object<Real, Index> geometry;
-    gwn::gwn_bvh_object<Real, Index> bvh;
-    gwn::gwn_bvh_aabb_object<Real, Index> aabb;
-    gwn::gwn_bvh_moment_object<Real, Index> data;
+    gwn::gwn_bvh4_topology_object<Real, Index> bvh;
+    gwn::gwn_bvh4_aabb_object<Real, Index> aabb;
+    gwn::gwn_bvh4_moment_object<Real, Index> data;
 
     bool ready = false;
 };
@@ -597,8 +597,8 @@ TEST_F(CudaFixture, model_unsigned_distance_vs_libigl) {
     SMALLGWN_SKIP_IF_STATUS_CUDA_UNAVAILABLE(upload_status);
     ASSERT_TRUE(upload_status.is_ok());
 
-    gwn::gwn_bvh_object<Real, Index> bvh;
-    gwn::gwn_bvh_aabb_object<Real, Index> aabb;
+    gwn::gwn_bvh4_topology_object<Real, Index> bvh;
+    gwn::gwn_bvh4_aabb_object<Real, Index> aabb;
     ASSERT_TRUE(
         (gwn::gwn_bvh_facade_build_topology_aabb_lbvh<4, Real, Index>(geometry, bvh, aabb)).is_ok()
     );
@@ -710,9 +710,9 @@ TEST_F(CudaFixture, model_signed_distance_vs_libigl) {
     SMALLGWN_SKIP_IF_STATUS_CUDA_UNAVAILABLE(upload_status);
     ASSERT_TRUE(upload_status.is_ok());
 
-    gwn::gwn_bvh_object<Real, Index> bvh;
-    gwn::gwn_bvh_aabb_object<Real, Index> aabb;
-    gwn::gwn_bvh_moment_object<Real, Index> data;
+    gwn::gwn_bvh4_topology_object<Real, Index> bvh;
+    gwn::gwn_bvh4_aabb_object<Real, Index> aabb;
+    gwn::gwn_bvh4_moment_object<Real, Index> data;
     ASSERT_TRUE((gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<1, 4, Real, Index>(
                      geometry, bvh, aabb, data
     ))

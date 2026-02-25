@@ -41,8 +41,8 @@ enum class topology_builder {
 template <int Order>
 gwn::gwn_status build_facade_for_builder(
     topology_builder const builder, gwn::gwn_geometry_object<Real, Index> const &geometry,
-    gwn::gwn_bvh_object<Real, Index> &topology, gwn::gwn_bvh_aabb_object<Real, Index> &aabb,
-    gwn::gwn_bvh_moment_object<Real, Index> &moment
+    gwn::gwn_bvh4_topology_object<Real, Index> &topology, gwn::gwn_bvh4_aabb_object<Real, Index> &aabb,
+    gwn::gwn_bvh4_moment_object<Real, Index> &moment
 ) {
     if (builder == topology_builder::k_hploc) {
         return gwn::gwn_bvh_facade_build_topology_aabb_moment_hploc<Order, 4, Real, Index>(
@@ -398,17 +398,17 @@ TEST(smallgwn_integration_correctness, voxel_order1_rebuild_consistency) {
         SMALLGWN_SKIP_IF_STATUS_CUDA_UNAVAILABLE(upload_status);
         ASSERT_TRUE(upload_status.is_ok()) << gwn::tests::status_to_debug_string(upload_status);
 
-        gwn::gwn_bvh_object<Real, Index> bvh_iterative;
-        gwn::gwn_bvh_aabb_object<Real, Index> aabb_iterative;
-        gwn::gwn_bvh_moment_object<Real, Index> data_iterative;
+        gwn::gwn_bvh4_topology_object<Real, Index> bvh_iterative;
+        gwn::gwn_bvh4_aabb_object<Real, Index> aabb_iterative;
+        gwn::gwn_bvh4_moment_object<Real, Index> data_iterative;
         ASSERT_TRUE((gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<1, 4, Real, Index>(
                          geometry, bvh_iterative, aabb_iterative, data_iterative
         )
                          .is_ok()));
 
-        gwn::gwn_bvh_object<Real, Index> bvh_levelwise;
-        gwn::gwn_bvh_aabb_object<Real, Index> aabb_levelwise;
-        gwn::gwn_bvh_moment_object<Real, Index> data_levelwise;
+        gwn::gwn_bvh4_topology_object<Real, Index> bvh_levelwise;
+        gwn::gwn_bvh4_aabb_object<Real, Index> aabb_levelwise;
+        gwn::gwn_bvh4_moment_object<Real, Index> data_levelwise;
         ASSERT_TRUE((gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<1, 4, Real, Index>(
                          geometry, bvh_levelwise, aabb_levelwise, data_levelwise
         )
@@ -582,12 +582,12 @@ TEST(smallgwn_integration_correctness, voxel_order1_hploc_vs_lbvh_consistency_on
         SMALLGWN_SKIP_IF_STATUS_CUDA_UNAVAILABLE(upload_status);
         ASSERT_TRUE(upload_status.is_ok()) << gwn::tests::status_to_debug_string(upload_status);
 
-        gwn::gwn_bvh_object<Real, Index> bvh_lbvh;
-        gwn::gwn_bvh_aabb_object<Real, Index> aabb_lbvh;
-        gwn::gwn_bvh_moment_object<Real, Index> moment_lbvh;
-        gwn::gwn_bvh_object<Real, Index> bvh_hploc;
-        gwn::gwn_bvh_aabb_object<Real, Index> aabb_hploc;
-        gwn::gwn_bvh_moment_object<Real, Index> moment_hploc;
+        gwn::gwn_bvh4_topology_object<Real, Index> bvh_lbvh;
+        gwn::gwn_bvh4_aabb_object<Real, Index> aabb_lbvh;
+        gwn::gwn_bvh4_moment_object<Real, Index> moment_lbvh;
+        gwn::gwn_bvh4_topology_object<Real, Index> bvh_hploc;
+        gwn::gwn_bvh4_aabb_object<Real, Index> aabb_hploc;
+        gwn::gwn_bvh4_moment_object<Real, Index> moment_hploc;
 
         ASSERT_TRUE((build_facade_for_builder<1>(
                          topology_builder::k_lbvh, geometry, bvh_lbvh, aabb_lbvh, moment_lbvh
@@ -765,7 +765,7 @@ TEST(smallgwn_integration_correctness, voxel_exact_and_taylor_match_cpu_on_small
         std::vector<Real> order1_levelwise_output(sample_count, Real(0));
 
         // Exact.
-        gwn::gwn_bvh_object<Real, Index> bvh_exact;
+        gwn::gwn_bvh4_topology_object<Real, Index> bvh_exact;
         ASSERT_TRUE(
             (gwn::gwn_bvh_topology_build_lbvh<4, Real, Index>(geometry, bvh_exact)
                  .is_ok()));
@@ -779,9 +779,9 @@ TEST(smallgwn_integration_correctness, voxel_exact_and_taylor_match_cpu_on_small
         ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
 
         // Order 0.
-        gwn::gwn_bvh_object<Real, Index> bvh_order0;
-        gwn::gwn_bvh_aabb_object<Real, Index> aabb_order0;
-        gwn::gwn_bvh_moment_object<Real, Index> data_order0;
+        gwn::gwn_bvh4_topology_object<Real, Index> bvh_order0;
+        gwn::gwn_bvh4_aabb_object<Real, Index> aabb_order0;
+        gwn::gwn_bvh4_moment_object<Real, Index> data_order0;
         ASSERT_TRUE((gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<0, 4, Real, Index>(geometry, bvh_order0, aabb_order0, data_order0)
                         .is_ok()));
         ASSERT_TRUE((gwn::gwn_compute_winding_number_batch_bvh_taylor<0, Real, Index>(
@@ -794,9 +794,9 @@ TEST(smallgwn_integration_correctness, voxel_exact_and_taylor_match_cpu_on_small
         ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
 
         // Order 1 iterative.
-        gwn::gwn_bvh_object<Real, Index> bvh_order1_iter;
-        gwn::gwn_bvh_aabb_object<Real, Index> aabb_order1_iter;
-        gwn::gwn_bvh_moment_object<Real, Index> data_order1_iter;
+        gwn::gwn_bvh4_topology_object<Real, Index> bvh_order1_iter;
+        gwn::gwn_bvh4_aabb_object<Real, Index> aabb_order1_iter;
+        gwn::gwn_bvh4_moment_object<Real, Index> data_order1_iter;
         ASSERT_TRUE((gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<1, 4, Real, Index>(geometry, bvh_order1_iter, aabb_order1_iter, data_order1_iter)
                         .is_ok()));
         ASSERT_TRUE((gwn::gwn_compute_winding_number_batch_bvh_taylor<1, Real, Index>(
@@ -811,9 +811,9 @@ TEST(smallgwn_integration_correctness, voxel_exact_and_taylor_match_cpu_on_small
         ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
 
         // Order 1 levelwise.
-        gwn::gwn_bvh_object<Real, Index> bvh_order1_lw;
-        gwn::gwn_bvh_aabb_object<Real, Index> aabb_order1_lw;
-        gwn::gwn_bvh_moment_object<Real, Index> data_order1_lw;
+        gwn::gwn_bvh4_topology_object<Real, Index> bvh_order1_lw;
+        gwn::gwn_bvh4_aabb_object<Real, Index> aabb_order1_lw;
+        gwn::gwn_bvh4_moment_object<Real, Index> data_order1_lw;
         ASSERT_TRUE((gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<1, 4, Real, Index>(geometry, bvh_order1_lw, aabb_order1_lw, data_order1_lw)
                         .is_ok()));
         ASSERT_TRUE((gwn::gwn_compute_winding_number_batch_bvh_taylor<1, Real, Index>(

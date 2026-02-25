@@ -11,7 +11,7 @@ These instructions apply to the `smallgwn/` project tree.
 
 ## Language and Build Baseline
 - Use C++20 and CUDA 12+.
-- Target `sm_86+`.
+- CMake defaults `CMAKE_CUDA_ARCHITECTURES` to `native` unless overridden.
 - Keep the project header-only at the library level.
 
 ## File Naming Rules
@@ -27,7 +27,10 @@ These instructions apply to the `smallgwn/` project tree.
 - Use `gwn::` namespace and `gwn_` prefix for public symbols.
 - Avoid `_wide` naming in public API types.
 - Default public index type is `std::uint32_t` for geometry/BVH/query templates unless explicitly overridden.
-- Keep width as template parameter where relevant; width=4 accessor aliases are `gwn_bvh_accessor`, `gwn_bvh_aabb4_accessor`, and `gwn_bvh_moment4_accessor` (no `gwn_bvh4_*` duplicates).
+- Keep width as template parameter where relevant; width=4 convenience aliases use
+  `gwn_bvh4_<kind>_<role>` naming:
+  - accessors: `gwn_bvh4_topology_accessor`, `gwn_bvh4_aabb_accessor`, `gwn_bvh4_moment_accessor`
+  - owning objects: `gwn_bvh4_topology_object`, `gwn_bvh4_aabb_object`, `gwn_bvh4_moment_object`
 - Owning-object state query uses a single unified predicate `has_data()` across all BVH object types (`gwn_bvh_topology_tree_object`, `gwn_bvh_aabb_tree_object`, `gwn_bvh_moment_tree_object`).
 
 ## Formatting Rules
@@ -45,7 +48,7 @@ These instructions apply to the `smallgwn/` project tree.
 - Use SoA (Structure of Arrays) layout for geometry (`x/y/z`, `i0/i1/i2`).
 - Prefer TBB for trivially parallel CPU-side batch work.
 - **Stream Binding**: Stream binding is explicit:
-  - owning objects (`gwn_geometry_object`, `gwn_bvh_topology_object`, `gwn_bvh_aabb_object`, `gwn_bvh_moment_object`) use `gwn_stream_mixin`;
+  - owning objects (`gwn_geometry_object`, `gwn_bvh_topology_tree_object`, `gwn_bvh_aabb_tree_object`, `gwn_bvh_moment_tree_object`, and width-4 aliases `gwn_bvh4_*_object`) use `gwn_stream_mixin`;
   - `clear()`/destructor release on the currently bound stream;
   - successful stream-parameterized mutations update the bound stream;
   - object-first build/refit/facade overloads in `gwn_bvh_topology_build.cuh`, `gwn_bvh_refit.cuh`,
@@ -68,6 +71,7 @@ These instructions apply to the `smallgwn/` project tree.
   - Topology: `gwn_bvh_topology_accessor<Width,...>` / `gwn_bvh_topology_object<Width,...>`
   - AABB tree: `gwn_bvh_aabb_accessor<Width,...>` / `gwn_bvh_aabb_tree_object<Width,...>`
   - Moment tree: `gwn_bvh_moment_accessor<Width,...>` / `gwn_bvh_moment_tree_object<Width,...>`
+  - Width-4 convenience aliases: `gwn_bvh4_topology_*`, `gwn_bvh4_aabb_*`, `gwn_bvh4_moment_*`
 - Public BVH API is split by responsibility:
   - topology build: `include/gwn/gwn_bvh_topology_build.cuh`
   - payload refit: `include/gwn/gwn_bvh_refit.cuh`
@@ -91,8 +95,8 @@ These instructions apply to the `smallgwn/` project tree.
   (`gwn::detail::*_impl`), not public `gwn::` API symbols.
 - Detail entrypoints use `_impl` suffix (e.g. `gwn_bvh_topology_build_lbvh_impl`) to avoid public/internal naming collisions.
 - Public BVH entrypoints are object-based (`gwn_geometry_object` + BVH object types); accessor-based routines are internal-only under `gwn::detail`.
-- No `bvh4_*` convenience wrappers — use `gwn_bvh_topology_build_lbvh<4,...>` directly; the `gwn_bvh_object` / `gwn_bvh_aabb_object` / `gwn_bvh_moment_object` aliases already fix Width=4.  `gwn_bvh_object` is topology-only (does **not** include AABB or moment data).
-- BVH SoA node structs (`gwn_bvh_topology_node_soa`, `gwn_bvh_aabb_node_soa`, `gwn_bvh_taylor_node_soa`) are 128-byte aligned for `Width=4` to keep node loads cacheline-aligned; non-4 widths keep natural element alignment.
+- Use width-4 aliases directly (`gwn_bvh4_topology_object`, `gwn_bvh4_aabb_object`, `gwn_bvh4_moment_object`) or width-parameterized templates (`gwn_bvh_topology_object<Width,...>`).
+- `gwn_bvh4_topology_object` is topology-only (does **not** include AABB or moment data).
 - Device-side BVH traversal stacks call `gwn_trap()` on overflow (device `asm("trap;")`)
   rather than silently skipping nodes.
 - Public object-based APIs are plain `noexcept` (no `try`/`catch`); exception translation is done once in the `detail` layer.
@@ -116,8 +120,8 @@ These instructions apply to the `smallgwn/` project tree.
   - Async Taylor temporary buffers (parent/slot/arity/arrivals/pending moments) use `gwn_device_array`.
   - Each `gwn_bvh_refit_moment<Order,...>` call replaces the entire moment accessor (full replace, not merge). To maintain multiple Taylor orders simultaneously, use separate moment objects.
 - Winding number query APIs:
-  - Exact: `gwn_compute_winding_number_batch_bvh_exact`
-  - Taylor: `gwn_compute_winding_number_batch_bvh_taylor<Order,...>`
+  - Public batch API: `gwn_compute_winding_number_batch_bvh_taylor<Order,...>`
+  - Legacy exact comparisons exist only in disabled/in-test code paths (`#if 0` blocks), not in the public include surface.
   - Traversal stack capacity is template-configurable via `StackCapacity` (default:
     `k_gwn_default_traversal_stack_capacity = 64`).
 - Distance point-query APIs:
@@ -125,9 +129,9 @@ These instructions apply to the `smallgwn/` project tree.
     `culling_band` (default `+infinity` disables culling); return value is clamped
     to `culling_band` when outside the band.
   - `gwn_signed_distance_point_bvh` additionally supports
-    `winding_number_threshold` (default `0.5`) for inside/outside sign choice.
-  - Signed-distance sign is determined by exact winding traversal even when
-    distance magnitude is culling-band clamped.
+    template `Order` (`0/1`), `winding_number_threshold` (default `0.5`), and
+    requires a Taylor moment tree accessor for sign choice.
+  - Signed-distance sign is determined by Taylor winding traversal.
 
 ## Error Handling Rules
 - Prefer internal C++ exceptions only inside implementation details; public APIs should return `gwn_status` error codes.
@@ -152,8 +156,6 @@ These instructions apply to the `smallgwn/` project tree.
     - explicit template-instantiation compile coverage for `Index=uint64_t` topology builders
   - `tests/unit_bvh_taylor.cu`
     - includes H-PLOC facade build coverage for Taylor order 0/1
-  - `tests/unit_winding_exact.cu`
-    - includes exact-query parity coverage on H-PLOC topology
   - `tests/unit_winding_taylor.cu`
     - includes Taylor order-0 far-field parity coverage on H-PLOC topology
   - `tests/unit_sdf.cu`
@@ -164,7 +166,9 @@ These instructions apply to the `smallgwn/` project tree.
   - `tests/integration_correctness.cu`
   - `tests/integration_hploc_performance.cu`
   - Exact-heavy model parity/correctness cases are intentionally compiled out with `#if 0` during current refactor cycle.
-  - Model-based integration tests are fail-fast on missing model data (no `GTEST_SKIP` on missing dataset path).
+  - Integration model-data handling is mixed:
+    - optional/availability probes may `GTEST_SKIP` when model datasets are absent;
+    - required-performance/rebuild paths use fail-fast assertions.
   - Taylor parity includes GPU order-0/order-1 vs HDK CPU order-0/order-1 comparisons.
   - Correctness now includes sampled model checks for order-1 Taylor LBVH/H-PLOC consistency.
   - H-PLOC performance gate enforces topology-build `p50(hploc)/p50(lbvh)` ratio on sampled
