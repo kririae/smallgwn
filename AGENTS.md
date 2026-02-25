@@ -76,6 +76,14 @@ These instructions apply to the `smallgwn/` project tree.
   - `gwn_bvh_facade_build_topology_aabb_{lbvh,hploc}`
   - `gwn_bvh_facade_build_topology_aabb_moment_{lbvh,hploc}`
 - Internal implementation remains under flat `include/gwn/detail/` headers.
+- Query implementation is split similarly:
+  - public surface in `include/gwn/gwn_query.cuh`
+  - internal traversal/math in:
+    - `include/gwn/detail/gwn_query_geometry_impl.cuh`
+    - `include/gwn/detail/gwn_query_winding_impl.cuh`
+    - `include/gwn/detail/gwn_query_distance_impl.cuh`
+- Triangle solid-angle and point-triangle distance primitives are detail-only
+  (`gwn::detail::*_impl`), not public `gwn::` API symbols.
 - Detail entrypoints use `_impl` suffix (e.g. `gwn_bvh_topology_build_lbvh_impl`) to avoid public/internal naming collisions.
 - Public BVH entrypoints are object-based (`gwn_geometry_object` + BVH object types); accessor-based routines are internal-only under `gwn::detail`.
 - No `bvh4_*` convenience wrappers — use `gwn_bvh_topology_build_lbvh<4,...>` directly; the `gwn_bvh_object` / `gwn_bvh_aabb_object` / `gwn_bvh_moment_object` aliases already fix Width=4.  `gwn_bvh_object` is topology-only (does **not** include AABB or moment data).
@@ -106,6 +114,14 @@ These instructions apply to the `smallgwn/` project tree.
   - Taylor: `gwn_compute_winding_number_batch_bvh_taylor<Order,...>`
   - Traversal stack capacity is template-configurable via `StackCapacity` (default:
     `k_gwn_default_traversal_stack_capacity = 64`).
+- Distance point-query APIs:
+  - `gwn_unsigned_distance_point_bvh` supports world-unit narrow-band culling via
+    `culling_band` (default `+infinity` disables culling); return value is clamped
+    to `culling_band` when outside the band.
+  - `gwn_signed_distance_point_bvh` additionally supports
+    `winding_number_threshold` (default `0.5`) for inside/outside sign choice.
+  - Signed-distance sign is determined by exact winding traversal even when
+    distance magnitude is culling-band clamped.
 
 ## Error Handling Rules
 - Prefer internal C++ exceptions only inside implementation details; public APIs should return `gwn_status` error codes.
@@ -134,6 +150,9 @@ These instructions apply to the `smallgwn/` project tree.
     - includes exact-query parity coverage on H-PLOC topology
   - `tests/unit_winding_taylor.cu`
     - includes Taylor order-0 far-field parity coverage on H-PLOC topology
+  - `tests/unit_sdf.cu`
+    - host-side analytic checks call `gwn::detail::gwn_point_triangle_distance_squared_impl`
+      from `include/gwn/detail/gwn_query_geometry_impl.cuh`
 - Integration tests:
   - `tests/integration_model_parity.cu`
   - `tests/integration_correctness.cu`

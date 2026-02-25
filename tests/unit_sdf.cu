@@ -1,7 +1,8 @@
 /// \file unit_sdf.cu
 /// \brief SDF (signed/unsigned distance) unit tests with libigl parity.
 ///
-/// Tests gwn_point_triangle_distance_squared (host-side analytic tests),
+/// Tests detail::gwn_point_triangle_distance_squared_impl
+/// (host-side analytic tests),
 /// gwn_unsigned_distance_point_bvh, and gwn_signed_distance_point_bvh
 /// against libigl's point_mesh_squared_distance and signed_distance.
 ///
@@ -12,10 +13,12 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 #include <gtest/gtest.h>
 
+#include <gwn/detail/gwn_query_geometry_impl.cuh>
 #include <gwn/gwn.cuh>
 
 #include "libigl_reference.hpp"
@@ -64,13 +67,13 @@ __global__ void kernel_unsigned_distance(
     gwn::gwn_geometry_accessor<RealT, IndexT> geometry,
     gwn::gwn_bvh_topology_accessor<Width, RealT, IndexT> bvh,
     gwn::gwn_bvh_aabb_accessor<Width, RealT, IndexT> aabb_tree, RealT const *qx, RealT const *qy,
-    RealT const *qz, RealT *output, std::size_t count
+    RealT const *qz, RealT *output, std::size_t count, RealT culling_band
 ) {
     std::size_t const idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= count)
         return;
     output[idx] = gwn::gwn_unsigned_distance_point_bvh<Width, RealT, IndexT>(
-        geometry, bvh, aabb_tree, qx[idx], qy[idx], qz[idx]
+        geometry, bvh, aabb_tree, qx[idx], qy[idx], qz[idx], culling_band
     );
 }
 
@@ -80,13 +83,14 @@ __global__ void kernel_signed_distance(
     gwn::gwn_geometry_accessor<RealT, IndexT> geometry,
     gwn::gwn_bvh_topology_accessor<Width, RealT, IndexT> bvh,
     gwn::gwn_bvh_aabb_accessor<Width, RealT, IndexT> aabb_tree, RealT const *qx, RealT const *qy,
-    RealT const *qz, RealT *output, std::size_t count
+    RealT const *qz, RealT *output, std::size_t count, RealT winding_number_threshold,
+    RealT culling_band
 ) {
     std::size_t const idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= count)
         return;
     output[idx] = gwn::gwn_signed_distance_point_bvh<Width, RealT, IndexT, 128>(
-        geometry, bvh, aabb_tree, qx[idx], qy[idx], qz[idx]
+        geometry, bvh, aabb_tree, qx[idx], qy[idx], qz[idx], winding_number_threshold, culling_band
     );
 }
 
@@ -124,7 +128,8 @@ void setup_octahedron_sdf(SdfTestContext &ctx, OctahedronMesh const &mesh) {
 // Helper: run unsigned distance queries on GPU.
 void gpu_unsigned_distance(
     SdfTestContext &ctx, std::vector<Real> const &qx, std::vector<Real> const &qy,
-    std::vector<Real> const &qz, std::vector<Real> &results
+    std::vector<Real> const &qz, std::vector<Real> &results,
+    Real const culling_band = std::numeric_limits<Real>::infinity()
 ) {
     std::size_t const n = qx.size();
     results.resize(n, Real(0));
@@ -142,7 +147,7 @@ void gpu_unsigned_distance(
     int const grid_size = static_cast<int>((n + block_size - 1) / block_size);
     kernel_unsigned_distance<4, Real, Index><<<grid_size, block_size>>>(
         ctx.geometry.accessor(), ctx.bvh.accessor(), ctx.aabb.accessor(), d_qx.span().data(),
-        d_qy.span().data(), d_qz.span().data(), d_out.span().data(), n
+        d_qy.span().data(), d_qz.span().data(), d_out.span().data(), n, culling_band
     );
     ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
     ASSERT_TRUE(d_out.copy_to_host(cuda::std::span<Real>(results.data(), results.size())).is_ok());
@@ -152,7 +157,9 @@ void gpu_unsigned_distance(
 // Helper: run signed distance queries on GPU.
 void gpu_signed_distance(
     SdfTestContext &ctx, std::vector<Real> const &qx, std::vector<Real> const &qy,
-    std::vector<Real> const &qz, std::vector<Real> &results
+    std::vector<Real> const &qz, std::vector<Real> &results,
+    Real const winding_number_threshold = Real(0.5),
+    Real const culling_band = std::numeric_limits<Real>::infinity()
 ) {
     std::size_t const n = qx.size();
     results.resize(n, Real(0));
@@ -170,7 +177,8 @@ void gpu_signed_distance(
     int const grid_size = static_cast<int>((n + block_size - 1) / block_size);
     kernel_signed_distance<4, Real, Index><<<grid_size, block_size>>>(
         ctx.geometry.accessor(), ctx.bvh.accessor(), ctx.aabb.accessor(), d_qx.span().data(),
-        d_qy.span().data(), d_qz.span().data(), d_out.span().data(), n
+        d_qy.span().data(), d_qz.span().data(), d_out.span().data(), n, winding_number_threshold,
+        culling_band
     );
     ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
     ASSERT_TRUE(d_out.copy_to_host(cuda::std::span<Real>(results.data(), results.size())).is_ok());
@@ -179,7 +187,7 @@ void gpu_signed_distance(
 
 } // namespace
 
-// Host-side analytic tests for gwn_point_triangle_distance_squared.
+// Host-side analytic tests for detail::gwn_point_triangle_distance_squared_impl.
 // These exercise the Voronoi-region closest-point computation on-CPU
 // using __host__ __device__ qualification.
 
@@ -190,7 +198,7 @@ TEST(smallgwn_unit_sdf, point_triangle_dist2_vertex_closest) {
     gwn::gwn_vec3<Real> const c(0, 1, 0);
     gwn::gwn_vec3<Real> const p(-1, -1, 0); // nearest to A
 
-    Real const d2 = gwn::gwn_point_triangle_distance_squared(p, a, b, c);
+    Real const d2 = gwn::detail::gwn_point_triangle_distance_squared_impl(p, a, b, c);
     EXPECT_NEAR(d2, 2.0f, 1e-6f); // |(-1,-1)-(0,0)|^2 = 2
 }
 
@@ -200,7 +208,7 @@ TEST(smallgwn_unit_sdf, point_triangle_dist2_vertex_b_closest) {
     gwn::gwn_vec3<Real> const c(0, 1, 0);
     gwn::gwn_vec3<Real> const p(2, -1, 0); // nearest to B
 
-    Real const d2 = gwn::gwn_point_triangle_distance_squared(p, a, b, c);
+    Real const d2 = gwn::detail::gwn_point_triangle_distance_squared_impl(p, a, b, c);
     EXPECT_NEAR(d2, 2.0f, 1e-6f); // |(2,-1)-(1,0)|^2 = 2
 }
 
@@ -210,7 +218,7 @@ TEST(smallgwn_unit_sdf, point_triangle_dist2_vertex_c_closest) {
     gwn::gwn_vec3<Real> const c(0, 1, 0);
     gwn::gwn_vec3<Real> const p(-1, 2, 0); // nearest to C
 
-    Real const d2 = gwn::gwn_point_triangle_distance_squared(p, a, b, c);
+    Real const d2 = gwn::detail::gwn_point_triangle_distance_squared_impl(p, a, b, c);
     EXPECT_NEAR(d2, 2.0f, 1e-6f); // |(-1,2)-(0,1)|^2 = 2
 }
 
@@ -220,7 +228,7 @@ TEST(smallgwn_unit_sdf, point_triangle_dist2_edge_ab_closest) {
     gwn::gwn_vec3<Real> const c(0, 2, 0);
     gwn::gwn_vec3<Real> const p(1, -1, 0); // projects onto edge AB midpoint
 
-    Real const d2 = gwn::gwn_point_triangle_distance_squared(p, a, b, c);
+    Real const d2 = gwn::detail::gwn_point_triangle_distance_squared_impl(p, a, b, c);
     // Closest point is (1,0,0), distance^2 = 1.
     EXPECT_NEAR(d2, 1.0f, 1e-6f);
 }
@@ -231,7 +239,7 @@ TEST(smallgwn_unit_sdf, point_triangle_dist2_edge_ac_closest) {
     gwn::gwn_vec3<Real> const c(0, 2, 0);
     gwn::gwn_vec3<Real> const p(-1, 1, 0); // projects onto edge AC midpoint
 
-    Real const d2 = gwn::gwn_point_triangle_distance_squared(p, a, b, c);
+    Real const d2 = gwn::detail::gwn_point_triangle_distance_squared_impl(p, a, b, c);
     // Closest point is (0,1,0), distance^2 = 1.
     EXPECT_NEAR(d2, 1.0f, 1e-6f);
 }
@@ -243,7 +251,7 @@ TEST(smallgwn_unit_sdf, point_triangle_dist2_edge_bc_closest) {
     // Point beyond edge BC: nearest to midpoint (1,1,0).
     gwn::gwn_vec3<Real> const p(2, 2, 0);
 
-    Real const d2 = gwn::gwn_point_triangle_distance_squared(p, a, b, c);
+    Real const d2 = gwn::detail::gwn_point_triangle_distance_squared_impl(p, a, b, c);
     // Closest point on BC: parameterised b + t(c - b) = (2,0,0) + t(-2,2,0).
     // Project (2,2,0) onto BC: t = ((2,2,0)-(2,0,0)) . (-2,2,0) / |(-2,2,0)|^2
     //   = (0,2,0) . (-2,2,0) / 8 = 4/8 = 0.5 → closest = (1,1,0).
@@ -257,7 +265,7 @@ TEST(smallgwn_unit_sdf, point_triangle_dist2_face_projection) {
     gwn::gwn_vec3<Real> const c(0, 1, 0);
     gwn::gwn_vec3<Real> const p(0.25f, 0.25f, 1.0f); // above interior
 
-    Real const d2 = gwn::gwn_point_triangle_distance_squared(p, a, b, c);
+    Real const d2 = gwn::detail::gwn_point_triangle_distance_squared_impl(p, a, b, c);
     // Projects to (0.25, 0.25, 0), distance^2 = 1.
     EXPECT_NEAR(d2, 1.0f, 1e-6f);
 }
@@ -268,7 +276,7 @@ TEST(smallgwn_unit_sdf, point_triangle_dist2_on_triangle) {
     gwn::gwn_vec3<Real> const c(0, 1, 0);
     gwn::gwn_vec3<Real> const p(0.25f, 0.25f, 0.0f); // on triangle
 
-    Real const d2 = gwn::gwn_point_triangle_distance_squared(p, a, b, c);
+    Real const d2 = gwn::detail::gwn_point_triangle_distance_squared_impl(p, a, b, c);
     EXPECT_NEAR(d2, 0.0f, 1e-10f);
 }
 
@@ -279,7 +287,7 @@ TEST(smallgwn_unit_sdf, point_triangle_dist2_out_of_plane) {
     gwn::gwn_vec3<Real> const c(0, 0, 1);
     gwn::gwn_vec3<Real> const p(0, 0, 0); // origin
 
-    Real const d2 = gwn::gwn_point_triangle_distance_squared(p, a, b, c);
+    Real const d2 = gwn::detail::gwn_point_triangle_distance_squared_impl(p, a, b, c);
     // Distance from origin to plane x+y+z=1 is 1/sqrt(3).
     // d^2 = 1/3.  The foot (1/3,1/3,1/3) is inside the triangle.
     EXPECT_NEAR(d2, 1.0f / 3.0f, 1e-5f);
@@ -439,6 +447,77 @@ TEST_F(CudaFixture, signed_distance_magnitude_equals_unsigned) {
         EXPECT_NEAR(std::abs(sd[i]), ud[i], k_eps) << "query " << i << ": |signed| != unsigned";
 }
 
+TEST_F(CudaFixture, signed_distance_threshold_controls_sign) {
+    constexpr Real k_eps = 1e-6f;
+
+    OctahedronMesh mesh;
+    SdfTestContext ctx;
+    setup_octahedron_sdf(ctx, mesh);
+    if (!ctx.ready)
+        GTEST_SKIP() << "CUDA unavailable";
+
+    std::vector<Real> qx{0.0f};
+    std::vector<Real> qy{0.0f};
+    std::vector<Real> qz{0.0f};
+
+    std::vector<Real> sd_default, sd_high_threshold;
+    gpu_signed_distance(ctx, qx, qy, qz, sd_default, Real(0.5f));
+    gpu_signed_distance(ctx, qx, qy, qz, sd_high_threshold, Real(1.1f));
+
+    ASSERT_EQ(sd_default.size(), 1u);
+    ASSERT_EQ(sd_high_threshold.size(), 1u);
+    EXPECT_LT(sd_default[0], Real(0));
+    EXPECT_GT(sd_high_threshold[0], Real(0));
+    EXPECT_NEAR(std::abs(sd_default[0]), std::abs(sd_high_threshold[0]), k_eps);
+}
+
+TEST_F(CudaFixture, unsigned_distance_culling_band_clamps_far_queries) {
+    constexpr Real k_eps = 1e-6f;
+
+    OctahedronMesh mesh;
+    SdfTestContext ctx;
+    setup_octahedron_sdf(ctx, mesh);
+    if (!ctx.ready)
+        GTEST_SKIP() << "CUDA unavailable";
+
+    std::vector<Real> qx{5.0f, 0.9f};
+    std::vector<Real> qy{0.0f, 0.0f};
+    std::vector<Real> qz{0.0f, 0.0f};
+
+    std::vector<Real> baseline, clipped;
+    gpu_unsigned_distance(ctx, qx, qy, qz, baseline);
+    Real const culling_band = Real(0.2f);
+    gpu_unsigned_distance(ctx, qx, qy, qz, clipped, culling_band);
+
+    ASSERT_EQ(clipped.size(), 2u);
+    EXPECT_GT(baseline[0], culling_band);
+    EXPECT_NEAR(clipped[0], culling_band, k_eps);
+    EXPECT_LT(baseline[1], culling_band);
+    EXPECT_NEAR(clipped[1], baseline[1], k_eps);
+}
+
+TEST_F(CudaFixture, signed_distance_culling_band_clamps_with_winding_sign) {
+    constexpr Real k_eps = 1e-6f;
+
+    OctahedronMesh mesh;
+    SdfTestContext ctx;
+    setup_octahedron_sdf(ctx, mesh);
+    if (!ctx.ready)
+        GTEST_SKIP() << "CUDA unavailable";
+
+    std::vector<Real> qx{0.0f, 5.0f};
+    std::vector<Real> qy{0.0f, 0.0f};
+    std::vector<Real> qz{0.0f, 0.0f};
+
+    std::vector<Real> clipped_signed;
+    Real const culling_band = Real(0.1f);
+    gpu_signed_distance(ctx, qx, qy, qz, clipped_signed, Real(0.5f), culling_band);
+
+    ASSERT_EQ(clipped_signed.size(), 2u);
+    EXPECT_NEAR(clipped_signed[0], -culling_band, k_eps);
+    EXPECT_NEAR(clipped_signed[1], culling_band, k_eps);
+}
+
 // H-PLOC topology produces same distances as LBVH.
 
 TEST_F(CudaFixture, unsigned_distance_hploc_matches_lbvh) {
@@ -569,7 +648,8 @@ TEST_F(CudaFixture, model_unsigned_distance_vs_libigl) {
     int const grid_size = static_cast<int>((n + block_size - 1) / block_size);
     kernel_unsigned_distance<4, Real, Index><<<grid_size, block_size>>>(
         geometry.accessor(), bvh.accessor(), aabb.accessor(), d_qx.span().data(),
-        d_qy.span().data(), d_qz.span().data(), d_out.span().data(), n
+        d_qy.span().data(), d_qz.span().data(), d_out.span().data(), n,
+        std::numeric_limits<Real>::infinity()
     );
     ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
     std::vector<Real> gpu_dist(n, 0);
@@ -680,7 +760,8 @@ TEST_F(CudaFixture, model_signed_distance_vs_libigl) {
     int const grid_size = static_cast<int>((n + block_size - 1) / block_size);
     kernel_signed_distance<4, Real, Index><<<grid_size, block_size>>>(
         geometry.accessor(), bvh.accessor(), aabb.accessor(), d_qx.span().data(),
-        d_qy.span().data(), d_qz.span().data(), d_out.span().data(), n
+        d_qy.span().data(), d_qz.span().data(), d_out.span().data(), n, Real(0.5),
+        std::numeric_limits<Real>::infinity()
     );
     ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
     std::vector<Real> gpu_sd(n, 0);
@@ -689,7 +770,8 @@ TEST_F(CudaFixture, model_signed_distance_vs_libigl) {
 
     kernel_unsigned_distance<4, Real, Index><<<grid_size, block_size>>>(
         geometry.accessor(), bvh.accessor(), aabb.accessor(), d_qx.span().data(),
-        d_qy.span().data(), d_qz.span().data(), d_out.span().data(), n
+        d_qy.span().data(), d_qz.span().data(), d_out.span().data(), n,
+        std::numeric_limits<Real>::infinity()
     );
     ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
     std::vector<Real> gpu_ud(n, 0);
