@@ -79,7 +79,7 @@ __device__ inline Real gwn_unsigned_distance_point_bvh_impl(
 
             if (kind == gwn_bvh_child_kind::k_internal) {
                 if (stack_size >= StackCapacity)
-                    __trap();
+                    gwn_trap();
                 stack[stack_size++] = topo_node.child_index[s];
                 continue;
             }

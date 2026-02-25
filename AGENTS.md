@@ -6,6 +6,7 @@ These instructions apply to the `smallgwn/` project tree.
 ## Project Snapshot
 - `smallgwn` is a header-only CUDA/C++ library for winding number evaluation on triangle meshes.
 - Public surface is centered under `include/gwn/` with umbrella include `include/gwn/gwn.cuh`.
+  The umbrella include is runtime-focused and does **not** include `gwn_eigen_bridge.hpp`.
 - This codebase is independent from the `WindingNumber` source; `tests/reference_hdk/` contains vendored HDK sources for parity checks and code reference.
 
 ## Language and Build Baseline
@@ -39,6 +40,8 @@ These instructions apply to the `smallgwn/` project tree.
 
 ## Architecture & Design Rules
 - Keep public include surface focused on runtime components; CPU reference helpers belong under `tests/`.
+- `include/gwn/gwn_eigen_bridge.hpp` is opt-in and must be explicitly included by users that need Eigen interop.
+  Runtime headers (`*.cuh` under `include/gwn/`, except the bridge) must not require Eigen.
 - Use SoA (Structure of Arrays) layout for geometry (`x/y/z`, `i0/i1/i2`).
 - Prefer TBB for trivially parallel CPU-side batch work.
 - **Stream Binding**: Stream binding is explicit:
@@ -79,16 +82,19 @@ These instructions apply to the `smallgwn/` project tree.
 - Query implementation is split similarly:
   - public surface in `include/gwn/gwn_query.cuh`
   - internal traversal/math in:
+    - `include/gwn/detail/gwn_query_vec3_impl.cuh`
     - `include/gwn/detail/gwn_query_geometry_impl.cuh`
     - `include/gwn/detail/gwn_query_winding_impl.cuh`
     - `include/gwn/detail/gwn_query_distance_impl.cuh`
+- Query geometry math uses internal `gwn_query_vec3` (no Eigen dependency).
 - Triangle solid-angle and point-triangle distance primitives are detail-only
   (`gwn::detail::*_impl`), not public `gwn::` API symbols.
 - Detail entrypoints use `_impl` suffix (e.g. `gwn_bvh_topology_build_lbvh_impl`) to avoid public/internal naming collisions.
 - Public BVH entrypoints are object-based (`gwn_geometry_object` + BVH object types); accessor-based routines are internal-only under `gwn::detail`.
 - No `bvh4_*` convenience wrappers — use `gwn_bvh_topology_build_lbvh<4,...>` directly; the `gwn_bvh_object` / `gwn_bvh_aabb_object` / `gwn_bvh_moment_object` aliases already fix Width=4.  `gwn_bvh_object` is topology-only (does **not** include AABB or moment data).
 - BVH SoA node structs (`gwn_bvh_topology_node_soa`, `gwn_bvh_aabb_node_soa`, `gwn_bvh_taylor_node_soa`) are 128-byte aligned for `Width=4` to keep node loads cacheline-aligned; non-4 widths keep natural element alignment.
-- Device-side BVH traversal stacks call `__trap()` on overflow rather than silently skipping nodes.
+- Device-side BVH traversal stacks call `gwn_trap()` on overflow (device `asm("trap;")`)
+  rather than silently skipping nodes.
 - Public object-based APIs are plain `noexcept` (no `try`/`catch`); exception translation is done once in the `detail` layer.
 - Topology build uses a shared skeleton in `detail/gwn_bvh_topology_build_impl.cuh`:
   - shared preprocess pass (`gwn_bvh_topology_build_preprocess`) computes scene bounds + Morton + radix sort once;

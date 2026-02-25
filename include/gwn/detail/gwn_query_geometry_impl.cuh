@@ -1,22 +1,14 @@
 #pragma once
 
-#include "../gwn_geometry.cuh"
-
-#if !__has_include(<Eigen/Core>) || !__has_include(<Eigen/Geometry>)
-#error "gwn_query geometry detail requires Eigen/Core and Eigen/Geometry in the include path."
-#endif
-
 #include <cmath>
 #include <cstddef>
 #include <limits>
 
-#include <Eigen/Core>
-#include <Eigen/Geometry>
+#include "../gwn_geometry.cuh"
+#include "gwn_query_vec3_impl.cuh"
 
 namespace gwn {
 namespace detail {
-
-template <gwn_real_type Real> using gwn_query_vec3 = Eigen::Matrix<Real, 3, 1>;
 
 template <gwn_real_type Real>
 __host__ __device__ inline Real gwn_signed_solid_angle_triangle_impl(
@@ -27,9 +19,9 @@ __host__ __device__ inline Real gwn_signed_solid_angle_triangle_impl(
     gwn_query_vec3<Real> qb = b - q;
     gwn_query_vec3<Real> qc = c - q;
 
-    Real const a_length = qa.norm();
-    Real const b_length = qb.norm();
-    Real const c_length = qc.norm();
+    Real const a_length = gwn_query_norm(qa);
+    Real const b_length = gwn_query_norm(qb);
+    Real const c_length = gwn_query_norm(qc);
     if (a_length == Real(0) || b_length == Real(0) || c_length == Real(0))
         return Real(0);
 
@@ -37,11 +29,13 @@ __host__ __device__ inline Real gwn_signed_solid_angle_triangle_impl(
     qb /= b_length;
     qc /= c_length;
 
-    Real const numerator = qa.dot((qb - qa).cross(qc - qa));
+    Real const numerator = gwn_query_dot(qa, gwn_query_cross(qb - qa, qc - qa));
     if (numerator == Real(0))
         return Real(0);
 
-    Real const denominator = Real(1) + qa.dot(qb) + qa.dot(qc) + qb.dot(qc);
+    Real const denominator =
+        Real(1) + gwn_query_dot(qa, qb) + gwn_query_dot(qa, qc) + gwn_query_dot(qb, qc);
+    using std::atan2;
     return Real(2) * atan2(numerator, denominator);
 }
 
@@ -54,45 +48,45 @@ __host__ __device__ inline Real gwn_point_triangle_distance_squared_impl(
     gwn_query_vec3<Real> const ac = c - a;
     gwn_query_vec3<Real> const ap = p - a;
 
-    Real const d1 = ab.dot(ap);
-    Real const d2 = ac.dot(ap);
+    Real const d1 = gwn_query_dot(ab, ap);
+    Real const d2 = gwn_query_dot(ac, ap);
     if (d1 <= Real(0) && d2 <= Real(0))
-        return ap.squaredNorm();
+        return gwn_query_squared_norm(ap);
 
     gwn_query_vec3<Real> const bp = p - b;
-    Real const d3 = ab.dot(bp);
-    Real const d4 = ac.dot(bp);
+    Real const d3 = gwn_query_dot(ab, bp);
+    Real const d4 = gwn_query_dot(ac, bp);
     if (d3 >= Real(0) && d4 <= d3)
-        return bp.squaredNorm();
+        return gwn_query_squared_norm(bp);
 
     Real const vc = d1 * d4 - d3 * d2;
     if (vc <= Real(0) && d1 >= Real(0) && d3 <= Real(0)) {
         Real const v = d1 / (d1 - d3);
-        return (p - (a + v * ab)).squaredNorm();
+        return gwn_query_squared_norm(p - (a + v * ab));
     }
 
     gwn_query_vec3<Real> const cp = p - c;
-    Real const d5 = ab.dot(cp);
-    Real const d6 = ac.dot(cp);
+    Real const d5 = gwn_query_dot(ab, cp);
+    Real const d6 = gwn_query_dot(ac, cp);
     if (d6 >= Real(0) && d5 <= d6)
-        return cp.squaredNorm();
+        return gwn_query_squared_norm(cp);
 
     Real const vb = d5 * d2 - d1 * d6;
     if (vb <= Real(0) && d2 >= Real(0) && d6 <= Real(0)) {
         Real const w = d2 / (d2 - d6);
-        return (p - (a + w * ac)).squaredNorm();
+        return gwn_query_squared_norm(p - (a + w * ac));
     }
 
     Real const va = d3 * d6 - d5 * d4;
     if (va <= Real(0) && (d4 - d3) >= Real(0) && (d5 - d6) >= Real(0)) {
         Real const w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
-        return (p - (b + w * (c - b))).squaredNorm();
+        return gwn_query_squared_norm(p - (b + w * (c - b)));
     }
 
     Real const denom = Real(1) / (va + vb + vc);
     Real const v = vb * denom;
     Real const w = vc * denom;
-    return (p - (a + v * ab + w * ac)).squaredNorm();
+    return gwn_query_squared_norm(p - (a + v * ab + w * ac));
 }
 
 template <gwn_real_type Real, gwn_index_type Index>

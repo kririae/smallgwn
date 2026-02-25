@@ -61,7 +61,7 @@ __device__ inline Real gwn_winding_number_point_bvh_exact_impl(
 
             if (child_kind == gwn_bvh_child_kind::k_internal) {
                 if (stack_size >= StackCapacity)
-                    __trap();
+                    gwn_trap();
                 stack[stack_size++] = node.child_index[child_slot];
                 continue;
             }
@@ -244,7 +244,7 @@ __device__ inline Real gwn_winding_number_point_bvh_taylor_impl(
 
             if (child_kind == gwn_bvh_child_kind::k_internal) {
                 if (stack_size >= StackCapacity)
-                    __trap();
+                    gwn_trap();
                 stack[stack_size++] = node.child_index[child_slot];
                 continue;
             }

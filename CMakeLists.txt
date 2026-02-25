@@ -16,7 +16,6 @@ if(NOT CMAKE_CUDA_ARCHITECTURES)
 endif()
 
 find_package(CUDAToolkit REQUIRED)
-find_package(Eigen3 REQUIRED)
 find_package(TBB REQUIRED)
 
 add_library(smallgwn INTERFACE)
@@ -29,7 +28,7 @@ target_include_directories(smallgwn
 )
 
 target_compile_features(smallgwn INTERFACE cxx_std_20)
-target_link_libraries(smallgwn INTERFACE CUDA::cudart Eigen3::Eigen TBB::tbb)
+target_link_libraries(smallgwn INTERFACE CUDA::cudart TBB::tbb)
 target_compile_options(smallgwn INTERFACE "$<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>")
 
 option(SMALLGWN_BUILD_BENCHMARKS "Build smallgwn benchmark executable" ON)
@@ -50,6 +49,8 @@ if(SMALLGWN_BUILD_TESTS)
 
     find_package(GTest QUIET)
     if(GTest_FOUND)
+        find_package(Eigen3 REQUIRED)
+
         # ---------------------------------------------------------------
         # Common include directories for all test targets.
         # ---------------------------------------------------------------
@@ -64,7 +65,7 @@ if(SMALLGWN_BUILD_TESTS)
         function(smallgwn_add_test TARGET_NAME)
             cmake_parse_arguments(ARG "" "" "SOURCES;EXTRA_SOURCES" ${ARGN})
             add_executable(${TARGET_NAME} ${ARG_SOURCES} ${ARG_EXTRA_SOURCES})
-            target_link_libraries(${TARGET_NAME} PRIVATE gwn::smallgwn GTest::gtest GTest::gtest_main TBB::tbb)
+            target_link_libraries(${TARGET_NAME} PRIVATE gwn::smallgwn Eigen3::Eigen GTest::gtest GTest::gtest_main TBB::tbb)
             target_include_directories(${TARGET_NAME} PRIVATE ${SMALLGWN_TEST_INCLUDE_DIRS})
             add_test(NAME ${TARGET_NAME} COMMAND ${TARGET_NAME})
         endfunction()

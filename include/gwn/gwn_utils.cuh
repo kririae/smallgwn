@@ -40,6 +40,16 @@ public:
 /// \brief Default stream used by API helpers.
 [[nodiscard]] inline cudaStream_t gwn_default_stream() noexcept;
 
+/// \brief Unconditional trap helper for host/device code paths.
+[[noreturn]] __host__ __device__ inline void gwn_trap() noexcept {
+#if defined(__CUDA_ARCH__)
+    asm volatile("trap;");
+    __builtin_unreachable();
+#else
+    __builtin_trap();
+#endif
+}
+
 /// \brief Mixin that binds an object to a CUDA stream.
 ///
 /// \remark This mixin only stores stream state and accessor methods.
@@ -70,8 +80,8 @@ gwn_span_has_storage(cuda::std::span<T const> const span) noexcept {
 
 /// \overload
 template <class T>
-[[nodiscard]] __host__ __device__ constexpr bool gwn_span_has_storage(cuda::std::span<T> const span
-) noexcept {
+[[nodiscard]] __host__ __device__ constexpr bool
+gwn_span_has_storage(cuda::std::span<T> const span) noexcept {
     return span.size() == 0 || span.data() != nullptr;
 }
 
@@ -193,7 +203,8 @@ public:
         std::is_nothrow_invocable_v<Callback &>, "gwn_scope_exit callback must be noexcept."
     );
 
-    explicit gwn_scope_exit(Callback callback
+    explicit gwn_scope_exit(
+        Callback callback
     ) noexcept(std::is_nothrow_move_constructible_v<Callback>)
         : callback_(std::move(callback)) {}
 
@@ -220,8 +231,8 @@ private:
 
 /// \brief Construct a `gwn_scope_exit` with class template argument deduction.
 template <class Callback>
-[[nodiscard]] auto gwn_make_scope_exit(Callback &&callback
-) -> gwn_scope_exit<std::decay_t<Callback>> {
+[[nodiscard]] auto gwn_make_scope_exit(Callback &&callback)
+    -> gwn_scope_exit<std::decay_t<Callback>> {
     return gwn_scope_exit<std::decay_t<Callback>>(std::forward<Callback>(callback));
 }
 

@@ -5,6 +5,8 @@ CompileFlags:
 
   Remove:
     # misc
+    - "--options-file"
+    - "--options-file=*"
     - "--compiler-options*"
     - "--expt-extended-lambda"
     - "--expt-relaxed-constexpr"
@@ -37,15 +39,16 @@ Diagnostics:
   Suppress:
     - "variadic_device_fn"
     - "attributes_not_allowed"
+    - "module_odr_violation_function"
 
 ---
 If:
   PathMatch: .*\.cuh
 CompileFlags:
   Add:
-    - "-std=c++20"
-    - -xcuda
-    - --cuda-gpu-arch=sm_86
+    - "-xcuda"
+    - "--cuda-gpu-arch=sm_86"
+    - "--cuda-host-only"
   Remove:
     - "-fopenmp"
     - "-fopenmp-targets*"
