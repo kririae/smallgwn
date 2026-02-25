@@ -828,6 +828,7 @@ TEST(smallgwn_integration_model, integration_taylor_matches_hdk_cpu_order0_order
     ASSERT_GT(tested_model_count, 0u) << "No valid OBJ models were exercised.";
 }
 
+#if 0  // Exact batch API removed — Taylor-only public surface.
 TEST(smallgwn_integration_model, integration_hploc_exact_and_taylor_consistency_sampled_models) {
     std::vector<std::filesystem::path> const model_paths = gwn::tests::collect_model_paths();
     ASSERT_FALSE(model_paths.empty())
@@ -955,5 +956,6 @@ TEST(smallgwn_integration_model, integration_hploc_exact_and_taylor_consistency_
 
     ASSERT_GT(tested_model_count, 0u) << "No valid OBJ models were exercised.";
 }
+#endif // Exact batch API removed
 
 } // namespace

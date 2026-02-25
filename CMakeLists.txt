@@ -79,10 +79,16 @@ if(SMALLGWN_BUILD_TESTS)
         smallgwn_add_test(smallgwn_unit_bvh_topology   SOURCES tests/unit_bvh_topology.cu)
         smallgwn_add_test(smallgwn_unit_uint64_compile SOURCES tests/unit_uint64_compile.cu)
         smallgwn_add_test(smallgwn_unit_bvh_taylor     SOURCES tests/unit_bvh_taylor.cu)
-
-        smallgwn_add_test(smallgwn_unit_winding_exact  SOURCES tests/unit_winding_exact.cu
-            EXTRA_SOURCES tests/reference_hdk/UT_Array.cpp tests/reference_hdk/UT_SolidAngle.cpp)
         smallgwn_add_test(smallgwn_unit_winding_taylor SOURCES tests/unit_winding_taylor.cu)
+
+        # SDF tests (libigl parity).
+        find_package(libigl QUIET HINTS /usr/lib/cmake/igl)
+        if(libigl_FOUND)
+            smallgwn_add_test(smallgwn_unit_sdf SOURCES tests/unit_sdf.cu EXTRA_SOURCES tests/libigl_reference.cpp)
+            target_link_libraries(smallgwn_unit_sdf PRIVATE igl::igl_core)
+        else()
+            message(STATUS "libigl not found; SDF parity tests are skipped.")
+        endif()
 
         # ---------------------------------------------------------------
         # Integration tests.
