@@ -143,18 +143,12 @@ __device__ inline Real gwn_winding_number_point_bvh_taylor_impl(
 
     if (!geometry.is_valid() || !bvh.is_valid())
         return Real(0);
-    if (!data_tree.is_valid_for(bvh) || !data_tree.template has_taylor_order<Order>()) {
-        return gwn_winding_number_point_bvh_exact_impl<Width, Real, Index, StackCapacity>(
-            geometry, bvh, qx, qy, qz
-        );
-    }
+    if (!data_tree.is_valid_for(bvh) || !data_tree.template has_taylor_order<Order>())
+        return Real(0);
 
     auto const taylor_nodes = gwn_get_taylor_nodes_impl<Order, Width, Real, Index>(data_tree);
-    if (taylor_nodes.size() != bvh.nodes.size()) {
-        return gwn_winding_number_point_bvh_exact_impl<Width, Real, Index, StackCapacity>(
-            geometry, bvh, qx, qy, qz
-        );
-    }
+    if (taylor_nodes.size() != bvh.nodes.size())
+        return Real(0);
 
     constexpr Real k_pi = Real(3.141592653589793238462643383279502884L);
     Index stack[StackCapacity];

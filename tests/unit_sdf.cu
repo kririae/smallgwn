@@ -82,23 +82,26 @@ template <int Width, typename RealT, typename IndexT>
 __global__ void kernel_signed_distance(
     gwn::gwn_geometry_accessor<RealT, IndexT> geometry,
     gwn::gwn_bvh_topology_accessor<Width, RealT, IndexT> bvh,
-    gwn::gwn_bvh_aabb_accessor<Width, RealT, IndexT> aabb_tree, RealT const *qx, RealT const *qy,
-    RealT const *qz, RealT *output, std::size_t count, RealT winding_number_threshold,
-    RealT culling_band
+    gwn::gwn_bvh_aabb_accessor<Width, RealT, IndexT> aabb_tree,
+    gwn::gwn_bvh_moment_tree_accessor<Width, RealT, IndexT> data_tree, RealT const *qx,
+    RealT const *qy, RealT const *qz, RealT *output, std::size_t count,
+    RealT winding_number_threshold, RealT culling_band
 ) {
     std::size_t const idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= count)
         return;
-    output[idx] = gwn::gwn_signed_distance_point_bvh<Width, RealT, IndexT, 128>(
-        geometry, bvh, aabb_tree, qx[idx], qy[idx], qz[idx], winding_number_threshold, culling_band
+    output[idx] = gwn::gwn_signed_distance_point_bvh<1, Width, RealT, IndexT, 128>(
+        geometry, bvh, aabb_tree, data_tree, qx[idx], qy[idx], qz[idx], winding_number_threshold,
+        culling_band
     );
 }
 
-// Helper: upload octahedron and build BVH topology + AABB.
+// Helper: upload octahedron and build BVH topology + AABB + order-1 moments.
 struct SdfTestContext {
     gwn::gwn_geometry_object<Real, Index> geometry;
     gwn::gwn_bvh_object<Real, Index> bvh;
     gwn::gwn_bvh_aabb_object<Real, Index> aabb;
+    gwn::gwn_bvh_moment_object<Real, Index> data;
 
     bool ready = false;
 };
@@ -116,8 +119,8 @@ void setup_octahedron_sdf(SdfTestContext &ctx, OctahedronMesh const &mesh) {
         return;
 
     gwn::gwn_status const build_status =
-        gwn::gwn_bvh_facade_build_topology_aabb_lbvh<4, Real, Index>(
-            ctx.geometry, ctx.bvh, ctx.aabb
+        gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<1, 4, Real, Index>(
+            ctx.geometry, ctx.bvh, ctx.aabb, ctx.data
         );
     if (!build_status.is_ok())
         return;
@@ -176,9 +179,9 @@ void gpu_signed_distance(
     int const block_size = 128;
     int const grid_size = static_cast<int>((n + block_size - 1) / block_size);
     kernel_signed_distance<4, Real, Index><<<grid_size, block_size>>>(
-        ctx.geometry.accessor(), ctx.bvh.accessor(), ctx.aabb.accessor(), d_qx.span().data(),
-        d_qy.span().data(), d_qz.span().data(), d_out.span().data(), n, winding_number_threshold,
-        culling_band
+        ctx.geometry.accessor(), ctx.bvh.accessor(), ctx.aabb.accessor(), ctx.data.accessor(),
+        d_qx.span().data(), d_qy.span().data(), d_qz.span().data(), d_out.span().data(), n,
+        winding_number_threshold, culling_band
     );
     ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
     ASSERT_TRUE(d_out.copy_to_host(cuda::std::span<Real>(results.data(), results.size())).is_ok());
@@ -709,9 +712,11 @@ TEST_F(CudaFixture, model_signed_distance_vs_libigl) {
 
     gwn::gwn_bvh_object<Real, Index> bvh;
     gwn::gwn_bvh_aabb_object<Real, Index> aabb;
-    ASSERT_TRUE(
-        (gwn::gwn_bvh_facade_build_topology_aabb_lbvh<4, Real, Index>(geometry, bvh, aabb)).is_ok()
-    );
+    gwn::gwn_bvh_moment_object<Real, Index> data;
+    ASSERT_TRUE((gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<1, 4, Real, Index>(
+                     geometry, bvh, aabb, data
+    ))
+                    .is_ok());
 
     // Scene bounds.
     Real min_x = host_mesh.vertex_x[0], max_x = host_mesh.vertex_x[0];
@@ -759,7 +764,7 @@ TEST_F(CudaFixture, model_signed_distance_vs_libigl) {
     int const block_size = 128;
     int const grid_size = static_cast<int>((n + block_size - 1) / block_size);
     kernel_signed_distance<4, Real, Index><<<grid_size, block_size>>>(
-        geometry.accessor(), bvh.accessor(), aabb.accessor(), d_qx.span().data(),
+        geometry.accessor(), bvh.accessor(), aabb.accessor(), data.accessor(), d_qx.span().data(),
         d_qy.span().data(), d_qz.span().data(), d_out.span().data(), n, Real(0.5),
         std::numeric_limits<Real>::infinity()
     );

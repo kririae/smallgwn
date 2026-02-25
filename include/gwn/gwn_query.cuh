@@ -52,25 +52,36 @@ __device__ inline Real gwn_unsigned_distance_point_bvh(
 }
 
 /// \brief Compute the signed distance from a query point to the mesh using
-///        BVH-accelerated traversal.
+///        BVH-accelerated traversal and Taylor winding-number sign inference.
 ///
-/// \param winding_number_threshold Inside/outside threshold applied to exact
+/// \tparam Order Taylor winding-number order (currently 0 or 1).
+/// \param data_tree Taylor moment payload tree aligned to \p bvh.
+/// \param winding_number_threshold Inside/outside threshold applied to Taylor
 ///        winding number (default: \c 0.5).
 /// \param culling_band World-unit narrow-band distance cap. Distances larger
 ///        than this value are clamped to this value before applying sign. Use
 ///        \c +infinity to disable culling (default).
+/// \param accuracy_scale Taylor far-field acceptance scale (default: \c 2).
 template <
-    int Width, gwn_real_type Real, gwn_index_type Index,
+    int Order, int Width, gwn_real_type Real, gwn_index_type Index,
     int StackCapacity = k_gwn_default_traversal_stack_capacity>
 __device__ inline Real gwn_signed_distance_point_bvh(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
-    gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree, Real const qx, Real const qy,
-    Real const qz, Real const winding_number_threshold = Real(0.5),
-    Real const culling_band = std::numeric_limits<Real>::infinity()
+    gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree,
+    gwn_bvh_moment_tree_accessor<Width, Real, Index> const &data_tree, Real const qx,
+    Real const qy, Real const qz, Real const winding_number_threshold = Real(0.5),
+    Real const culling_band = std::numeric_limits<Real>::infinity(),
+    Real const accuracy_scale = Real(2)
 ) noexcept {
-    return detail::gwn_signed_distance_point_bvh_impl<Width, Real, Index, StackCapacity>(
-        geometry, bvh, aabb_tree, qx, qy, qz, winding_number_threshold, culling_band
+    static_assert(
+        Order == 0 || Order == 1,
+        "gwn_signed_distance_point_bvh currently supports Order 0 and Order 1."
+    );
+
+    return detail::gwn_signed_distance_point_bvh_impl<Order, Width, Real, Index, StackCapacity>(
+        geometry, bvh, aabb_tree, data_tree, qx, qy, qz, winding_number_threshold, culling_band,
+        accuracy_scale
     );
 }
 

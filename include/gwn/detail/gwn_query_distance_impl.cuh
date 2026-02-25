@@ -218,19 +218,29 @@ __device__ inline Real gwn_unsigned_distance_point_bvh_impl(
     return sqrt(best_dist2);
 }
 
-template <int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity>
+template <int Order, int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity>
 __device__ inline Real gwn_signed_distance_point_bvh_impl(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
-    gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree, Real const qx, Real const qy,
-    Real const qz, Real const winding_number_threshold, Real const culling_band
+    gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree,
+    gwn_bvh_moment_tree_accessor<Width, Real, Index> const &data_tree, Real const qx,
+    Real const qy, Real const qz, Real const winding_number_threshold, Real const culling_band,
+    Real const accuracy_scale
 ) noexcept {
+    static_assert(
+        Order == 0 || Order == 1,
+        "gwn_signed_distance_point_bvh_impl currently supports Order 0 and Order 1."
+    );
+
     Real const dist = gwn_unsigned_distance_point_bvh_impl<Width, Real, Index, StackCapacity>(
         geometry, bvh, aabb_tree, qx, qy, qz, culling_band
     );
-    Real const wn = gwn_winding_number_point_bvh_exact_impl<Width, Real, Index, StackCapacity>(
-        geometry, bvh, qx, qy, qz
-    );
+    Real wn = Real(0);
+    if (data_tree.is_valid_for(bvh) && data_tree.template has_taylor_order<Order>()) {
+        wn = gwn_winding_number_point_bvh_taylor_impl<Order, Width, Real, Index, StackCapacity>(
+            geometry, bvh, data_tree, qx, qy, qz, accuracy_scale
+        );
+    }
     return wn >= winding_number_threshold ? -dist : dist;
 }
 
