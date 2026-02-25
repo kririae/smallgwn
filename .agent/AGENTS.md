@@ -191,4 +191,6 @@ These instructions apply to the `smallgwn/` project tree.
 
 ## Git & Maintenance Rules
 - Use Conventional Commits (`feat:`, `fix:`, `refactor:`, `test:`, etc.).
+- For large or high-risk changes, proactively decide whether to use a dedicated `git worktree`
+  to isolate the effort from ongoing branch changes.
 - **AGENTS Maintenance**: Keep this file current with architecture/API/testing changes. When behavior, naming, file layout, stream/memory semantics, or test entrypoints change, update this `AGENTS.md` in the same commit. Re-check and refresh periodically rather than batching stale updates.
