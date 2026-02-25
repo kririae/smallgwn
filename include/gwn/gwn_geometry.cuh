@@ -147,8 +147,9 @@ public:
     void clear() noexcept { detail::gwn_release_accessor(accessor_, stream()); }
 
     void clear(cudaStream_t const clear_stream) noexcept {
+        cudaStream_t const release_stream = stream();
+        detail::gwn_release_accessor(accessor_, release_stream);
         set_stream(clear_stream);
-        detail::gwn_release_accessor(accessor_, stream());
     }
 
     [[nodiscard]] accessor_type const &accessor() const noexcept { return accessor_; }
