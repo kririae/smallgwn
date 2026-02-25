@@ -38,13 +38,13 @@ TEST_F(CudaStreamFixture, resize_allocates_and_binds_stream) {
     EXPECT_FALSE(buffer.empty());
 }
 
-TEST_F(CudaStreamFixture, resize_same_size_rebinds_stream) {
+TEST_F(CudaStreamFixture, resize_same_size_preserves_stream) {
     gwn::gwn_device_array<float> buffer;
     ASSERT_TRUE(buffer.resize(32, stream_a_).is_ok());
     EXPECT_EQ(buffer.stream(), stream_a_);
 
     ASSERT_TRUE(buffer.resize(32, stream_b_).is_ok());
-    EXPECT_EQ(buffer.stream(), stream_b_);
+    EXPECT_EQ(buffer.stream(), stream_a_);
     EXPECT_EQ(buffer.size(), 32u);
 }
 
