@@ -105,7 +105,7 @@ These instructions apply to the `smallgwn/` project tree.
   - Exact: `gwn_compute_winding_number_batch_bvh_exact`
   - Taylor: `gwn_compute_winding_number_batch_bvh_taylor<Order,...>`
   - Traversal stack capacity is template-configurable via `StackCapacity` (default:
-    `k_gwn_default_traversal_stack_capacity = 32`).
+    `k_gwn_default_traversal_stack_capacity = 64`).
 
 ## Error Handling Rules
 - Prefer internal C++ exceptions only inside implementation details; public APIs should return `gwn_status` error codes.

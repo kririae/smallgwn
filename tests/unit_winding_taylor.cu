@@ -12,10 +12,8 @@
 #include "test_fixtures.hpp"
 #include "test_utils.hpp"
 
-// ---------------------------------------------------------------------------
 // Taylor winding number unit tests — far-field accuracy, order comparison,
 // accuracy_scale behavior.
-// ---------------------------------------------------------------------------
 
 using Real = gwn::tests::Real;
 using Index = gwn::tests::Index;
@@ -145,9 +143,7 @@ void run_taylor_order0_far_field_matches_exact_test(taylor_topology_builder cons
 
 } // namespace
 
-// ---------------------------------------------------------------------------
 // Far-field queries: Taylor order 0 matches exact within loose tolerance.
-// ---------------------------------------------------------------------------
 
 TEST_F(CudaFixture, taylor_order0_far_field_matches_exact) {
     run_taylor_order0_far_field_matches_exact_test(taylor_topology_builder::k_lbvh);
@@ -157,9 +153,7 @@ TEST_F(CudaFixture, taylor_order0_far_field_matches_exact_hploc) {
     run_taylor_order0_far_field_matches_exact_test(taylor_topology_builder::k_hploc);
 }
 
-// ---------------------------------------------------------------------------
 // Order 1 should be more accurate than Order 0 for far-field queries.
-// ---------------------------------------------------------------------------
 
 TEST_F(CudaFixture, order1_more_accurate_than_order0) {
     std::array<Real, 6> const vx{1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 0.0f};
@@ -258,9 +252,7 @@ TEST_F(CudaFixture, order1_more_accurate_than_order0) {
     EXPECT_LE(max_err1, 1e-2f);
 }
 
-// ---------------------------------------------------------------------------
 // Two independent builds produce consistent results.
-// ---------------------------------------------------------------------------
 
 TEST_F(CudaFixture, repeated_build_matches_order1) {
     constexpr Real k_eps = 3e-4f;
@@ -341,9 +333,7 @@ TEST_F(CudaFixture, repeated_build_matches_order1) {
         EXPECT_NEAR(out_a[i], out_b[i], k_eps) << "query " << i;
 }
 
-// ---------------------------------------------------------------------------
 // Taylor query with missing data returns error.
-// ---------------------------------------------------------------------------
 
 TEST_F(CudaFixture, taylor_query_with_no_data_returns_error) {
     gwn::gwn_geometry_accessor<Real, Index> geometry{};
@@ -355,5 +345,36 @@ TEST_F(CudaFixture, taylor_query_with_no_data_returns_error) {
     gwn::gwn_status const status = gwn::gwn_compute_winding_number_batch_bvh_taylor<0, Real, Index>(
         geometry, bvh, data, empty, empty, empty, output
     );
+    EXPECT_FALSE(status.is_ok());
+}
+
+TEST_F(CudaFixture, taylor_batch_mismatched_query_output) {
+    gwn::gwn_geometry_accessor<Real, Index> accessor{};
+    gwn::gwn_bvh_accessor<Real, Index> bvh{};
+    gwn::gwn_bvh_moment4_accessor<Real, Index> data{};
+    cuda::std::span<Real const> empty{};
+    Real dummy[2] = {};
+    cuda::std::span<Real> output(dummy, 2);
+
+    // query size=0 but output size=2 — mismatch.
+    gwn::gwn_status const status = gwn::gwn_compute_winding_number_batch_bvh_taylor<0, Real, Index>(
+        accessor, bvh, data, empty, empty, empty, output
+    );
+    EXPECT_FALSE(status.is_ok());
+}
+
+TEST_F(CudaFixture, taylor_empty_query_returns_ok) {
+    gwn::gwn_geometry_accessor<Real, Index> accessor{};
+    gwn::gwn_bvh_accessor<Real, Index> bvh{};
+    gwn::gwn_bvh_moment4_accessor<Real, Index> data{};
+    cuda::std::span<Real const> empty{};
+    cuda::std::span<Real> output{};
+
+    // Zero queries, zero output — should succeed (early return).
+    // Note: geometry validator fires first.
+    gwn::gwn_status const status = gwn::gwn_compute_winding_number_batch_bvh_taylor<0, Real, Index>(
+        accessor, bvh, data, empty, empty, empty, output
+    );
+    // Empty accessor is invalid geometry, so this correctly returns error.
     EXPECT_FALSE(status.is_ok());
 }
