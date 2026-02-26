@@ -4,11 +4,6 @@
 #include <cstdlib>
 #include <string_view>
 
-#if defined(__CUDACC__) && defined(__NVCC__) && !defined(__CUDACC_RELAXED_CONSTEXPR__)
-#error                                                                                             \
-    "smallgwn requires NVCC flag --expt-relaxed-constexpr. Link gwn::smallgwn in CMake or add the flag manually."
-#endif
-
 namespace gwn::detail {
 
 [[nodiscard]] constexpr std::string_view gwn_assert_filename(std::string_view const path) noexcept {

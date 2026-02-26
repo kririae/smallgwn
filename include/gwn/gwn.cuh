@@ -1,5 +1,10 @@
 #pragma once
 
+#if defined(__CUDACC__) && defined(__NVCC__) && !defined(__CUDACC_RELAXED_CONSTEXPR__)
+#error                                                                                             \
+    "smallgwn requires NVCC flag --expt-relaxed-constexpr. Link gwn::smallgwn in CMake or add the flag manually."
+#endif
+
 #include "gwn_assert.cuh"
 #include "gwn_bvh.cuh"
 #include "gwn_bvh_facade.cuh"

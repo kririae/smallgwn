@@ -41,7 +41,6 @@ template <gwn_real_type Real, gwn_index_type Index = std::uint32_t> struct gwn_g
 };
 
 namespace detail {
-
 template <class... Spans>
 void gwn_release_spans(cudaStream_t const stream, Spans &...spans) noexcept {
     (gwn_free_span(spans, stream), ...);
@@ -162,5 +161,4 @@ public:
 private:
     accessor_type accessor_{};
 };
-
 } // namespace gwn
