@@ -555,6 +555,10 @@ void check_threshold(
     return run_matrix_profile(2u, 200'000u, 1);
 }
 
+[[nodiscard]] MatrixSummary run_heavy_profile() {
+    return run_matrix_profile(0u, 2'000'000u, 2);
+}
+
 TEST(smallgwn_integration_taylor_matrix, light_order1_width_index_builder_matrix) {
     SMALLGWN_SKIP_IF_NO_CUDA();
     MatrixSummary const summary = run_light_profile();
@@ -570,6 +574,19 @@ TEST(smallgwn_integration_taylor_matrix, light_order1_width_index_builder_matrix
     EXPECT_TRUE(summary.seen_width_8);
     EXPECT_TRUE(summary.seen_index_u32);
     EXPECT_TRUE(summary.seen_index_u64);
+}
+
+TEST(smallgwn_integration_taylor_matrix, heavy_order1_order2_width_index_builder_matrix) {
+    SMALLGWN_SKIP_IF_NO_CUDA();
+    MatrixSummary const summary = run_heavy_profile();
+
+    EXPECT_TRUE(summary.failures.empty()) << join_failures(summary.failures);
+    EXPECT_GT(summary.tested_model_count, 0u) << "No valid OBJ models were exercised.";
+    EXPECT_TRUE(summary.seen_order_1);
+    EXPECT_TRUE(summary.seen_order_2);
+    EXPECT_EQ(summary.width_count, 4u);
+    EXPECT_EQ(summary.index_count, 2u);
+    EXPECT_EQ(summary.combo_count_per_order, 16u);
 }
 
 } // namespace
