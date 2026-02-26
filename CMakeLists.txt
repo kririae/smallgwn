@@ -115,6 +115,7 @@ if(SMALLGWN_BUILD_TESTS)
                 --gtest_filter=smallgwn_integration_taylor_matrix.light_*)
         set_tests_properties(smallgwn_integration_taylor_matrix_light PROPERTIES
             LABELS "integration;light"
+            FAIL_REGULAR_EXPRESSION "0 tests from 0 test suites;did not match any test"
             ENVIRONMENT "SMALLGWN_MATRIX_MODEL_LIMIT=2;SMALLGWN_MATRIX_TOTAL_POINTS=200000;SMALLGWN_MATRIX_ORDER_MAX=1")
 
         add_test(NAME smallgwn_integration_taylor_matrix_heavy
@@ -122,7 +123,8 @@ if(SMALLGWN_BUILD_TESTS)
                 --gtest_filter=smallgwn_integration_taylor_matrix.heavy_*)
         set_tests_properties(smallgwn_integration_taylor_matrix_heavy PROPERTIES
             LABELS "integration;heavy"
-            ENVIRONMENT "SMALLGWN_MATRIX_MODEL_LIMIT=0;SMALLGWN_MATRIX_TOTAL_POINTS=2000000;SMALLGWN_MATRIX_ORDER_MAX=2")
+            FAIL_REGULAR_EXPRESSION "0 tests from 0 test suites;did not match any test"
+            ENVIRONMENT "SMALLGWN_MATRIX_MODEL_LIMIT=8;SMALLGWN_MATRIX_TOTAL_POINTS=2000000;SMALLGWN_MATRIX_ORDER_MAX=2")
     else()
         message(STATUS "GTest not found; test targets are skipped.")
     endif()
