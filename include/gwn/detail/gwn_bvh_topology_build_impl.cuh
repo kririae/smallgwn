@@ -53,9 +53,11 @@ gwn_status gwn_bvh_topology_build_from_binary_impl(
 
             gwn_device_array<gwn_binary_node<Index>> binary_nodes{};
             gwn_device_array<Index> binary_internal_parent{};
+            gwn_device_array<gwn_aabb<Real>> binary_internal_bounds{};
             Index root_internal_index = gwn_invalid_index<Index>();
             GWN_RETURN_ON_ERROR(build_binary_fn(
-                preprocess, binary_nodes, binary_internal_parent, root_internal_index
+                preprocess, binary_nodes, binary_internal_parent, binary_internal_bounds,
+                root_internal_index
             ));
 
             if (preprocess.sorted_primitive_indices.size() != primitive_count) {
@@ -88,14 +90,14 @@ gwn_status gwn_bvh_topology_build_from_binary_impl(
                     "Topology build binary stage produced an invalid root index."
                 );
 
-            GWN_RETURN_ON_ERROR((gwn_bvh_topology_build_collapse_binary_lbvh<Width, Real, Index>(
+            GWN_RETURN_ON_ERROR((gwn_bvh_topology_build_collapse_binary_wide<Width, Real, Index>(
                 cuda::std::span<gwn_binary_node<Index> const>(
                     binary_nodes.data(), binary_nodes.size()
                 ),
-                cuda::std::span<Index const>(
-                    binary_internal_parent.data(), binary_internal_parent.size()
+                cuda::std::span<gwn_aabb<Real> const>(
+                    binary_internal_bounds.data(), binary_internal_bounds.size()
                 ),
-                staging_topology, root_internal_index, stream
+                primitive_count, staging_topology, root_internal_index, stream
             )));
 
             staging_topology.root_kind = gwn_bvh_child_kind::k_internal;
@@ -121,12 +123,16 @@ gwn_status gwn_bvh_topology_build_lbvh_impl(
         [&](gwn_topology_build_preprocess<Real, Index, MortonCode> const &preprocess,
             gwn_device_array<gwn_binary_node<Index>> &binary_nodes,
             gwn_device_array<Index> &binary_internal_parent,
+            gwn_device_array<gwn_aabb<Real>> &binary_internal_bounds,
             Index &root_internal_index) -> gwn_status {
-        GWN_RETURN_ON_ERROR((gwn_bvh_topology_build_binary_lbvh<Index, MortonCode>(
+        GWN_RETURN_ON_ERROR((gwn_bvh_topology_build_binary_lbvh<Real, Index, MortonCode>(
             cuda::std::span<MortonCode const>(
                 preprocess.sorted_morton_codes.data(), preprocess.sorted_morton_codes.size()
             ),
-            binary_nodes, binary_internal_parent, stream
+            cuda::std::span<gwn_aabb<Real> const>(
+                preprocess.sorted_primitive_aabbs.data(), preprocess.sorted_primitive_aabbs.size()
+            ),
+            binary_nodes, binary_internal_parent, binary_internal_bounds, stream
         )));
         if (preprocess.sorted_morton_codes.size() > 1)
             root_internal_index = Index(0);
@@ -147,6 +153,7 @@ gwn_status gwn_bvh_topology_build_hploc_impl(
         [&](gwn_topology_build_preprocess<Real, Index, MortonCode> const &preprocess,
             gwn_device_array<gwn_binary_node<Index>> &binary_nodes,
             gwn_device_array<Index> &binary_internal_parent,
+            gwn_device_array<gwn_aabb<Real>> &binary_internal_bounds,
             Index &root_internal_index) -> gwn_status {
         return gwn_bvh_topology_build_binary_hploc<Real, Index, MortonCode>(
             cuda::std::span<Index const>(
@@ -157,9 +164,9 @@ gwn_status gwn_bvh_topology_build_hploc_impl(
                 preprocess.sorted_morton_codes.data(), preprocess.sorted_morton_codes.size()
             ),
             cuda::std::span<gwn_aabb<Real> const>(
-                preprocess.primitive_aabbs.data(), preprocess.primitive_aabbs.size()
+                preprocess.sorted_primitive_aabbs.data(), preprocess.sorted_primitive_aabbs.size()
             ),
-            binary_nodes, binary_internal_parent, root_internal_index, stream
+            binary_nodes, binary_internal_parent, binary_internal_bounds, root_internal_index, stream
         );
     },
         stream

@@ -235,6 +235,7 @@ struct gwn_topology_build_preprocess {
     gwn_device_array<Index> sorted_primitive_indices{};
     gwn_device_array<MortonCode> sorted_morton_codes{};
     gwn_device_array<gwn_aabb<Real>> primitive_aabbs{};
+    gwn_device_array<gwn_aabb<Real>> sorted_primitive_aabbs{};
 };
 
 template <gwn_real_type Real, gwn_index_type Index>
@@ -286,7 +287,8 @@ gwn_status gwn_compute_and_sort_morton(
     gwn_geometry_accessor<Real, Index> const &geometry, gwn_scene_aabb<Real> const &scene,
     gwn_device_array<Index> &sorted_primitive_indices,
     gwn_device_array<MortonCode> &sorted_morton_codes,
-    gwn_device_array<gwn_aabb<Real>> &primitive_aabbs, cudaStream_t const stream
+    gwn_device_array<gwn_aabb<Real>> &primitive_aabbs,
+    gwn_device_array<gwn_aabb<Real>> &sorted_primitive_aabbs, cudaStream_t const stream
 ) noexcept {
     static_assert(
         std::is_same_v<MortonCode, std::uint32_t> || std::is_same_v<MortonCode, std::uint64_t>,
@@ -339,6 +341,21 @@ gwn_status gwn_compute_and_sort_morton(
         )
     ));
 
+    GWN_RETURN_ON_ERROR(sorted_primitive_aabbs.resize(primitive_count, stream));
+    GWN_RETURN_ON_ERROR(
+        gwn_launch_linear_kernel<k_block_size>(
+            primitive_count,
+            gwn_gather_sorted_aabbs_functor<Real, Index>{
+                primitive_aabbs_span,
+                cuda::std::span<Index const>(
+                    sorted_primitive_indices.data(), sorted_primitive_indices.size()
+                ),
+                sorted_primitive_aabbs.span()
+            },
+            stream
+        )
+    );
+
     return gwn_status::ok();
 }
 
@@ -351,7 +368,7 @@ gwn_status gwn_bvh_topology_build_preprocess(
     GWN_RETURN_ON_ERROR(gwn_compute_scene_aabb(geometry, scene, stream));
     return gwn_compute_and_sort_morton<MortonCode>(
         geometry, scene, preprocess.sorted_primitive_indices, preprocess.sorted_morton_codes,
-        preprocess.primitive_aabbs, stream
+        preprocess.primitive_aabbs, preprocess.sorted_primitive_aabbs, stream
     );
 }
 

@@ -210,6 +210,26 @@ TEST_F(CudaFixture, wide8_bvh_build) {
     verify_bvh_structure<8>(bvh8.accessor(), 8);
 }
 
+TEST_F(CudaFixture, wide6_bvh_build) {
+    std::vector<Real> vx{1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+    std::vector<Real> vy{0.0f, 0.0f, 1.0f, -1.0f, 0.0f, 0.0f};
+    std::vector<Real> vz{0.0f, 0.0f, 0.0f, 0.0f, 1.0f, -1.0f};
+    std::vector<Index> i0{0, 2, 1, 3, 2, 1, 3, 0};
+    std::vector<Index> i1{2, 1, 3, 0, 0, 2, 1, 3};
+    std::vector<Index> i2{4, 4, 4, 4, 5, 5, 5, 5};
+
+    auto maybe_geo = upload_mesh(vx, vy, vz, i0, i1, i2);
+    if (!maybe_geo.has_value())
+        GTEST_SKIP() << "CUDA unavailable";
+    auto &geometry = *maybe_geo;
+
+    gwn::gwn_bvh_topology_object<6, Real, Index> bvh6;
+    gwn::gwn_status const status = gwn::gwn_bvh_topology_build_lbvh<6, Real, Index>(geometry, bvh6);
+    ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
+    ASSERT_TRUE(bvh6.has_data());
+    verify_bvh_structure<6>(bvh6.accessor(), 8);
+}
+
 // ---------------------------------------------------------------------------
 // Degenerate: all-coplanar triangles (zero-thickness BVH).
 // ---------------------------------------------------------------------------
@@ -393,6 +413,26 @@ TEST_F(CudaFixture, hploc_wide8_bvh_build) {
     ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
     ASSERT_TRUE(bvh8.has_data());
     verify_bvh_structure<8>(bvh8.accessor(), 8);
+}
+
+TEST_F(CudaFixture, hploc_wide6_bvh_build) {
+    std::vector<Real> vx{1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+    std::vector<Real> vy{0.0f, 0.0f, 1.0f, -1.0f, 0.0f, 0.0f};
+    std::vector<Real> vz{0.0f, 0.0f, 0.0f, 0.0f, 1.0f, -1.0f};
+    std::vector<Index> i0{0, 2, 1, 3, 2, 1, 3, 0};
+    std::vector<Index> i1{2, 1, 3, 0, 0, 2, 1, 3};
+    std::vector<Index> i2{4, 4, 4, 4, 5, 5, 5, 5};
+
+    auto maybe_geo = upload_mesh(vx, vy, vz, i0, i1, i2);
+    if (!maybe_geo.has_value())
+        GTEST_SKIP() << "CUDA unavailable";
+    auto &geometry = *maybe_geo;
+
+    gwn::gwn_bvh_topology_object<6, Real, Index> bvh6;
+    gwn::gwn_status const status = build_topology<6>(bvh_topology_builder::k_hploc, geometry, bvh6);
+    ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
+    ASSERT_TRUE(bvh6.has_data());
+    verify_bvh_structure<6>(bvh6.accessor(), 8);
 }
 
 TEST_F(CudaFixture, hploc_repeated_centroid_triangles_morton32) {

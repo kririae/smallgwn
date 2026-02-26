@@ -148,6 +148,7 @@ template <gwn_real_type Real, gwn_index_type Index, class NodeIndex>
 struct gwn_hploc_emit_binary_nodes_functor {
     cuda::std::span<gwn_hploc_node<Real, NodeIndex> const> full_nodes{};
     cuda::std::span<gwn_binary_node<Index>> binary_nodes{};
+    cuda::std::span<gwn_aabb<Real>> binary_internal_bounds{};
     cuda::std::span<Index> internal_parent{};
     cuda::std::span<std::uint8_t> internal_parent_slot{};
     cuda::std::span<Index> leaf_parent{};
@@ -186,6 +187,8 @@ struct gwn_hploc_emit_binary_nodes_functor {
         node.right.kind = right_kind;
         node.right.index = right_index;
         binary_nodes[internal_id_u] = node;
+        if (internal_id_u < binary_internal_bounds.size())
+            binary_internal_bounds[internal_id_u] = full_node.bounds;
 
         auto const parent_index = static_cast<Index>(internal_id_u);
         if (left_kind == static_cast<std::uint8_t>(gwn_bvh_child_kind::k_internal)) {
@@ -514,9 +517,10 @@ template <gwn_real_type Real, gwn_index_type Index, class MortonCode = std::uint
 gwn_status gwn_bvh_topology_build_binary_hploc(
     cuda::std::span<Index const> const sorted_primitive_indices,
     cuda::std::span<MortonCode const> const sorted_morton_codes,
-    cuda::std::span<gwn_aabb<Real> const> const primitive_aabbs,
+    cuda::std::span<gwn_aabb<Real> const> const sorted_primitive_aabbs,
     gwn_device_array<gwn_binary_node<Index>> &binary_nodes,
-    gwn_device_array<Index> &binary_internal_parent, Index &root_internal_index,
+    gwn_device_array<Index> &binary_internal_parent,
+    gwn_device_array<gwn_aabb<Real>> &binary_internal_bounds, Index &root_internal_index,
     cudaStream_t const stream = gwn_default_stream()
 ) {
     static_assert(
@@ -533,9 +537,11 @@ gwn_status gwn_bvh_topology_build_binary_hploc(
     if (primitive_count == 0) {
         GWN_RETURN_ON_ERROR(binary_nodes.clear(stream));
         GWN_RETURN_ON_ERROR(binary_internal_parent.clear(stream));
+        GWN_RETURN_ON_ERROR(binary_internal_bounds.clear(stream));
         return gwn_status::ok();
     }
-    if (sorted_morton_codes.size() != primitive_count || primitive_aabbs.size() != primitive_count)
+    if (sorted_morton_codes.size() != primitive_count ||
+        sorted_primitive_aabbs.size() != primitive_count)
         return gwn_bvh_internal_error(
             k_gwn_bvh_phase_topology_binary_hploc, "H-PLOC preprocess buffer size mismatch."
         );
@@ -555,21 +561,11 @@ gwn_status gwn_bvh_topology_build_binary_hploc(
     auto const primitive_count_node_index = static_cast<NodeIndex>(primitive_count);
 
     constexpr int k_linear_block_size = k_gwn_default_block_size;
-    gwn_device_array<gwn_aabb<Real>> sorted_leaf_aabbs{};
-    GWN_RETURN_ON_ERROR(sorted_leaf_aabbs.resize(primitive_count, stream));
-    GWN_RETURN_ON_ERROR(
-        gwn_launch_linear_kernel<k_linear_block_size>(
-            primitive_count,
-            gwn_gather_sorted_aabbs_functor<Real, Index>{
-                primitive_aabbs, sorted_primitive_indices, sorted_leaf_aabbs.span()
-            },
-            stream
-        )
-    );
 
     if (primitive_count == 1) {
         GWN_RETURN_ON_ERROR(binary_nodes.clear(stream));
         GWN_RETURN_ON_ERROR(binary_internal_parent.clear(stream));
+        GWN_RETURN_ON_ERROR(binary_internal_bounds.clear(stream));
         return gwn_status::ok();
     }
 
@@ -578,6 +574,7 @@ gwn_status gwn_bvh_topology_build_binary_hploc(
     GWN_RETURN_ON_ERROR(gwn_prepare_binary_topology_buffers(
         primitive_count, binary_nodes, binary_internal_parent, temps, stream
     ));
+    GWN_RETURN_ON_ERROR(binary_internal_bounds.resize(binary_internal_count, stream));
 
     constexpr int k_hploc_block_size = 64;
 
@@ -596,7 +593,7 @@ gwn_status gwn_bvh_topology_build_binary_hploc(
         gwn_launch_linear_kernel<k_linear_block_size>(
             primitive_count,
             gwn_hploc_init_full_nodes_functor<Real, NodeIndex>{
-                sorted_leaf_aabbs.span(), full_nodes.span(), cluster_indices.span()
+                sorted_primitive_aabbs, full_nodes.span(), cluster_indices.span()
             },
             stream
         )
@@ -653,7 +650,7 @@ gwn_status gwn_bvh_topology_build_binary_hploc(
                 cuda::std::span<gwn_hploc_node<Real, NodeIndex> const>(
                     full_nodes.data(), full_nodes.size()
                 ),
-                binary_nodes.span(), binary_internal_parent.span(),
+                binary_nodes.span(), binary_internal_bounds.span(), binary_internal_parent.span(),
                 temps.internal_parent_slot.span(), temps.leaf_parent.span(),
                 temps.leaf_parent_slot.span(), primitive_count_node_index
             },
