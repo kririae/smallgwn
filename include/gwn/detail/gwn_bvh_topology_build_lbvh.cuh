@@ -105,7 +105,8 @@ template <int Width, gwn_real_type Real, gwn_index_type Index>
 gwn_status gwn_bvh_topology_build_collapse_binary_wide(
     cuda::std::span<gwn_binary_node<Index> const> const binary_nodes,
     cuda::std::span<gwn_aabb<Real> const> const binary_internal_bounds,
-    std::size_t const primitive_count, gwn_bvh_topology_accessor<Width, Real, Index> &staging_topology,
+    std::size_t const primitive_count,
+    gwn_bvh_topology_accessor<Width, Real, Index> &staging_topology,
     Index const root_internal_index, cudaStream_t const stream = gwn_default_stream()
 ) {
     static_assert(Width >= 2, "BVH width must be at least 2.");
@@ -146,9 +147,9 @@ gwn_status gwn_bvh_topology_build_collapse_binary_wide(
     GWN_RETURN_ON_ERROR(wide_node_counter.resize(1, stream));
     GWN_RETURN_ON_ERROR(block_counter.resize(1, stream));
     GWN_RETURN_ON_ERROR(error_flag.resize(1, stream));
-    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
-        cudaMemsetAsync(slots.data(), 0, primitive_count * sizeof(gwn_collapse_slot_entry<Index>), stream)
-    ));
+    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemsetAsync(
+        slots.data(), 0, primitive_count * sizeof(gwn_collapse_slot_entry<Index>), stream
+    )));
 
     gwn_collapse_slot_entry<Index> root_slot{};
     root_slot.work.binary_kind = static_cast<std::uint8_t>(gwn_bvh_child_kind::k_internal);
@@ -180,8 +181,8 @@ gwn_status gwn_bvh_topology_build_collapse_binary_wide(
     )));
 
     gwn_collapse_convert_kernel_params<Width, Real, Index> const params{
-        binary_nodes, binary_internal_bounds, slots.span(), wide_nodes_scratch.span(), tail.data(),
-        wide_node_counter.data(), block_counter.data(), error_flag.data()
+        binary_nodes, binary_internal_bounds,   slots.span(),         wide_nodes_scratch.span(),
+        tail.data(),  wide_node_counter.data(), block_counter.data(), error_flag.data()
     };
     int const block_count = gwn_block_count_1d<k_block_size>(primitive_count);
     gwn_collapse_convert_kernel<k_block_size, Width, Real, Index>
@@ -194,8 +195,8 @@ gwn_status gwn_bvh_topology_build_collapse_binary_wide(
         &host_error_flag, error_flag.data(), sizeof(unsigned int), cudaMemcpyDeviceToHost, stream
     )));
     GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemcpyAsync(
-        &host_wide_node_count, wide_node_counter.data(), sizeof(unsigned int), cudaMemcpyDeviceToHost,
-        stream
+        &host_wide_node_count, wide_node_counter.data(), sizeof(unsigned int),
+        cudaMemcpyDeviceToHost, stream
     )));
     GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaStreamSynchronize(stream)));
     if (host_error_flag != 0u) {

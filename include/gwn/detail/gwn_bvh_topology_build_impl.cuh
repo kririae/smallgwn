@@ -174,7 +174,8 @@ gwn_status gwn_bvh_topology_build_hploc_impl(
             cuda::std::span<gwn_aabb<Real> const>(
                 preprocess.sorted_primitive_aabbs.data(), preprocess.sorted_primitive_aabbs.size()
             ),
-            binary_nodes, binary_internal_parent, binary_internal_bounds, root_internal_index, stream
+            binary_nodes, binary_internal_parent, binary_internal_bounds, root_internal_index,
+            stream
         );
     },
         stream

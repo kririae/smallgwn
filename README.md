@@ -9,7 +9,7 @@ Taylor-series multipole approximations (orders 0–2) with wide BVH acceleration
 
 Optional (for loading geometry with Eigen matrices):
 
-- **Eigen3** and **Intel TBB** enables `gwn_eigen_bridge.hpp`.
+- **Eigen3** and **Intel TBB** enables `gwn_eigen_bridge.cuh`.
 - **libigl** can be used to load the geometry.
 
 ## Building
@@ -96,7 +96,7 @@ __global__ void compute_signed_distance_kernel(
 To load a mesh from an OBJ file, first parse it into Eigen matrices (or use libigl if available):
 
 ```cpp
-#include <gwn/gwn_eigen_bridge.hpp>
+#include <gwn/gwn_eigen_bridge.cuh>
 #include <igl/read_triangle_mesh.h>  // libigl
 
 Eigen::MatrixXf V;  // Nx3 vertices

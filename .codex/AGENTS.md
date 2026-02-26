@@ -6,7 +6,7 @@ These instructions apply to the `smallgwn/` project tree.
 ## Project Snapshot
 - `smallgwn` is a header-only CUDA/C++ library for winding number evaluation on triangle meshes.
 - Public surface is centered under `include/gwn/` with umbrella include `include/gwn/gwn.cuh`.
-  The umbrella include is runtime-focused and does **not** include `gwn_eigen_bridge.hpp`.
+  The umbrella include is runtime-focused and does **not** include `gwn_eigen_bridge.cuh`.
 - This codebase is independent from the `WindingNumber` source; `tests/reference_hdk/` contains vendored HDK sources for parity checks and code reference.
 
 ## Language and Build Baseline
@@ -44,7 +44,7 @@ These instructions apply to the `smallgwn/` project tree.
 
 ## Architecture & Design Rules
 - Keep public include surface focused on runtime components; CPU reference helpers belong under `tests/`.
-- `include/gwn/gwn_eigen_bridge.hpp` is opt-in and must be explicitly included by users that need Eigen interop.
+- `include/gwn/gwn_eigen_bridge.cuh` is opt-in and must be explicitly included by users that need Eigen interop.
   Runtime headers (`*.cuh` under `include/gwn/`, except the bridge) must not require Eigen.
 - Use SoA (Structure of Arrays) layout for geometry (`x/y/z`, `i0/i1/i2`).
 - Prefer TBB for trivially parallel CPU-side batch work.

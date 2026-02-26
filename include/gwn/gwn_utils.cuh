@@ -3,8 +3,6 @@
 #include <cuda/std/span>
 #include <cuda_runtime_api.h>
 
-#include "gwn_assert.cuh"
-
 #include <cstddef>
 #include <format>
 #include <limits>
@@ -13,6 +11,8 @@
 #include <string>
 #include <type_traits>
 #include <utility>
+
+#include "gwn_assert.cuh"
 
 namespace gwn {
 template <class Real>
@@ -301,8 +301,7 @@ inline gwn_status gwn_cuda_malloc(
         return alloc_status;
 
     GWN_ASSERT(
-        *ptr != nullptr,
-        "gwn_cuda_malloc succeeded for %zu bytes but returned a null pointer.",
+        *ptr != nullptr, "gwn_cuda_malloc succeeded for %zu bytes but returned a null pointer.",
         bytes
     );
     return gwn_status::ok();
@@ -379,8 +378,7 @@ public:
 
         GWN_ASSERT(
             new_ptr != nullptr,
-            "gwn_device_array::resize allocated %zu elements but returned null storage.",
-            count
+            "gwn_device_array::resize allocated %zu elements but returned null storage.", count
         );
 
         auto cleanup_new_ptr = gwn_make_scope_exit([&]() noexcept {
@@ -559,9 +557,7 @@ gwn_status gwn_allocate_span(
     void *ptr = nullptr;
     GWN_RETURN_ON_ERROR(gwn_cuda_malloc(&ptr, count * sizeof(T), stream));
     GWN_ASSERT(
-        ptr != nullptr,
-        "gwn_allocate_span allocated %zu elements but returned null storage.",
-        count
+        ptr != nullptr, "gwn_allocate_span allocated %zu elements but returned null storage.", count
     );
     dst = cuda::std::span<T const>(static_cast<T const *>(ptr), count);
     GWN_ASSERT(gwn_span_has_storage(dst), "gwn_allocate_span produced invalid span storage.");

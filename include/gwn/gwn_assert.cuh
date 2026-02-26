@@ -11,8 +11,7 @@
 
 namespace gwn::detail {
 
-[[nodiscard]] constexpr std::string_view
-gwn_assert_filename(std::string_view const path) noexcept {
+[[nodiscard]] constexpr std::string_view gwn_assert_filename(std::string_view const path) noexcept {
     std::size_t const separator_index = path.find_last_of("/\\");
     if (separator_index == std::string_view::npos)
         return path;
@@ -29,8 +28,8 @@ gwn_assert_fail_host(char const *const condition, char const *const file, int co
 
 template <class... Args>
 [[noreturn]] inline void gwn_assert_fail_host(
-    char const *const condition, char const *const file, int const line,
-    char const *const format, Args &&...args
+    char const *const condition, char const *const file, int const line, char const *const format,
+    Args &&...args
 ) noexcept {
     std::fprintf(stderr, "%s:%d: Assertion (%s) failed. ", file, line, condition);
     std::fprintf(stderr, format, args...);
@@ -39,8 +38,9 @@ template <class... Args>
     std::abort();
 }
 
-[[noreturn]] __device__ inline void
-gwn_assert_fail_device(char const *const condition, char const *const file, int const line) noexcept {
+[[noreturn]] __device__ inline void gwn_assert_fail_device(
+    char const *const condition, char const *const file, int const line
+) noexcept {
     printf("%s:%d: Assertion (%s) failed.\n", file, line, condition);
     asm volatile("trap;");
     __builtin_unreachable();
@@ -48,8 +48,8 @@ gwn_assert_fail_device(char const *const condition, char const *const file, int 
 
 template <class... Args>
 [[noreturn]] __device__ inline void gwn_assert_fail_device(
-    char const *const condition, char const *const file, int const line,
-    char const *const format, Args &&...args
+    char const *const condition, char const *const file, int const line, char const *const format,
+    Args &&...args
 ) noexcept {
     printf("%s:%d: Assertion (%s) failed. ", file, line, condition);
     printf(format, args...);
@@ -85,11 +85,10 @@ template <class... Args>
 #endif
 
 #if !defined(GWN_FORCE_ASSERT)
-#define GWN_FORCE_ASSERT(condition, ...)                                                        \
-    do {                                                                                        \
-        if (GWN_UNLIKELY(!(condition)))                                                        \
-            GWN_DETAIL_ASSERT_FAIL(#condition, GWN_FILENAME, __LINE__ __VA_OPT__(, )          \
-                                   __VA_ARGS__);                                               \
+#define GWN_FORCE_ASSERT(condition, ...)                                                           \
+    do {                                                                                           \
+        if (GWN_UNLIKELY(!(condition)))                                                            \
+            GWN_DETAIL_ASSERT_FAIL(#condition, GWN_FILENAME, __LINE__ __VA_OPT__(, ) __VA_ARGS__); \
     } while (false)
 #endif
 

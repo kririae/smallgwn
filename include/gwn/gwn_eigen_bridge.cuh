@@ -3,7 +3,7 @@
 #include "gwn_geometry.cuh"
 
 #if !__has_include(<Eigen/Core>)
-#error "gwn_eigen_bridge.hpp requires Eigen/Core in the include path."
+#error "gwn_eigen_bridge.cuh requires Eigen/Core in the include path."
 #endif
 
 #include <atomic>

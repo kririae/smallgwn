@@ -59,7 +59,8 @@ gwn_collapse_slot_state_store_relaxed(unsigned int &state, unsigned int const va
     gwn_collapse_atomic_ref(state).store(value, cuda::memory_order_relaxed);
 }
 
-[[nodiscard]] __device__ inline bool gwn_collapse_has_error(unsigned int const *error_flag) noexcept {
+[[nodiscard]] __device__ inline bool
+gwn_collapse_has_error(unsigned int const *error_flag) noexcept {
     if (error_flag == nullptr)
         return false;
     return gwn_collapse_atomic_ref(*const_cast<unsigned int *>(error_flag))
@@ -97,10 +98,9 @@ __global__ __launch_bounds__(BlockSize) void gwn_collapse_convert_kernel(
 
     auto *slot = params.slots.data() + slot_id;
     while (true) {
-        while (gwn_collapse_slot_state_load(slot->state) != k_gwn_collapse_slot_ready) {
+        while (gwn_collapse_slot_state_load(slot->state) != k_gwn_collapse_slot_ready)
             if (gwn_collapse_has_error(params.error_flag))
                 return;
-        }
 
         gwn_collapse_work_item<Index> const work = slot->work;
         gwn_collapse_slot_state_store_relaxed(slot->state, k_gwn_collapse_slot_invalid);
@@ -116,7 +116,8 @@ __global__ __launch_bounds__(BlockSize) void gwn_collapse_convert_kernel(
 
         gwn_binary_child_ref<Index> candidates[Width]{};
         gwn_collapse_work_item<Index> tasks[Width]{};
-        auto const binary_root_node = params.binary_nodes[static_cast<std::size_t>(work.binary_index)];
+        auto const binary_root_node =
+            params.binary_nodes[static_cast<std::size_t>(work.binary_index)];
         candidates[0] = binary_root_node.left;
         candidates[1] = binary_root_node.right;
         int candidate_count = 2;
@@ -138,14 +139,15 @@ __global__ __launch_bounds__(BlockSize) void gwn_collapse_convert_kernel(
                 auto const candidate_kind = static_cast<gwn_bvh_child_kind>(candidates[i].kind);
                 if (candidate_kind != gwn_bvh_child_kind::k_internal)
                     continue;
-                if (!gwn_index_in_bounds(candidates[i].index, params.binary_internal_bounds.size()) ||
+                if (!gwn_index_in_bounds(
+                        candidates[i].index, params.binary_internal_bounds.size()
+                    ) ||
                     !gwn_index_in_bounds(candidates[i].index, params.binary_nodes.size()))
                     continue;
 
-                Real const area =
-                    gwn_aabb_half_area(params.binary_internal_bounds[static_cast<std::size_t>(
-                        candidates[i].index
-                    )]);
+                Real const area = gwn_aabb_half_area(
+                    params.binary_internal_bounds[static_cast<std::size_t>(candidates[i].index)]
+                );
                 if (best_slot < 0 || area > best_area ||
                     (area == best_area && candidates[i].index < best_internal)) {
                     best_slot = i;
@@ -158,7 +160,8 @@ __global__ __launch_bounds__(BlockSize) void gwn_collapse_convert_kernel(
                 break;
             GWN_ASSERT(candidate_count >= 2, "collapse: candidate_count shrank below 2");
 
-            auto const expanded = params.binary_nodes[static_cast<std::size_t>(candidates[best_slot].index)];
+            auto const expanded =
+                params.binary_nodes[static_cast<std::size_t>(candidates[best_slot].index)];
             candidates[best_slot] = expanded.left;
             candidates[candidate_count] = expanded.right;
             ++candidate_count;
