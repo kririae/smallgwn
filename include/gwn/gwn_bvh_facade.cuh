@@ -110,7 +110,7 @@ gwn_status gwn_bvh_facade_build_topology_aabb_moment_lbvh(
     gwn_geometry_object<Real, Index> const &geometry,
     gwn_bvh_topology_object<Width, Real, Index> &topology,
     gwn_bvh_aabb_tree_object<Width, Real, Index> &aabb_tree,
-    gwn_bvh_moment_tree_object<Width, Real, Index> &moment_tree,
+    gwn_bvh_moment_tree_object<Width, Order, Real, Index> &moment_tree,
     cudaStream_t const stream = gwn_default_stream()
 ) noexcept {
     GWN_RETURN_ON_ERROR((gwn_bvh_facade_build_topology_aabb_lbvh<Width, Real, Index, MortonCode>(
@@ -149,7 +149,7 @@ gwn_status gwn_bvh_facade_build_topology_aabb_moment_hploc(
     gwn_geometry_object<Real, Index> const &geometry,
     gwn_bvh_topology_object<Width, Real, Index> &topology,
     gwn_bvh_aabb_tree_object<Width, Real, Index> &aabb_tree,
-    gwn_bvh_moment_tree_object<Width, Real, Index> &moment_tree,
+    gwn_bvh_moment_tree_object<Width, Order, Real, Index> &moment_tree,
     cudaStream_t const stream = gwn_default_stream()
 ) noexcept {
     GWN_RETURN_ON_ERROR((gwn_bvh_facade_build_topology_aabb_hploc<Width, Real, Index, MortonCode>(

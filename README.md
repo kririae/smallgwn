@@ -53,7 +53,7 @@ geometry.upload(
 // Build the necessary BVH data structures for the geometry
 gwn::gwn_bvh4_topology_object<Real, Index> topology;
 gwn::gwn_bvh4_aabb_object<Real, Index>     aabb;
-gwn::gwn_bvh4_moment_object<Real, Index>   moments;
+gwn::gwn_bvh4_moment_object<1, Real, Index> moments;  // 1 = taylor approximation order
 gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<
     1,     // taylor approximation order, 1 would be sufficient
     4,     // BVH width, 4 is a good default
@@ -75,7 +75,7 @@ __global__ void compute_signed_distance_kernel(
     gwn::gwn_geometry_accessor<Real, Index> const geom,
     gwn::gwn_bvh_topology_accessor<4, Real, Index> const topo,
     gwn::gwn_bvh_aabb_accessor<4, Real, Index> const aabb,
-    gwn::gwn_bvh_moment_tree_accessor<4, Real, Index> const moments,
+    gwn::gwn_bvh_moment_tree_accessor<4, 1, Real, Index> const moments,
     Real const *qx, Real const *qy, Real const *qz,
     Real *out_dist, int n) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;

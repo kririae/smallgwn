@@ -51,7 +51,7 @@ template <int Order>
 gwn::gwn_status build_facade_for_builder(
     topology_builder const builder, gwn::gwn_geometry_object<Real, Index> const &geometry,
     gwn::gwn_bvh4_topology_object<Real, Index> &topology, gwn::gwn_bvh4_aabb_object<Real, Index> &aabb,
-    gwn::gwn_bvh4_moment_object<Real, Index> &moment
+    gwn::gwn_bvh4_moment_object<Order, Real, Index> &moment
 ) {
     if (builder == topology_builder::k_hploc) {
         return gwn::gwn_bvh_facade_build_topology_aabb_moment_hploc<Order, 4, Real, Index>(
@@ -525,7 +525,6 @@ TEST(smallgwn_integration_model, integration_exact_and_taylor_consistency_on_com
 
         gwn::gwn_bvh4_topology_object<Real, Index> bvh;
         gwn::gwn_bvh4_aabb_object<Real, Index> bvh_aabb;
-        gwn::gwn_bvh4_moment_object<Real, Index> bvh_data;
         ASSERT_TRUE(
             (gwn::gwn_bvh_topology_build_lbvh<4, Real, Index>(geometry, bvh)
                  .is_ok()));
@@ -556,10 +555,11 @@ TEST(smallgwn_integration_model, integration_exact_and_taylor_consistency_on_com
         ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
 
         // Taylor order 0.
-        ASSERT_TRUE((gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<0, 4, Real, Index>(geometry, bvh, bvh_aabb, bvh_data)
+        gwn::gwn_bvh4_moment_object<0, Real, Index> bvh_data_o0;
+        ASSERT_TRUE((gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<0, 4, Real, Index>(geometry, bvh, bvh_aabb, bvh_data_o0)
                         .is_ok()));
         ASSERT_TRUE((gwn::gwn_compute_winding_number_batch_bvh_taylor<0, Real, Index>(
-                        geometry.accessor(), bvh.accessor(), bvh_data.accessor(),
+                        geometry.accessor(), bvh.accessor(), bvh_data_o0.accessor(),
                         d_qx.span(), d_qy.span(), d_qz.span(), d_out.span(), k_accuracy_scale)
                         .is_ok()));
         ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
@@ -569,10 +569,11 @@ TEST(smallgwn_integration_model, integration_exact_and_taylor_consistency_on_com
         ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
 
         // Taylor order 1.
-        ASSERT_TRUE((gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<1, 4, Real, Index>(geometry, bvh, bvh_aabb, bvh_data)
+        gwn::gwn_bvh4_moment_object<1, Real, Index> bvh_data_o1;
+        ASSERT_TRUE((gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<1, 4, Real, Index>(geometry, bvh, bvh_aabb, bvh_data_o1)
                         .is_ok()));
         ASSERT_TRUE((gwn::gwn_compute_winding_number_batch_bvh_taylor<1, Real, Index>(
-                        geometry.accessor(), bvh.accessor(), bvh_data.accessor(),
+                        geometry.accessor(), bvh.accessor(), bvh_data_o1.accessor(),
                         d_qx.span(), d_qy.span(), d_qz.span(), d_out.span(), k_accuracy_scale)
                         .is_ok()));
         ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
@@ -654,7 +655,7 @@ void run_integration_taylor_rebuild_consistency_on_common_models(Real const k_co
         // Build/query A.
         gwn::gwn_bvh4_topology_object<Real, Index> bvh_a;
         gwn::gwn_bvh4_aabb_object<Real, Index> aabb_a;
-        gwn::gwn_bvh4_moment_object<Real, Index> data_a;
+        gwn::gwn_bvh4_moment_object<Order, Real, Index> data_a;
         ASSERT_TRUE((gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<Order, 4, Real, Index>(
                          geometry, bvh_a, aabb_a, data_a
         )
@@ -674,7 +675,7 @@ void run_integration_taylor_rebuild_consistency_on_common_models(Real const k_co
         // Build/query B.
         gwn::gwn_bvh4_topology_object<Real, Index> bvh_b;
         gwn::gwn_bvh4_aabb_object<Real, Index> aabb_b;
-        gwn::gwn_bvh4_moment_object<Real, Index> data_b;
+        gwn::gwn_bvh4_moment_object<Order, Real, Index> data_b;
         ASSERT_TRUE((gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<Order, 4, Real, Index>(
                          geometry, bvh_b, aabb_b, data_b
         )
@@ -809,14 +810,14 @@ TEST(smallgwn_integration_model, integration_taylor_matches_hdk_cpu_order0_order
 
         gwn::gwn_bvh4_topology_object<Real, Index> bvh;
         gwn::gwn_bvh4_aabb_object<Real, Index> aabb;
-        gwn::gwn_bvh4_moment_object<Real, Index> data;
 
+        gwn::gwn_bvh4_moment_object<0, Real, Index> data_o0;
         ASSERT_TRUE((gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<0, 4, Real, Index>(
-                         geometry, bvh, aabb, data
+                         geometry, bvh, aabb, data_o0
         )
                          .is_ok()));
         ASSERT_TRUE((gwn::gwn_compute_winding_number_batch_bvh_taylor<0, Real, Index>(
-                         geometry.accessor(), bvh.accessor(), data.accessor(), d_qx.span(),
+                         geometry.accessor(), bvh.accessor(), data_o0.accessor(), d_qx.span(),
                          d_qy.span(), d_qz.span(), d_out.span(), k_accuracy_scale
         )
                          .is_ok()));
@@ -827,12 +828,13 @@ TEST(smallgwn_integration_model, integration_taylor_matches_hdk_cpu_order0_order
         );
         ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
 
+        gwn::gwn_bvh4_moment_object<1, Real, Index> data_o1;
         ASSERT_TRUE((gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<1, 4, Real, Index>(
-                         geometry, bvh, aabb, data
+                         geometry, bvh, aabb, data_o1
         )
                          .is_ok()));
         ASSERT_TRUE((gwn::gwn_compute_winding_number_batch_bvh_taylor<1, Real, Index>(
-                         geometry.accessor(), bvh.accessor(), data.accessor(), d_qx.span(),
+                         geometry.accessor(), bvh.accessor(), data_o1.accessor(), d_qx.span(),
                          d_qy.span(), d_qz.span(), d_out.span(), k_accuracy_scale
         )
                          .is_ok()));
@@ -843,12 +845,13 @@ TEST(smallgwn_integration_model, integration_taylor_matches_hdk_cpu_order0_order
         );
         ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
 
+        gwn::gwn_bvh4_moment_object<2, Real, Index> data_o2;
         ASSERT_TRUE((gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<2, 4, Real, Index>(
-                         geometry, bvh, aabb, data
+                         geometry, bvh, aabb, data_o2
         )
                          .is_ok()));
         ASSERT_TRUE((gwn::gwn_compute_winding_number_batch_bvh_taylor<2, Real, Index>(
-                         geometry.accessor(), bvh.accessor(), data.accessor(), d_qx.span(),
+                         geometry.accessor(), bvh.accessor(), data_o2.accessor(), d_qx.span(),
                          d_qy.span(), d_qz.span(), d_out.span(), k_accuracy_scale
         )
                          .is_ok()));
@@ -912,7 +915,6 @@ TEST(smallgwn_integration_model, integration_hploc_exact_and_taylor_consistency_
 
         gwn::gwn_bvh4_topology_object<Real, Index> bvh;
         gwn::gwn_bvh4_aabb_object<Real, Index> bvh_aabb;
-        gwn::gwn_bvh4_moment_object<Real, Index> bvh_data;
         ASSERT_TRUE(
             (build_topology_for_builder<4>(topology_builder::k_hploc, geometry, bvh).is_ok())
         );
@@ -950,12 +952,13 @@ TEST(smallgwn_integration_model, integration_hploc_exact_and_taylor_consistency_
         );
         ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
 
+        gwn::gwn_bvh4_moment_object<0, Real, Index> bvh_data_o0;
         ASSERT_TRUE((build_facade_for_builder<0>(
-                         topology_builder::k_hploc, geometry, bvh, bvh_aabb, bvh_data
+                         topology_builder::k_hploc, geometry, bvh, bvh_aabb, bvh_data_o0
         )
                          .is_ok()));
         ASSERT_TRUE((gwn::gwn_compute_winding_number_batch_bvh_taylor<0, Real, Index>(
-                         geometry.accessor(), bvh.accessor(), bvh_data.accessor(), d_qx.span(),
+                         geometry.accessor(), bvh.accessor(), bvh_data_o0.accessor(), d_qx.span(),
                          d_qy.span(), d_qz.span(), d_out.span(), k_accuracy_scale
         )
                          .is_ok()));
@@ -967,12 +970,13 @@ TEST(smallgwn_integration_model, integration_hploc_exact_and_taylor_consistency_
         );
         ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
 
+        gwn::gwn_bvh4_moment_object<1, Real, Index> bvh_data_o1;
         ASSERT_TRUE((build_facade_for_builder<1>(
-                         topology_builder::k_hploc, geometry, bvh, bvh_aabb, bvh_data
+                         topology_builder::k_hploc, geometry, bvh, bvh_aabb, bvh_data_o1
         )
                          .is_ok()));
         ASSERT_TRUE((gwn::gwn_compute_winding_number_batch_bvh_taylor<1, Real, Index>(
-                         geometry.accessor(), bvh.accessor(), bvh_data.accessor(), d_qx.span(),
+                         geometry.accessor(), bvh.accessor(), bvh_data_o1.accessor(), d_qx.span(),
                          d_qy.span(), d_qz.span(), d_out.span(), k_accuracy_scale
         )
                          .is_ok()));

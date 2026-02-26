@@ -69,7 +69,7 @@ __device__ inline Real gwn_signed_distance_point_bvh(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
     gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree,
-    gwn_bvh_moment_tree_accessor<Width, Real, Index> const &data_tree, Real const qx,
+    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &data_tree, Real const qx,
     Real const qy, Real const qz, Real const winding_number_threshold = Real(0.5),
     Real const culling_band = std::numeric_limits<Real>::infinity(),
     Real const accuracy_scale = Real(2)
@@ -93,7 +93,7 @@ template <
 gwn_status gwn_compute_winding_number_batch_bvh_taylor(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
-    gwn_bvh_moment_tree_accessor<Width, Real, Index> const &data_tree,
+    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &data_tree,
     cuda::std::span<Real const> const query_x, cuda::std::span<Real const> const query_y,
     cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output,
     Real const accuracy_scale = Real(2), cudaStream_t const stream = gwn_default_stream()
@@ -110,11 +110,6 @@ gwn_status gwn_compute_winding_number_batch_bvh_taylor(
         return gwn_status::invalid_argument("BVH accessor is invalid.");
     if (!data_tree.is_valid_for(bvh))
         return gwn_status::invalid_argument("BVH data tree is invalid for the given topology.");
-    if (!data_tree.template has_taylor_order<Order>()) {
-        return gwn_status::invalid_argument(
-            "BVH data tree is missing requested Taylor-order data."
-        );
-    }
     if (query_x.size() != query_y.size() || query_x.size() != query_z.size())
         return gwn_status::invalid_argument("Query SoA spans must have identical lengths.");
     if (query_x.size() != output.size())
@@ -149,7 +144,7 @@ template <
 gwn_status gwn_compute_winding_number_batch_bvh_taylor(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh4_topology_accessor<Real, Index> const &bvh,
-    gwn_bvh4_moment_accessor<Real, Index> const &data_tree,
+    gwn_bvh4_moment_accessor<Order, Real, Index> const &data_tree,
     cuda::std::span<Real const> const query_x, cuda::std::span<Real const> const query_y,
     cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output,
     Real const accuracy_scale = Real(2), cudaStream_t const stream = gwn_default_stream()

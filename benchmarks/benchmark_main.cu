@@ -289,7 +289,7 @@ template <int Order>
 gwn::gwn_status run_taylor_query_with_stack_capacity(
     int const stack_capacity, gwn::gwn_geometry_accessor<Real, Index> const &geometry,
     gwn::gwn_bvh4_topology_accessor<Real, Index> const &topology,
-    gwn::gwn_bvh4_moment_accessor<Real, Index> const &moment,
+    gwn::gwn_bvh4_moment_accessor<Order, Real, Index> const &moment,
     cuda::std::span<Real const> const query_x, cuda::std::span<Real const> const query_y,
     cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output,
     float const accuracy_scale, cudaStream_t const stream
@@ -529,7 +529,9 @@ int main(int argc, char **argv) try {
 
         gwn::gwn_bvh4_topology_object<Real, Index> topology;
         gwn::gwn_bvh4_aabb_object<Real, Index> aabb_tree;
-        gwn::gwn_bvh4_moment_object<Real, Index> moment_tree;
+        gwn::gwn_bvh4_moment_object<0, Real, Index> moment_tree_o0;
+        gwn::gwn_bvh4_moment_object<1, Real, Index> moment_tree_o1;
+        gwn::gwn_bvh4_moment_object<2, Real, Index> moment_tree_o2;
         std::string const builder_name{to_string(options.topology_builder)};
 
         auto build_topology = [&]() noexcept -> gwn::gwn_status {
@@ -547,11 +549,11 @@ int main(int argc, char **argv) try {
             if (options.topology_builder == benchmark_topology_builder::k_hploc) {
                 return gwn::gwn_bvh_facade_build_topology_aabb_moment_hploc<
                     0, k_bvh_width, Real, Index>(
-                    geometry, topology, aabb_tree, moment_tree, stream
+                    geometry, topology, aabb_tree, moment_tree_o0, stream
                 );
             }
             return gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<0, k_bvh_width, Real, Index>(
-                geometry, topology, aabb_tree, moment_tree, stream
+                geometry, topology, aabb_tree, moment_tree_o0, stream
             );
         };
 
@@ -559,11 +561,11 @@ int main(int argc, char **argv) try {
             if (options.topology_builder == benchmark_topology_builder::k_hploc) {
                 return gwn::gwn_bvh_facade_build_topology_aabb_moment_hploc<
                     1, k_bvh_width, Real, Index>(
-                    geometry, topology, aabb_tree, moment_tree, stream
+                    geometry, topology, aabb_tree, moment_tree_o1, stream
                 );
             }
             return gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<1, k_bvh_width, Real, Index>(
-                geometry, topology, aabb_tree, moment_tree, stream
+                geometry, topology, aabb_tree, moment_tree_o1, stream
             );
         };
 
@@ -571,11 +573,11 @@ int main(int argc, char **argv) try {
             if (options.topology_builder == benchmark_topology_builder::k_hploc) {
                 return gwn::gwn_bvh_facade_build_topology_aabb_moment_hploc<
                     2, k_bvh_width, Real, Index>(
-                    geometry, topology, aabb_tree, moment_tree, stream
+                    geometry, topology, aabb_tree, moment_tree_o2, stream
                 );
             }
             return gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<2, k_bvh_width, Real, Index>(
-                geometry, topology, aabb_tree, moment_tree, stream
+                geometry, topology, aabb_tree, moment_tree_o2, stream
             );
         };
 
@@ -618,7 +620,7 @@ int main(int argc, char **argv) try {
             mesh.tri_i0.size(), options.query_count, stream, setup_topology_and_aabb,
             [&]() noexcept {
             return gwn::gwn_bvh_refit_moment<0, k_bvh_width, Real, Index>(
-                geometry, topology, aabb_tree, moment_tree, stream
+                geometry, topology, aabb_tree, moment_tree_o0, stream
             );
         }
         );
@@ -629,7 +631,7 @@ int main(int argc, char **argv) try {
             mesh.tri_i0.size(), options.query_count, stream, setup_topology_and_aabb,
             [&]() noexcept {
             return gwn::gwn_bvh_refit_moment<1, k_bvh_width, Real, Index>(
-                geometry, topology, aabb_tree, moment_tree, stream
+                geometry, topology, aabb_tree, moment_tree_o1, stream
             );
         }
         );
@@ -640,7 +642,7 @@ int main(int argc, char **argv) try {
             mesh.tri_i0.size(), options.query_count, stream, setup_topology_and_aabb,
             [&]() noexcept {
             return gwn::gwn_bvh_refit_moment<2, k_bvh_width, Real, Index>(
-                geometry, topology, aabb_tree, moment_tree, stream
+                geometry, topology, aabb_tree, moment_tree_o2, stream
             );
         }
         );
@@ -672,7 +674,7 @@ int main(int argc, char **argv) try {
             mesh.tri_i0.size(), options.query_count, stream, build_facade_o0, [&]() noexcept {
             return run_taylor_query_with_stack_capacity<0>(
                 options.stack_capacity, geometry.accessor(), topology.accessor(),
-                moment_tree.accessor(), d_qx.span(), d_qy.span(), d_qz.span(), d_out.span(),
+                moment_tree_o0.accessor(), d_qx.span(), d_qy.span(), d_qz.span(), d_out.span(),
                 options.accuracy_scale, stream
             );
         }
@@ -684,7 +686,7 @@ int main(int argc, char **argv) try {
             mesh.tri_i0.size(), options.query_count, stream, build_facade_o1, [&]() noexcept {
             return run_taylor_query_with_stack_capacity<1>(
                 options.stack_capacity, geometry.accessor(), topology.accessor(),
-                moment_tree.accessor(), d_qx.span(), d_qy.span(), d_qz.span(), d_out.span(),
+                moment_tree_o1.accessor(), d_qx.span(), d_qy.span(), d_qz.span(), d_out.span(),
                 options.accuracy_scale, stream
             );
         }
@@ -696,7 +698,7 @@ int main(int argc, char **argv) try {
             mesh.tri_i0.size(), options.query_count, stream, build_facade_o2, [&]() noexcept {
             return run_taylor_query_with_stack_capacity<2>(
                 options.stack_capacity, geometry.accessor(), topology.accessor(),
-                moment_tree.accessor(), d_qx.span(), d_qy.span(), d_qz.span(), d_out.span(),
+                moment_tree_o2.accessor(), d_qx.span(), d_qy.span(), d_qz.span(), d_out.span(),
                 options.accuracy_scale, stream
             );
         }

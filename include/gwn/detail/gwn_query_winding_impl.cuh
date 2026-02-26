@@ -89,51 +89,11 @@ __device__ inline Real gwn_winding_number_point_bvh_exact_impl(
     return omega_sum / (Real(4) * k_pi);
 }
 
-template <int Order, int Width, gwn_real_type Real, gwn_index_type Index>
-struct gwn_taylor_nodes_getter_impl;
-
-template <int Width, gwn_real_type Real, gwn_index_type Index>
-struct gwn_taylor_nodes_getter_impl<0, Width, Real, Index> {
-    using span_type = cuda::std::span<gwn_bvh_taylor_node_soa<Width, 0, Real> const>;
-
-    [[nodiscard]] __host__ __device__ static span_type
-    get(gwn_bvh_moment_tree_accessor<Width, Real, Index> const &data_tree) {
-        return data_tree.taylor_order0_nodes;
-    }
-};
-
-template <int Width, gwn_real_type Real, gwn_index_type Index>
-struct gwn_taylor_nodes_getter_impl<1, Width, Real, Index> {
-    using span_type = cuda::std::span<gwn_bvh_taylor_node_soa<Width, 1, Real> const>;
-
-    [[nodiscard]] __host__ __device__ static span_type
-    get(gwn_bvh_moment_tree_accessor<Width, Real, Index> const &data_tree) {
-        return data_tree.taylor_order1_nodes;
-    }
-};
-
-template <int Width, gwn_real_type Real, gwn_index_type Index>
-struct gwn_taylor_nodes_getter_impl<2, Width, Real, Index> {
-    using span_type = cuda::std::span<gwn_bvh_taylor_node_soa<Width, 2, Real> const>;
-
-    [[nodiscard]] __host__ __device__ static span_type
-    get(gwn_bvh_moment_tree_accessor<Width, Real, Index> const &data_tree) {
-        return data_tree.taylor_order2_nodes;
-    }
-};
-
-template <int Order, int Width, gwn_real_type Real, gwn_index_type Index>
-[[nodiscard]] __host__ __device__
-    typename gwn_taylor_nodes_getter_impl<Order, Width, Real, Index>::span_type
-    gwn_get_taylor_nodes_impl(gwn_bvh_moment_tree_accessor<Width, Real, Index> const &data_tree) {
-    return gwn_taylor_nodes_getter_impl<Order, Width, Real, Index>::get(data_tree);
-}
-
 template <int Order, int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity>
 __device__ inline Real gwn_winding_number_point_bvh_taylor_impl(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
-    gwn_bvh_moment_tree_accessor<Width, Real, Index> const &data_tree, Real const qx, Real const qy,
+    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &data_tree, Real const qx, Real const qy,
     Real const qz, Real const accuracy_scale
 ) noexcept {
     static_assert(
@@ -144,10 +104,10 @@ __device__ inline Real gwn_winding_number_point_bvh_taylor_impl(
 
     if (!geometry.is_valid() || !bvh.is_valid())
         return Real(0);
-    if (!data_tree.is_valid_for(bvh) || !data_tree.template has_taylor_order<Order>())
+    if (!data_tree.is_valid_for(bvh))
         return Real(0);
 
-    auto const taylor_nodes = gwn_get_taylor_nodes_impl<Order, Width, Real, Index>(data_tree);
+    auto const &taylor_nodes = data_tree.nodes;
     GWN_ASSERT(!taylor_nodes.empty(), "winding taylor: taylor_nodes empty for internal root");
     if (taylor_nodes.size() != bvh.nodes.size())
         return Real(0);
@@ -315,7 +275,7 @@ template <int Order, int Width, gwn_real_type Real, gwn_index_type Index, int St
 struct gwn_winding_number_batch_bvh_taylor_functor {
     gwn_geometry_accessor<Real, Index> geometry{};
     gwn_bvh_topology_accessor<Width, Real, Index> bvh{};
-    gwn_bvh_moment_tree_accessor<Width, Real, Index> data_tree{};
+    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> data_tree{};
     cuda::std::span<Real const> query_x{};
     cuda::std::span<Real const> query_y{};
     cuda::std::span<Real const> query_z{};
@@ -337,7 +297,7 @@ template <int Order, int Width, gwn_real_type Real, gwn_index_type Index, int St
 gwn_make_winding_number_batch_bvh_taylor_functor(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
-    gwn_bvh_moment_tree_accessor<Width, Real, Index> const &data_tree,
+    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &data_tree,
     cuda::std::span<Real const> const query_x, cuda::std::span<Real const> const query_y,
     cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output,
     Real const accuracy_scale

@@ -228,7 +228,7 @@ __device__ inline Real gwn_signed_distance_point_bvh_impl(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
     gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree,
-    gwn_bvh_moment_tree_accessor<Width, Real, Index> const &data_tree, Real const qx,
+    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &data_tree, Real const qx,
     Real const qy, Real const qz, Real const winding_number_threshold, Real const culling_band,
     Real const accuracy_scale
 ) noexcept {
@@ -241,7 +241,7 @@ __device__ inline Real gwn_signed_distance_point_bvh_impl(
         geometry, bvh, aabb_tree, qx, qy, qz, culling_band
     );
     Real wn = Real(0);
-    if (data_tree.is_valid_for(bvh) && data_tree.template has_taylor_order<Order>()) {
+    if (data_tree.is_valid_for(bvh)) {
         wn = gwn_winding_number_point_bvh_taylor_impl<Order, Width, Real, Index, StackCapacity>(
             geometry, bvh, data_tree, qx, qy, qz, accuracy_scale
         );

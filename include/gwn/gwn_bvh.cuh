@@ -240,54 +240,37 @@ struct gwn_bvh_aabb_tree_accessor {
 };
 
 /// \brief Moment payload tree accessor storing Taylor data aligned to topology.
-template <int Width, gwn_real_type Real, gwn_index_type Index = std::uint32_t>
+///
+/// \tparam Width  BVH node fan-out.
+/// \tparam Order  Taylor expansion order (0, 1, or 2).
+/// \tparam Real   Floating-point scalar type.
+/// \tparam Index  Integer index type.
+template <int Width, int Order, gwn_real_type Real, gwn_index_type Index = std::uint32_t>
 struct gwn_bvh_moment_tree_accessor {
     static_assert(Width >= 2, "BVH accessor width must be at least 2.");
+    static_assert(Order == 0 || Order == 1 || Order == 2, "Taylor order must be 0, 1, or 2.");
 
     using real_type = Real;
     using index_type = Index;
     static constexpr int k_width = Width;
+    static constexpr int k_order = Order;
 
-    cuda::std::span<gwn_bvh_taylor_node_soa<Width, 0, Real> const> taylor_order0_nodes{};
-    cuda::std::span<gwn_bvh_taylor_node_soa<Width, 1, Real> const> taylor_order1_nodes{};
-    cuda::std::span<gwn_bvh_taylor_node_soa<Width, 2, Real> const> taylor_order2_nodes{};
+    cuda::std::span<gwn_bvh_taylor_node_soa<Width, Order, Real> const> nodes{};
 
-    /// \brief Return \c true when the specified Taylor order slot is populated.
-    /// \tparam Order  Expansion order to test (0, 1, or 2).
-    template <int Order>
-    [[nodiscard]] __host__ __device__ constexpr bool has_taylor_order() const noexcept {
-        if constexpr (Order == 0)
-            return !taylor_order0_nodes.empty();
-        if constexpr (Order == 1)
-            return !taylor_order1_nodes.empty();
-        if constexpr (Order == 2)
-            return !taylor_order2_nodes.empty();
-        return false;
-    }
-
-    /// \brief Return \c true when no Taylor data is held (all order slots empty).
+    /// \brief Return \c true when no Taylor data is held.
     [[nodiscard]] __host__ __device__ constexpr bool empty() const noexcept {
-        return taylor_order0_nodes.empty() && taylor_order1_nodes.empty() &&
-               taylor_order2_nodes.empty();
+        return nodes.empty();
     }
 
-    /// \brief Return \c true when every non-empty Taylor order is consistent with
-    ///        the given topology.
+    /// \brief Return \c true when the Taylor data is consistent with a given topology.
     [[nodiscard]] __host__ __device__ constexpr bool is_valid_for(
         gwn_bvh_topology_tree_accessor<Width, Real, Index> const &topology
     ) const noexcept {
-        auto const validate_taylor = [&](auto const taylor_nodes) constexpr {
-            return taylor_nodes.empty() || (gwn_span_has_storage(taylor_nodes) &&
-                                            taylor_nodes.size() == topology.nodes.size());
-        };
-
         if (!topology.is_valid())
             return false;
         if (topology.has_leaf_root())
             return empty();
-
-        return validate_taylor(taylor_order0_nodes) && validate_taylor(taylor_order1_nodes) &&
-               validate_taylor(taylor_order2_nodes);
+        return gwn_span_has_storage(nodes) && nodes.size() == topology.nodes.size();
     }
 };
 
@@ -300,8 +283,8 @@ template <int Width, gwn_real_type Real, gwn_index_type Index = std::uint32_t>
 using gwn_bvh_aabb_accessor = gwn_bvh_aabb_tree_accessor<Width, Real, Index>;
 
 /// \brief Moment accessor alias — use when \c Width is a template parameter.
-template <int Width, gwn_real_type Real, gwn_index_type Index = std::uint32_t>
-using gwn_bvh_moment_accessor = gwn_bvh_moment_tree_accessor<Width, Real, Index>;
+template <int Width, int Order, gwn_real_type Real, gwn_index_type Index = std::uint32_t>
+using gwn_bvh_moment_accessor = gwn_bvh_moment_tree_accessor<Width, Order, Real, Index>;
 
 /// \brief Width-4 topology accessor (most common use-case).
 template <gwn_real_type Real, gwn_index_type Index = std::uint32_t>
@@ -312,8 +295,8 @@ template <gwn_real_type Real, gwn_index_type Index = std::uint32_t>
 using gwn_bvh4_aabb_accessor = gwn_bvh_aabb_tree_accessor<4, Real, Index>;
 
 /// \brief Width-4 moment accessor.
-template <gwn_real_type Real, gwn_index_type Index = std::uint32_t>
-using gwn_bvh4_moment_accessor = gwn_bvh_moment_tree_accessor<4, Real, Index>;
+template <int Order, gwn_real_type Real, gwn_index_type Index = std::uint32_t>
+using gwn_bvh4_moment_accessor = gwn_bvh_moment_tree_accessor<4, Order, Real, Index>;
 
 namespace detail {
 
@@ -335,13 +318,11 @@ void gwn_release_bvh_aabb_tree_accessor(
     gwn_free_span(tree.nodes, stream);
 }
 
-template <int Width, gwn_real_type Real, gwn_index_type Index>
+template <int Width, int Order, gwn_real_type Real, gwn_index_type Index>
 void gwn_release_bvh_moment_tree_accessor(
-    gwn_bvh_moment_tree_accessor<Width, Real, Index> &tree, cudaStream_t const stream
+    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> &tree, cudaStream_t const stream
 ) noexcept {
-    gwn_free_span(tree.taylor_order2_nodes, stream);
-    gwn_free_span(tree.taylor_order1_nodes, stream);
-    gwn_free_span(tree.taylor_order0_nodes, stream);
+    gwn_free_span(tree.nodes, stream);
 }
 
 } // namespace detail
@@ -438,14 +419,15 @@ private:
 };
 
 /// \brief Owning host-side RAII wrapper for a moment payload tree accessor.
-template <int Width, gwn_real_type Real = float, gwn_index_type Index = std::uint32_t>
+template <int Width, int Order, gwn_real_type Real = float, gwn_index_type Index = std::uint32_t>
 class gwn_bvh_moment_tree_object final : public gwn_noncopyable, public gwn_stream_mixin {
 public:
     static_assert(Width >= 2, "BVH object width must be at least 2.");
+    static_assert(Order == 0 || Order == 1 || Order == 2, "Taylor order must be 0, 1, or 2.");
 
     using real_type = Real;
     using index_type = Index;
-    using accessor_type = gwn_bvh_moment_tree_accessor<Width, Real, Index>;
+    using accessor_type = gwn_bvh_moment_tree_accessor<Width, Order, Real, Index>;
 
     gwn_bvh_moment_tree_object() = default;
 
@@ -495,8 +477,8 @@ template <gwn_real_type Real = float, gwn_index_type Index = std::uint32_t>
 using gwn_bvh4_aabb_object = gwn_bvh_aabb_tree_object<4, Real, Index>;
 
 /// \brief Width-4 Taylor moment payload owning object.
-template <gwn_real_type Real = float, gwn_index_type Index = std::uint32_t>
-using gwn_bvh4_moment_object = gwn_bvh_moment_tree_object<4, Real, Index>;
+template <int Order, gwn_real_type Real = float, gwn_index_type Index = std::uint32_t>
+using gwn_bvh4_moment_object = gwn_bvh_moment_tree_object<4, Order, Real, Index>;
 
 /// \brief Width-parameterised topology-only BVH owning object.
 template <int Width, gwn_real_type Real = float, gwn_index_type Index = std::uint32_t>

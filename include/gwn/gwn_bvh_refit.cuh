@@ -79,7 +79,7 @@ gwn_status gwn_bvh_refit_moment(
     gwn_geometry_object<Real, Index> const &geometry,
     gwn_bvh_topology_object<Width, Real, Index> const &topology,
     gwn_bvh_aabb_tree_object<Width, Real, Index> const &aabb_tree,
-    gwn_bvh_moment_tree_object<Width, Real, Index> &moment_tree,
+    gwn_bvh_moment_tree_object<Width, Order, Real, Index> &moment_tree,
     cudaStream_t const stream = gwn_default_stream()
 ) noexcept {
     GWN_RETURN_ON_ERROR((detail::gwn_bvh_refit_moment_impl<Order, Width, Real, Index>(

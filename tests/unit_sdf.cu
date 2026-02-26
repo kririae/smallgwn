@@ -78,19 +78,19 @@ __global__ void kernel_unsigned_distance(
 }
 
 // Thin kernel: signed distance for N query points.
-template <int Width, typename RealT, typename IndexT>
+template <int Order, int Width, typename RealT, typename IndexT>
 __global__ void kernel_signed_distance(
     gwn::gwn_geometry_accessor<RealT, IndexT> geometry,
     gwn::gwn_bvh_topology_accessor<Width, RealT, IndexT> bvh,
     gwn::gwn_bvh_aabb_accessor<Width, RealT, IndexT> aabb_tree,
-    gwn::gwn_bvh_moment_tree_accessor<Width, RealT, IndexT> data_tree, RealT const *qx,
+    gwn::gwn_bvh_moment_tree_accessor<Width, Order, RealT, IndexT> data_tree, RealT const *qx,
     RealT const *qy, RealT const *qz, RealT *output, std::size_t count,
     RealT winding_number_threshold, RealT culling_band
 ) {
     std::size_t const idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= count)
         return;
-    output[idx] = gwn::gwn_signed_distance_point_bvh<1, Width, RealT, IndexT, 128>(
+    output[idx] = gwn::gwn_signed_distance_point_bvh<Order, Width, RealT, IndexT, 128>(
         geometry, bvh, aabb_tree, data_tree, qx[idx], qy[idx], qz[idx], winding_number_threshold,
         culling_band
     );
@@ -101,7 +101,7 @@ struct SdfTestContext {
     gwn::gwn_geometry_object<Real, Index> geometry;
     gwn::gwn_bvh4_topology_object<Real, Index> bvh;
     gwn::gwn_bvh4_aabb_object<Real, Index> aabb;
-    gwn::gwn_bvh4_moment_object<Real, Index> data;
+    gwn::gwn_bvh4_moment_object<1, Real, Index> data;
 
     bool ready = false;
 };
@@ -178,7 +178,7 @@ void gpu_signed_distance(
 
     int const block_size = 128;
     int const grid_size = static_cast<int>((n + block_size - 1) / block_size);
-    kernel_signed_distance<4, Real, Index><<<grid_size, block_size>>>(
+    kernel_signed_distance<1, 4, Real, Index><<<grid_size, block_size>>>(
         ctx.geometry.accessor(), ctx.bvh.accessor(), ctx.aabb.accessor(), ctx.data.accessor(),
         d_qx.span().data(), d_qy.span().data(), d_qz.span().data(), d_out.span().data(), n,
         winding_number_threshold, culling_band
@@ -712,7 +712,7 @@ TEST_F(CudaFixture, model_signed_distance_vs_libigl) {
 
     gwn::gwn_bvh4_topology_object<Real, Index> bvh;
     gwn::gwn_bvh4_aabb_object<Real, Index> aabb;
-    gwn::gwn_bvh4_moment_object<Real, Index> data;
+    gwn::gwn_bvh4_moment_object<1, Real, Index> data;
     ASSERT_TRUE((gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<1, 4, Real, Index>(
                      geometry, bvh, aabb, data
     ))
@@ -763,7 +763,7 @@ TEST_F(CudaFixture, model_signed_distance_vs_libigl) {
 
     int const block_size = 128;
     int const grid_size = static_cast<int>((n + block_size - 1) / block_size);
-    kernel_signed_distance<4, Real, Index><<<grid_size, block_size>>>(
+    kernel_signed_distance<1, 4, Real, Index><<<grid_size, block_size>>>(
         geometry.accessor(), bvh.accessor(), aabb.accessor(), data.accessor(), d_qx.span().data(),
         d_qy.span().data(), d_qz.span().data(), d_out.span().data(), n, Real(0.5),
         std::numeric_limits<Real>::infinity()

@@ -29,8 +29,9 @@ These instructions apply to the `smallgwn/` project tree.
 - Default public index type is `std::uint32_t` for geometry/BVH/query templates unless explicitly overridden.
 - Keep width as template parameter where relevant; width=4 convenience aliases use
   `gwn_bvh4_<kind>_<role>` naming:
-  - accessors: `gwn_bvh4_topology_accessor`, `gwn_bvh4_aabb_accessor`, `gwn_bvh4_moment_accessor`
-  - owning objects: `gwn_bvh4_topology_object`, `gwn_bvh4_aabb_object`, `gwn_bvh4_moment_object`
+  - accessors: `gwn_bvh4_topology_accessor`, `gwn_bvh4_aabb_accessor`, `gwn_bvh4_moment_accessor<Order,...>`
+  - owning objects: `gwn_bvh4_topology_object`, `gwn_bvh4_aabb_object`, `gwn_bvh4_moment_object<Order,...>`
+- Moment types carry `Order` as a compile-time template parameter (after `Width`): `gwn_bvh_moment_tree_accessor<Width, Order, Real, Index>`, `gwn_bvh_moment_tree_object<Width, Order, Real, Index>`.
 - Owning-object state query uses a single unified predicate `has_data()` across all BVH object types (`gwn_bvh_topology_tree_object`, `gwn_bvh_aabb_tree_object`, `gwn_bvh_moment_tree_object`).
 
 ## Formatting Rules
@@ -48,7 +49,7 @@ These instructions apply to the `smallgwn/` project tree.
 - Use SoA (Structure of Arrays) layout for geometry (`x/y/z`, `i0/i1/i2`).
 - Prefer TBB for trivially parallel CPU-side batch work.
 - **Stream Binding**: Stream binding is explicit:
-  - owning objects (`gwn_geometry_object`, `gwn_bvh_topology_tree_object`, `gwn_bvh_aabb_tree_object`, `gwn_bvh_moment_tree_object`, and width-4 aliases `gwn_bvh4_*_object`) use `gwn_stream_mixin`;
+  - owning objects (`gwn_geometry_object`, `gwn_bvh_topology_tree_object`, `gwn_bvh_aabb_tree_object`, `gwn_bvh_moment_tree_object<Width,Order,...>`, and width-4 aliases `gwn_bvh4_*_object`) use `gwn_stream_mixin`;
   - `clear()`/destructor release on the currently bound stream;
   - successful stream-parameterized mutations update the bound stream;
   - object-first build/refit/facade overloads in `gwn_bvh_topology_build.cuh`, `gwn_bvh_refit.cuh`,
@@ -70,8 +71,8 @@ These instructions apply to the `smallgwn/` project tree.
 - Topology and data are separated:
   - Topology: `gwn_bvh_topology_accessor<Width,...>` / `gwn_bvh_topology_object<Width,...>`
   - AABB tree: `gwn_bvh_aabb_accessor<Width,...>` / `gwn_bvh_aabb_tree_object<Width,...>`
-  - Moment tree: `gwn_bvh_moment_accessor<Width,...>` / `gwn_bvh_moment_tree_object<Width,...>`
-  - Width-4 convenience aliases: `gwn_bvh4_topology_*`, `gwn_bvh4_aabb_*`, `gwn_bvh4_moment_*`
+  - Moment tree: `gwn_bvh_moment_accessor<Width,Order,...>` / `gwn_bvh_moment_tree_object<Width,Order,...>`
+  - Width-4 convenience aliases: `gwn_bvh4_topology_*`, `gwn_bvh4_aabb_*`, `gwn_bvh4_moment_*<Order,...>`
 - Public BVH API is split by responsibility:
   - topology build: `include/gwn/gwn_bvh_topology_build.cuh`
   - payload refit: `include/gwn/gwn_bvh_refit.cuh`
@@ -95,7 +96,7 @@ These instructions apply to the `smallgwn/` project tree.
   (`gwn::detail::*_impl`), not public `gwn::` API symbols.
 - Detail entrypoints use `_impl` suffix (e.g. `gwn_bvh_topology_build_lbvh_impl`) to avoid public/internal naming collisions.
 - Public BVH entrypoints are object-based (`gwn_geometry_object` + BVH object types); accessor-based routines are internal-only under `gwn::detail`.
-- Use width-4 aliases directly (`gwn_bvh4_topology_object`, `gwn_bvh4_aabb_object`, `gwn_bvh4_moment_object`) or width-parameterized templates (`gwn_bvh_topology_object<Width,...>`).
+- Use width-4 aliases directly (`gwn_bvh4_topology_object`, `gwn_bvh4_aabb_object`, `gwn_bvh4_moment_object<Order,...>`) or width-parameterized templates (`gwn_bvh_topology_object<Width,...>`).
 - `gwn_bvh4_topology_object` is topology-only (does **not** include AABB or moment data).
 - Device-side BVH traversal stacks call `gwn_trap()` on overflow (device `asm("trap;")`)
   rather than silently skipping nodes.

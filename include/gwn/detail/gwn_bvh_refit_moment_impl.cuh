@@ -15,7 +15,7 @@ gwn_status gwn_bvh_refit_moment_impl(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &topology,
     gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree,
-    gwn_bvh_moment_accessor<Width, Real, Index> &moment_tree,
+    gwn_bvh_moment_accessor<Width, Order, Real, Index> &moment_tree,
     cudaStream_t const stream = gwn_default_stream()
 ) noexcept {
     return gwn_try_translate_status("gwn_bvh_refit_moment_impl", [&]() -> gwn_status {
@@ -37,13 +37,13 @@ gwn_status gwn_bvh_refit_moment_impl(
                 k_gwn_bvh_phase_refit_moment, "AABB tree accessor is invalid for moment refit."
             );
 
-        auto const release_moment = [](gwn_bvh_moment_accessor<Width, Real, Index> &tree,
+        auto const release_moment = [](gwn_bvh_moment_accessor<Width, Order, Real, Index> &tree,
                                        cudaStream_t const stream_to_release) noexcept {
             gwn_release_bvh_moment_tree_accessor(tree, stream_to_release);
         };
 
         auto const build_moment =
-            [&](gwn_bvh_moment_accessor<Width, Real, Index> &staging_moment) -> gwn_status {
+            [&](gwn_bvh_moment_accessor<Width, Order, Real, Index> &staging_moment) -> gwn_status {
             if (!topology.has_internal_root())
                 return gwn_status::ok();
 
@@ -70,12 +70,7 @@ gwn_status gwn_bvh_refit_moment_impl(
                 geometry, topology, output_context, stream
             )));
 
-            if constexpr (Order == 0)
-                staging_moment.taylor_order0_nodes = staging_nodes;
-            else if constexpr (Order == 1)
-                staging_moment.taylor_order1_nodes = staging_nodes;
-            else
-                staging_moment.taylor_order2_nodes = staging_nodes;
+            staging_moment.nodes = staging_nodes;
             cleanup_staging_nodes.release();
             return gwn_status::ok();
         };
