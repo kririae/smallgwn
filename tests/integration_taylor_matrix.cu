@@ -604,10 +604,13 @@ TEST(smallgwn_integration_taylor_matrix, heavy_order1_order2_width_index_builder
     SMALLGWN_SKIP_IF_NO_CUDA();
     MatrixSummary const summary = run_heavy_profile();
     std::size_t const expected_combo_count = k_matrix_widths.size() * 2u * k_matrix_builders.size();
+    std::size_t const expected_model_limit =
+        read_env_size_t_allow_zero("SMALLGWN_MATRIX_MODEL_LIMIT", 8u);
 
     EXPECT_TRUE(summary.failures.empty()) << join_failures(summary.failures);
     EXPECT_GT(summary.tested_model_count, 0u) << "No valid OBJ models were exercised.";
-    EXPECT_LE(summary.tested_model_count, 8u);
+    if (expected_model_limit > 0)
+        EXPECT_LE(summary.tested_model_count, expected_model_limit);
     EXPECT_TRUE(summary.seen_orders[k_order1_slot]);
     EXPECT_TRUE(summary.seen_orders[k_order2_slot]);
     EXPECT_EQ(summary.width_count, k_matrix_widths.size());
