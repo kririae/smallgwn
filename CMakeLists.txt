@@ -63,12 +63,17 @@ if(SMALLGWN_BUILD_TESTS)
         # Helper: define a unit/integration test target.
         # ---------------------------------------------------------------
         function(smallgwn_add_test TARGET_NAME)
-            cmake_parse_arguments(ARG "" "" "SOURCES;EXTRA_SOURCES" ${ARGN})
+            cmake_parse_arguments(ARG "NO_CTEST" "" "SOURCES;EXTRA_SOURCES" ${ARGN})
             add_executable(${TARGET_NAME} ${ARG_SOURCES} ${ARG_EXTRA_SOURCES})
-            target_link_libraries(${TARGET_NAME} PRIVATE gwn::smallgwn Eigen3::Eigen GTest::gtest GTest::gtest_main TBB::tbb)
+            target_link_libraries(${TARGET_NAME} PRIVATE gwn::smallgwn Eigen3::Eigen GTest::gtest GTest::gtest_main)
+            if(TBB_FOUND)
+                target_link_libraries(${TARGET_NAME} PRIVATE TBB::tbb)
+            endif()
             target_compile_definitions(${TARGET_NAME} PRIVATE GWN_ENABLE_ASSERTS)
             target_include_directories(${TARGET_NAME} PRIVATE ${SMALLGWN_TEST_INCLUDE_DIRS})
-            add_test(NAME ${TARGET_NAME} COMMAND ${TARGET_NAME})
+            if(NOT ARG_NO_CTEST)
+                add_test(NAME ${TARGET_NAME} COMMAND ${TARGET_NAME})
+            endif()
         endfunction()
 
         # ---------------------------------------------------------------
@@ -100,6 +105,24 @@ if(SMALLGWN_BUILD_TESTS)
             EXTRA_SOURCES tests/reference_hdk/UT_Array.cpp tests/reference_hdk/UT_SolidAngle.cpp)
         smallgwn_add_test(smallgwn_integration_correctness  SOURCES tests/integration_correctness.cu)
         smallgwn_add_test(smallgwn_integration_hploc_performance SOURCES tests/integration_hploc_performance.cu)
+
+        smallgwn_add_test(smallgwn_integration_taylor_matrix NO_CTEST
+            SOURCES tests/integration_taylor_matrix.cu
+            EXTRA_SOURCES tests/reference_hdk/UT_Array.cpp tests/reference_hdk/UT_SolidAngle.cpp)
+
+        add_test(NAME smallgwn_integration_taylor_matrix_light
+            COMMAND smallgwn_integration_taylor_matrix --gtest_color=no
+                --gtest_filter=smallgwn_integration_taylor_matrix.light_*)
+        set_tests_properties(smallgwn_integration_taylor_matrix_light PROPERTIES
+            LABELS "integration;light"
+            ENVIRONMENT "SMALLGWN_MATRIX_MODEL_LIMIT=2;SMALLGWN_MATRIX_TOTAL_POINTS=200000;SMALLGWN_MATRIX_ORDER_MAX=1")
+
+        add_test(NAME smallgwn_integration_taylor_matrix_heavy
+            COMMAND smallgwn_integration_taylor_matrix --gtest_color=no
+                --gtest_filter=smallgwn_integration_taylor_matrix.heavy_*)
+        set_tests_properties(smallgwn_integration_taylor_matrix_heavy PROPERTIES
+            LABELS "integration;heavy"
+            ENVIRONMENT "SMALLGWN_MATRIX_MODEL_LIMIT=0;SMALLGWN_MATRIX_TOTAL_POINTS=2000000;SMALLGWN_MATRIX_ORDER_MAX=2")
     else()
         message(STATUS "GTest not found; test targets are skipped.")
     endif()
