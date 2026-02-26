@@ -108,3 +108,26 @@ gwn::gwn_upload_from_eigen(geometry, V, F, stream);
 ```
 
 Alternatively, if libigl is not available, you can load OBJ files manually and populate Eigen matrices yourself.
+
+## Testing
+
+Build tests:
+
+```bash
+cmake -S . -B build
+cmake --build build
+```
+
+Run layered integration suites with CTest labels:
+
+```bash
+ctest --test-dir build -L light --output-on-failure
+ctest --test-dir build -L heavy --output-on-failure
+```
+
+Optionally override model inputs:
+
+```bash
+SMALLGWN_MODEL_DATA_DIR=/tmp/common-3d-test-models-subset \
+ctest --test-dir build -L light --output-on-failure
+```
