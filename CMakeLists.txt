@@ -16,7 +16,6 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_PCH_WARN_INVALID ON)
 
 find_package(CUDAToolkit REQUIRED)
-find_package(TBB REQUIRED)
 
 add_library(smallgwn INTERFACE)
 add_library(gwn::smallgwn ALIAS smallgwn)
@@ -28,13 +27,30 @@ target_include_directories(smallgwn
 )
 
 target_compile_features(smallgwn INTERFACE cxx_std_20)
-target_link_libraries(smallgwn INTERFACE CUDA::cudart TBB::tbb)
+target_link_libraries(smallgwn INTERFACE CUDA::cudart)
 target_compile_options(smallgwn INTERFACE "$<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>")
+
+option(
+    SMALLGWN_BUILD_EIGEN_BRIDGE_TARGET
+    "Create gwn::smallgwn_eigen_bridge helper target (requires Eigen3 and Intel TBB)"
+    ON
+)
+if(SMALLGWN_BUILD_EIGEN_BRIDGE_TARGET)
+    find_package(Eigen3 QUIET)
+    find_package(TBB QUIET COMPONENTS tbb)
+    if(Eigen3_FOUND AND TBB_FOUND)
+        add_library(smallgwn_eigen_bridge INTERFACE)
+        add_library(gwn::smallgwn_eigen_bridge ALIAS smallgwn_eigen_bridge)
+        target_link_libraries(smallgwn_eigen_bridge INTERFACE gwn::smallgwn Eigen3::Eigen TBB::tbb)
+    else()
+        message(STATUS "Eigen3 or TBB not found; gwn::smallgwn_eigen_bridge target is skipped.")
+    endif()
+endif()
 
 option(SMALLGWN_BUILD_BENCHMARKS "Build smallgwn benchmark executable" ON)
 if(SMALLGWN_BUILD_BENCHMARKS)
     add_executable(smallgwn_benchmark benchmarks/benchmark_main.cu)
-    target_link_libraries(smallgwn_benchmark PRIVATE gwn::smallgwn TBB::tbb)
+    target_link_libraries(smallgwn_benchmark PRIVATE gwn::smallgwn)
     target_include_directories(smallgwn_benchmark
         PRIVATE
             "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks"
@@ -50,6 +66,7 @@ if(SMALLGWN_BUILD_TESTS)
     find_package(GTest QUIET)
     if(GTest_FOUND)
         find_package(Eigen3 REQUIRED)
+        find_package(TBB REQUIRED COMPONENTS tbb)
 
         # ---------------------------------------------------------------
         # Common include directories for all test targets.
@@ -66,9 +83,7 @@ if(SMALLGWN_BUILD_TESTS)
             cmake_parse_arguments(ARG "NO_CTEST" "" "SOURCES;EXTRA_SOURCES" ${ARGN})
             add_executable(${TARGET_NAME} ${ARG_SOURCES} ${ARG_EXTRA_SOURCES})
             target_link_libraries(${TARGET_NAME} PRIVATE gwn::smallgwn Eigen3::Eigen GTest::gtest GTest::gtest_main)
-            if(TBB_FOUND)
-                target_link_libraries(${TARGET_NAME} PRIVATE TBB::tbb)
-            endif()
+            target_link_libraries(${TARGET_NAME} PRIVATE TBB::tbb)
             target_compile_definitions(${TARGET_NAME} PRIVATE GWN_ENABLE_ASSERTS)
             target_include_directories(${TARGET_NAME} PRIVATE ${SMALLGWN_TEST_INCLUDE_DIRS})
             if(NOT ARG_NO_CTEST)

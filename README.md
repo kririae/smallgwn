@@ -7,10 +7,11 @@ Taylor-series multipole approximations (orders 0–2) with wide BVH acceleration
 
 - **CUDA Toolkit** (C++20)
 
-Optional (for loading geometry with Eigen matrices):
+Optional:
 
-- **Eigen3** and **Intel TBB** enables `gwn_eigen_bridge.cuh`.
+- **Eigen3** and **Intel TBB** enable `gwn_eigen_bridge.cuh` (and CMake helper target `gwn::smallgwn_eigen_bridge`).
 - **libigl** can be used to load the geometry.
+- Building tests (`SMALLGWN_BUILD_TESTS=ON`) requires **Eigen3** and **Intel TBB**.
 
 ## Building
 
