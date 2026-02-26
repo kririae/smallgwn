@@ -233,8 +233,8 @@ __device__ inline Real gwn_signed_distance_point_bvh_impl(
     Real const accuracy_scale
 ) noexcept {
     static_assert(
-        Order == 0 || Order == 1,
-        "gwn_signed_distance_point_bvh_impl currently supports Order 0 and Order 1."
+        Order == 0 || Order == 1 || Order == 2,
+        "gwn_signed_distance_point_bvh_impl currently supports Order 0, 1, and 2."
     );
 
     Real const dist = gwn_unsigned_distance_point_bvh_impl<Width, Real, Index, StackCapacity>(

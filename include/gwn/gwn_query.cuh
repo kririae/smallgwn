@@ -54,7 +54,7 @@ __device__ inline Real gwn_unsigned_distance_point_bvh(
 /// \brief Compute the signed distance from a query point to the mesh using
 ///        BVH-accelerated traversal and Taylor winding-number sign inference.
 ///
-/// \tparam Order Taylor winding-number order (currently 0 or 1).
+/// \tparam Order Taylor winding-number order (0, 1, or 2).
 /// \param data_tree Taylor moment payload tree aligned to \p bvh.
 /// \param winding_number_threshold Inside/outside threshold applied to Taylor
 ///        winding number (default: \c 0.5).
@@ -75,8 +75,8 @@ __device__ inline Real gwn_signed_distance_point_bvh(
     Real const accuracy_scale = Real(2)
 ) noexcept {
     static_assert(
-        Order == 0 || Order == 1,
-        "gwn_signed_distance_point_bvh currently supports Order 0 and Order 1."
+        Order == 0 || Order == 1 || Order == 2,
+        "gwn_signed_distance_point_bvh currently supports Order 0, 1, and 2."
     );
 
     return detail::gwn_signed_distance_point_bvh_impl<Order, Width, Real, Index, StackCapacity>(
@@ -99,8 +99,8 @@ gwn_status gwn_compute_winding_number_batch_bvh_taylor(
     Real const accuracy_scale = Real(2), cudaStream_t const stream = gwn_default_stream()
 ) noexcept {
     static_assert(
-        Order == 0 || Order == 1,
-        "gwn_compute_winding_number_batch_bvh_taylor currently supports Order 0 and Order 1."
+        Order == 0 || Order == 1 || Order == 2,
+        "gwn_compute_winding_number_batch_bvh_taylor currently supports Order 0, 1, and 2."
     );
     static_assert(StackCapacity > 0, "Traversal stack capacity must be positive.");
 

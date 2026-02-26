@@ -88,7 +88,7 @@ gwn_status gwn_bvh_facade_build_topology_aabb_hploc(
 /// Equivalent to calling \c gwn_bvh_facade_build_topology_aabb_lbvh followed
 /// by \c gwn_bvh_refit_moment on the same stream.
 ///
-/// \tparam Order  Taylor expansion order (currently 0 or 1).
+/// \tparam Order  Taylor expansion order (0, 1, or 2).
 /// \tparam Width  BVH node fan-out.
 /// \tparam Real   Floating-point type.
 /// \tparam Index  Signed integer index type.
@@ -127,7 +127,7 @@ gwn_status gwn_bvh_facade_build_topology_aabb_moment_lbvh(
 /// Equivalent to calling \c gwn_bvh_facade_build_topology_aabb_hploc followed
 /// by \c gwn_bvh_refit_moment on the same stream.
 ///
-/// \tparam Order  Taylor expansion order (currently 0 or 1).
+/// \tparam Order  Taylor expansion order (0, 1, or 2).
 /// \tparam Width  BVH node fan-out.
 /// \tparam Real   Floating-point type.
 /// \tparam Index  Integer index type.

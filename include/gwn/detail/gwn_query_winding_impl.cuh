@@ -137,8 +137,8 @@ __device__ inline Real gwn_winding_number_point_bvh_taylor_impl(
     Real const qz, Real const accuracy_scale
 ) noexcept {
     static_assert(
-        Order == 0 || Order == 1,
-        "gwn_winding_number_point_bvh_taylor currently supports Order 0 and Order 1."
+        Order == 0 || Order == 1 || Order == 2,
+        "gwn_winding_number_point_bvh_taylor currently supports Order 0, 1, and 2."
     );
     static_assert(StackCapacity > 0, "Traversal stack capacity must be positive.");
 
@@ -233,6 +233,49 @@ __device__ inline Real gwn_winding_number_point_bvh_taylor_impl(
                                     qnx * qnz * taylor.child_nzx_nxz[child_slot] +
                                     qny * qnz * taylor.child_nyz_nzy[child_slot]));
                     omega_approx += omega_1;
+                }
+
+                if constexpr (Order >= 2) {
+                    Real const qnx2 = qnx * qnx;
+                    Real const qny2 = qny * qny;
+                    Real const qnz2 = qnz * qnz;
+                    Real const qnx3 = qnx2 * qnx;
+                    Real const qny3 = qny2 * qny;
+                    Real const qnz3 = qnz2 * qnz;
+                    Real const qlength_m4 = qlength_m2 * qlength_m2;
+
+                    Real const nijk_xxx = taylor.child_nijk_xxx[child_slot];
+                    Real const nijk_yyy = taylor.child_nijk_yyy[child_slot];
+                    Real const nijk_zzz = taylor.child_nijk_zzz[child_slot];
+
+                    Real const temp0_x =
+                        taylor.child_2nyyx_nxyy[child_slot] +
+                        taylor.child_2nzzx_nxzz[child_slot];
+                    Real const temp0_y =
+                        taylor.child_2nzzy_nyzz[child_slot] +
+                        taylor.child_2nxxy_nyxx[child_slot];
+                    Real const temp0_z =
+                        taylor.child_2nxxz_nzxx[child_slot] +
+                        taylor.child_2nyyz_nzyy[child_slot];
+
+                    Real const temp1_x =
+                        qny * taylor.child_2nxxy_nyxx[child_slot] +
+                        qnz * taylor.child_2nxxz_nzxx[child_slot];
+                    Real const temp1_y =
+                        qnz * taylor.child_2nyyz_nzyy[child_slot] +
+                        qnx * taylor.child_2nyyx_nxyy[child_slot];
+                    Real const temp1_z =
+                        qnx * taylor.child_2nzzx_nxzz[child_slot] +
+                        qny * taylor.child_2nzzy_nyzz[child_slot];
+
+                    Real const omega_2 = qlength_m4 *
+                        (Real(1.5) * (qnx * (Real(3) * nijk_xxx + temp0_x) +
+                                      qny * (Real(3) * nijk_yyy + temp0_y) +
+                                      qnz * (Real(3) * nijk_zzz + temp0_z)) -
+                         Real(7.5) * (qnx3 * nijk_xxx + qny3 * nijk_yyy + qnz3 * nijk_zzz +
+                                      qnx * qny * qnz * taylor.child_sum_permute_nxyz[child_slot] +
+                                      qnx2 * temp1_x + qny2 * temp1_y + qnz2 * temp1_z));
+                    omega_approx += omega_2;
                 }
 
                 if (isfinite(omega_approx)) {

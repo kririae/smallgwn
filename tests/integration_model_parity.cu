@@ -594,7 +594,10 @@ TEST(smallgwn_integration_model, integration_exact_and_taylor_consistency_on_com
 }
 #endif
 
-TEST(smallgwn_integration_model, integration_taylor_rebuild_consistency_on_common_models) {
+template <int Order>
+void run_integration_taylor_rebuild_consistency_on_common_models(Real const k_consistency_epsilon) {
+    static_assert(Order == 1 || Order == 2);
+
     std::optional<std::filesystem::path> const model_dir = gwn::tests::find_model_data_dir();
     ASSERT_TRUE(model_dir.has_value())
         << "Model directory not found. Set SMALLGWN_MODEL_DATA_DIR or "
@@ -604,7 +607,6 @@ TEST(smallgwn_integration_model, integration_taylor_rebuild_consistency_on_commo
         gwn::tests::collect_obj_model_paths(*model_dir);
     ASSERT_FALSE(model_paths.empty()) << "No .obj models found in " << model_dir->string();
 
-    constexpr Real k_consistency_epsilon = Real(3e-4);
     constexpr Real k_accuracy_scale = Real(2);
 
     std::size_t tested_model_count = 0;
@@ -653,11 +655,11 @@ TEST(smallgwn_integration_model, integration_taylor_rebuild_consistency_on_commo
         gwn::gwn_bvh4_topology_object<Real, Index> bvh_a;
         gwn::gwn_bvh4_aabb_object<Real, Index> aabb_a;
         gwn::gwn_bvh4_moment_object<Real, Index> data_a;
-        ASSERT_TRUE((gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<1, 4, Real, Index>(
+        ASSERT_TRUE((gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<Order, 4, Real, Index>(
                          geometry, bvh_a, aabb_a, data_a
         )
                          .is_ok()));
-        ASSERT_TRUE((gwn::gwn_compute_winding_number_batch_bvh_taylor<1, Real, Index>(
+        ASSERT_TRUE((gwn::gwn_compute_winding_number_batch_bvh_taylor<Order, Real, Index>(
                          geometry.accessor(), bvh_a.accessor(), data_a.accessor(), d_qx.span(),
                          d_qy.span(), d_qz.span(), d_out.span(), k_accuracy_scale
         )
@@ -673,11 +675,11 @@ TEST(smallgwn_integration_model, integration_taylor_rebuild_consistency_on_commo
         gwn::gwn_bvh4_topology_object<Real, Index> bvh_b;
         gwn::gwn_bvh4_aabb_object<Real, Index> aabb_b;
         gwn::gwn_bvh4_moment_object<Real, Index> data_b;
-        ASSERT_TRUE((gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<1, 4, Real, Index>(
+        ASSERT_TRUE((gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<Order, 4, Real, Index>(
                          geometry, bvh_b, aabb_b, data_b
         )
                          .is_ok()));
-        ASSERT_TRUE((gwn::gwn_compute_winding_number_batch_bvh_taylor<1, Real, Index>(
+        ASSERT_TRUE((gwn::gwn_compute_winding_number_batch_bvh_taylor<Order, Real, Index>(
                          geometry.accessor(), bvh_b.accessor(), data_b.accessor(), d_qx.span(),
                          d_qy.span(), d_qz.span(), d_out.span(), k_accuracy_scale
         )
@@ -697,7 +699,15 @@ TEST(smallgwn_integration_model, integration_taylor_rebuild_consistency_on_commo
     ASSERT_GT(tested_model_count, 0u) << "No valid OBJ models were exercised.";
 }
 
-TEST(smallgwn_integration_model, integration_taylor_matches_hdk_cpu_order0_order1) {
+TEST(smallgwn_integration_model, integration_taylor_rebuild_consistency_on_common_models_order1) {
+    run_integration_taylor_rebuild_consistency_on_common_models<1>(Real(3e-4));
+}
+
+TEST(smallgwn_integration_model, integration_taylor_rebuild_consistency_on_common_models_order2) {
+    run_integration_taylor_rebuild_consistency_on_common_models<2>(Real(3e-4));
+}
+
+TEST(smallgwn_integration_model, integration_taylor_matches_hdk_cpu_order0_order1_order2) {
     std::optional<std::filesystem::path> const model_dir = gwn::tests::find_model_data_dir();
     ASSERT_TRUE(model_dir.has_value())
         << "Model directory not found. Set SMALLGWN_MODEL_DATA_DIR or "
@@ -710,6 +720,7 @@ TEST(smallgwn_integration_model, integration_taylor_matches_hdk_cpu_order0_order
     constexpr Real k_accuracy_scale = Real(2);
     constexpr Real k_order0_epsilon = Real(5e-2);
     constexpr Real k_order1_epsilon = Real(3e-2);
+    constexpr Real k_order2_epsilon = Real(2e-2);
 
     std::size_t tested_model_count = 0;
     for (std::filesystem::path const &model_path : model_paths) {
@@ -725,6 +736,7 @@ TEST(smallgwn_integration_model, integration_taylor_matches_hdk_cpu_order0_order
 
         std::vector<Real> cpu_order0(query_count, Real(0));
         std::vector<Real> cpu_order1(query_count, Real(0));
+        std::vector<Real> cpu_order2(query_count, Real(0));
         ASSERT_TRUE((gwn::tests::reference_winding_number_batch_hdk_taylor<Real, Index>(
                          std::span<Real const>(mesh.vertex_x.data(), mesh.vertex_x.size()),
                          std::span<Real const>(mesh.vertex_y.data(), mesh.vertex_y.size()),
@@ -749,6 +761,19 @@ TEST(smallgwn_integration_model, integration_taylor_matches_hdk_cpu_order0_order
                          std::span<Real const>(query_soa[1].data(), query_soa[1].size()),
                          std::span<Real const>(query_soa[2].data(), query_soa[2].size()),
                          std::span<Real>(cpu_order1.data(), cpu_order1.size()), 1, k_accuracy_scale
+        )
+                         .is_ok()));
+        ASSERT_TRUE((gwn::tests::reference_winding_number_batch_hdk_taylor<Real, Index>(
+                         std::span<Real const>(mesh.vertex_x.data(), mesh.vertex_x.size()),
+                         std::span<Real const>(mesh.vertex_y.data(), mesh.vertex_y.size()),
+                         std::span<Real const>(mesh.vertex_z.data(), mesh.vertex_z.size()),
+                         std::span<Index const>(mesh.tri_i0.data(), mesh.tri_i0.size()),
+                         std::span<Index const>(mesh.tri_i1.data(), mesh.tri_i1.size()),
+                         std::span<Index const>(mesh.tri_i2.data(), mesh.tri_i2.size()),
+                         std::span<Real const>(query_soa[0].data(), query_soa[0].size()),
+                         std::span<Real const>(query_soa[1].data(), query_soa[1].size()),
+                         std::span<Real const>(query_soa[2].data(), query_soa[2].size()),
+                         std::span<Real>(cpu_order2.data(), cpu_order2.size()), 2, k_accuracy_scale
         )
                          .is_ok()));
 
@@ -818,10 +843,27 @@ TEST(smallgwn_integration_model, integration_taylor_matches_hdk_cpu_order0_order
         );
         ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
 
+        ASSERT_TRUE((gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<2, 4, Real, Index>(
+                         geometry, bvh, aabb, data
+        )
+                         .is_ok()));
+        ASSERT_TRUE((gwn::gwn_compute_winding_number_batch_bvh_taylor<2, Real, Index>(
+                         geometry.accessor(), bvh.accessor(), data.accessor(), d_qx.span(),
+                         d_qy.span(), d_qz.span(), d_out.span(), k_accuracy_scale
+        )
+                         .is_ok()));
+        ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+        std::vector<Real> gpu_order2(query_count, Real(0));
+        ASSERT_TRUE(
+            d_out.copy_to_host(cuda::std::span<Real>(gpu_order2.data(), gpu_order2.size())).is_ok()
+        );
+        ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+
         ++tested_model_count;
         for (std::size_t qi = 0; qi < query_count; ++qi) {
             EXPECT_NEAR(gpu_order0[qi], cpu_order0[qi], k_order0_epsilon) << "query index: " << qi;
             EXPECT_NEAR(gpu_order1[qi], cpu_order1[qi], k_order1_epsilon) << "query index: " << qi;
+            EXPECT_NEAR(gpu_order2[qi], cpu_order2[qi], k_order2_epsilon) << "query index: " << qi;
         }
     }
 

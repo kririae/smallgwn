@@ -37,6 +37,34 @@ struct gwn_device_taylor_moment<1, Real> : gwn_device_taylor_moment<0, Real> {
     Real nz_z = Real(0);
 };
 
+/// Order-2 payload: additive raw second moments about the global origin.
+/// For each normal component i in {x,y,z}, stores six jk moments:
+/// {xx, yy, zz, xy, yz, zx}.  The final 10 query coefficients are reconstructed
+/// at node centroids in write_valid.
+template <gwn_real_type Real>
+struct gwn_device_taylor_moment<2, Real> : gwn_device_taylor_moment<1, Real> {
+    Real raw_x_xx = Real(0);
+    Real raw_x_yy = Real(0);
+    Real raw_x_zz = Real(0);
+    Real raw_x_xy = Real(0);
+    Real raw_x_yz = Real(0);
+    Real raw_x_zx = Real(0);
+
+    Real raw_y_xx = Real(0);
+    Real raw_y_yy = Real(0);
+    Real raw_y_zz = Real(0);
+    Real raw_y_xy = Real(0);
+    Real raw_y_yz = Real(0);
+    Real raw_y_zx = Real(0);
+
+    Real raw_z_xx = Real(0);
+    Real raw_z_yy = Real(0);
+    Real raw_z_zz = Real(0);
+    Real raw_z_xy = Real(0);
+    Real raw_z_yz = Real(0);
+    Real raw_z_zx = Real(0);
+};
+
 template <int Order, gwn_real_type Real>
 __host__ __device__ inline void gwn_accumulate_taylor_moment(
     gwn_device_taylor_moment<Order, Real> &dst, gwn_device_taylor_moment<Order, Real> const &src
@@ -58,6 +86,28 @@ __host__ __device__ inline void gwn_accumulate_taylor_moment(
         dst.nz_x += src.nz_x;
         dst.nz_y += src.nz_y;
         dst.nz_z += src.nz_z;
+    }
+    if constexpr (Order >= 2) {
+        dst.raw_x_xx += src.raw_x_xx;
+        dst.raw_x_yy += src.raw_x_yy;
+        dst.raw_x_zz += src.raw_x_zz;
+        dst.raw_x_xy += src.raw_x_xy;
+        dst.raw_x_yz += src.raw_x_yz;
+        dst.raw_x_zx += src.raw_x_zx;
+
+        dst.raw_y_xx += src.raw_y_xx;
+        dst.raw_y_yy += src.raw_y_yy;
+        dst.raw_y_zz += src.raw_y_zz;
+        dst.raw_y_xy += src.raw_y_xy;
+        dst.raw_y_yz += src.raw_y_yz;
+        dst.raw_y_zx += src.raw_y_zx;
+
+        dst.raw_z_xx += src.raw_z_xx;
+        dst.raw_z_yy += src.raw_z_yy;
+        dst.raw_z_zz += src.raw_z_zz;
+        dst.raw_z_xy += src.raw_z_xy;
+        dst.raw_z_yz += src.raw_z_yz;
+        dst.raw_z_zx += src.raw_z_zx;
     }
 }
 
@@ -178,6 +228,208 @@ __device__ inline bool gwn_compute_triangle_taylor_raw_moment(
         raw_moment.nz_x = n_z * average_x;
         raw_moment.nz_y = n_z * average_y;
         raw_moment.nz_z = n_z * average_z;
+    }
+    if constexpr (Order >= 2) {
+        // Zero-area triangles contribute nothing to second moments.
+        if (area == Real(0)) {
+            raw_moment.raw_x_xx = Real(0);
+            raw_moment.raw_x_yy = Real(0);
+            raw_moment.raw_x_zz = Real(0);
+            raw_moment.raw_x_xy = Real(0);
+            raw_moment.raw_x_yz = Real(0);
+            raw_moment.raw_x_zx = Real(0);
+
+            raw_moment.raw_y_xx = Real(0);
+            raw_moment.raw_y_yy = Real(0);
+            raw_moment.raw_y_zz = Real(0);
+            raw_moment.raw_y_xy = Real(0);
+            raw_moment.raw_y_yz = Real(0);
+            raw_moment.raw_y_zx = Real(0);
+
+            raw_moment.raw_z_xx = Real(0);
+            raw_moment.raw_z_yy = Real(0);
+            raw_moment.raw_z_zz = Real(0);
+            raw_moment.raw_z_xy = Real(0);
+            raw_moment.raw_z_yz = Real(0);
+            raw_moment.raw_z_zx = Real(0);
+            return true;
+        }
+
+        // Unit normal for multiplying integrals.
+        Real const inv_area = Real(1) / area;
+        Real const nhat_x = n_x * inv_area;
+        Real const nhat_y = n_y * inv_area;
+        Real const nhat_z = n_z * inv_area;
+
+        // Vertex positions as arrays for axis-indexed access.
+        Real const verts[3][3] = {
+            {ax, ay, az},
+            {bx, by, bz},
+            {cx, cy, cz},
+        };
+
+        // Compute 6 area-scaled surface integrals: integral_ii and integral_ij
+        // using the HDK's sorted-vertex triangle-splitting method.
+        // Reference: UT_SolidAngle.cpp lines 306-440.
+        // We compute integrals relative to the triangle centroid P (= average),
+        // matching the HDK convention.
+        Real const P[3] = {average_x, average_y, average_z};
+
+        // Sort vertex indices along each axis independently.
+        // order_a[i] gives the 3 vertex indices sorted by axis i.
+        int order_a[3][3] = {{0,1,2}, {0,1,2}, {0,1,2}};
+        Real span[3];
+        for (int axis = 0; axis < 3; ++axis) {
+            auto swap2 = [](int &a, int &b) { int t = a; a = b; b = t; };
+            if (verts[0][axis] > verts[1][axis])
+                swap2(order_a[axis][0], order_a[axis][1]);
+            if (verts[order_a[axis][0]][axis] > verts[2][axis])
+                swap2(order_a[axis][0], order_a[axis][2]);
+            if (verts[order_a[axis][1]][axis] > verts[order_a[axis][2]][axis])
+                swap2(order_a[axis][1], order_a[axis][2]);
+            span[axis] = verts[order_a[axis][2]][axis] - verts[order_a[axis][0]][axis];
+        }
+
+        Real integral_xx = Real(0), integral_yy = Real(0), integral_zz = Real(0);
+        Real integral_xy = Real(0), integral_yz = Real(0), integral_zx = Real(0);
+
+        // Lambda-equivalent: compute integrals by splitting triangle at middle
+        // vertex along axis i. Computes integral_ii and optionally integral_ij, integral_ik.
+        // a, b, c are vertices sorted along axis i (a[i] <= b[i] <= c[i]).
+        auto compute_integrals = [&](
+            int const va, int const vb, int const vc,
+            Real *out_ii, Real *out_ij, Real *out_ik,
+            int const i
+        ) {
+            int const j = (i == 2) ? 0 : (i + 1);
+            int const k = (j == 2) ? 0 : (j + 1);
+
+            Real const oab_i = verts[vb][i] - verts[va][i];
+            Real const oab_j = verts[vb][j] - verts[va][j];
+            Real const oab_k = verts[vb][k] - verts[va][k];
+            Real const oac_i = verts[vc][i] - verts[va][i];
+            Real const oac_j = verts[vc][j] - verts[va][j];
+            Real const oac_k = verts[vc][k] - verts[va][k];
+            Real const ocb_i = verts[vb][i] - verts[vc][i];
+            Real const ocb_j = verts[vb][j] - verts[vc][j];
+            Real const ocb_k = verts[vb][k] - verts[vc][k];
+
+            Real const t = (oac_i > Real(0)) ? (oab_i / oac_i) : Real(0);
+            Real const jdiff = t * oac_j - oab_j;
+            Real const kdiff = t * oac_k - oab_k;
+
+            // Cross products for area scaling of the two sub-triangles.
+            Real const cross_a_0 = jdiff * oab_k - kdiff * oab_j;
+            Real const cross_a_1 = kdiff * oab_i;
+            Real const cross_a_2 = jdiff * oab_i;
+            Real const cross_c_0 = jdiff * ocb_k - kdiff * ocb_j;
+            Real const cross_c_1 = kdiff * ocb_i;
+            Real const cross_c_2 = jdiff * ocb_i;
+
+            Real const area_scale_a = sqrt(std::max(
+                cross_a_0 * cross_a_0 + cross_a_1 * cross_a_1 + cross_a_2 * cross_a_2, Real(0)));
+            Real const area_scale_c = sqrt(std::max(
+                cross_c_0 * cross_c_0 + cross_c_1 * cross_c_1 + cross_c_2 * cross_c_2, Real(0)));
+
+            Real const Pai = verts[va][i] - P[i];
+            Real const Pci = verts[vc][i] - P[i];
+
+            // integral_ii = integral of (p_i - P_i)^2 dA
+            *out_ii = area_scale_a * (Real(0.5) * Pai * Pai + Real(2.0/3.0) * Pai * oab_i + Real(0.25) * oab_i * oab_i)
+                    + area_scale_c * (Real(0.5) * Pci * Pci + Real(2.0/3.0) * Pci * ocb_i + Real(0.25) * ocb_i * ocb_i);
+
+            // Cross-integrals integral_ij and integral_ik.
+            auto compute_cross = [&](int const jk, Real const diff, Real *out) {
+                if (!out) return;
+                Real const obmidj = verts[vb][jk] + Real(0.5) * diff;
+                Real const oabmidj = obmidj - verts[va][jk];
+                Real const ocbmidj = obmidj - verts[vc][jk];
+                Real const Paj = verts[va][jk] - P[jk];
+                Real const Pcj = verts[vc][jk] - P[jk];
+                *out = area_scale_a * (Real(0.5) * Pai * Paj + Real(1.0/3.0) * Pai * oabmidj + Real(1.0/3.0) * Paj * oab_i + Real(0.25) * oab_i * oabmidj)
+                     + area_scale_c * (Real(0.5) * Pci * Pcj + Real(1.0/3.0) * Pci * ocbmidj + Real(1.0/3.0) * Pcj * ocb_i + Real(0.25) * ocb_i * ocbmidj);
+            };
+
+            compute_cross(j, jdiff, out_ij);
+            compute_cross(k, kdiff, out_ik);
+        };
+
+        // Compute integrals along each axis, choosing which cross-integrals
+        // to compute based on axis span (avoids redundant computation).
+        // Reference: UT_SolidAngle.cpp lines 423-440.
+        Real const dx = span[0], dy = span[1], dz = span[2];
+        if (dx > Real(0)) {
+            compute_integrals(
+                order_a[0][0], order_a[0][1], order_a[0][2],
+                &integral_xx,
+                (dx >= dy && dy > Real(0)) ? &integral_xy : nullptr,
+                (dx >= dz && dz > Real(0)) ? &integral_zx : nullptr,
+                0);
+        }
+        if (dy > Real(0)) {
+            compute_integrals(
+                order_a[1][0], order_a[1][1], order_a[1][2],
+                &integral_yy,
+                (dy >= dz && dz > Real(0)) ? &integral_yz : nullptr,
+                (dx < dy && dx > Real(0)) ? &integral_xy : nullptr,
+                1);
+        }
+        if (dz > Real(0)) {
+            compute_integrals(
+                order_a[2][0], order_a[2][1], order_a[2][2],
+                &integral_zz,
+                (dx < dz && dx > Real(0)) ? &integral_zx : nullptr,
+                (dy < dz && dy > Real(0)) ? &integral_yz : nullptr,
+                2);
+        }
+
+        // Store additive second moments about the global origin:
+        //   raw_i_jk = centred_i_jk + N_i * P_j * P_k
+        // where centred_i_jk = n_hat_i * integral_jk around triangle centroid P.
+        Real const Px = average_x, Py = average_y, Pz = average_z;
+        Real const Nx = n_x, Ny = n_y, Nz = n_z;
+
+        Real const cx_xx = nhat_x * integral_xx;
+        Real const cx_yy = nhat_x * integral_yy;
+        Real const cx_zz = nhat_x * integral_zz;
+        Real const cx_xy = nhat_x * integral_xy;
+        Real const cx_yz = nhat_x * integral_yz;
+        Real const cx_zx = nhat_x * integral_zx;
+
+        Real const cy_xx = nhat_y * integral_xx;
+        Real const cy_yy = nhat_y * integral_yy;
+        Real const cy_zz = nhat_y * integral_zz;
+        Real const cy_xy = nhat_y * integral_xy;
+        Real const cy_yz = nhat_y * integral_yz;
+        Real const cy_zx = nhat_y * integral_zx;
+
+        Real const cz_xx = nhat_z * integral_xx;
+        Real const cz_yy = nhat_z * integral_yy;
+        Real const cz_zz = nhat_z * integral_zz;
+        Real const cz_xy = nhat_z * integral_xy;
+        Real const cz_yz = nhat_z * integral_yz;
+        Real const cz_zx = nhat_z * integral_zx;
+
+        raw_moment.raw_x_xx = cx_xx + Nx * Px * Px;
+        raw_moment.raw_x_yy = cx_yy + Nx * Py * Py;
+        raw_moment.raw_x_zz = cx_zz + Nx * Pz * Pz;
+        raw_moment.raw_x_xy = cx_xy + Nx * Px * Py;
+        raw_moment.raw_x_yz = cx_yz + Nx * Py * Pz;
+        raw_moment.raw_x_zx = cx_zx + Nx * Pz * Px;
+
+        raw_moment.raw_y_xx = cy_xx + Ny * Px * Px;
+        raw_moment.raw_y_yy = cy_yy + Ny * Py * Py;
+        raw_moment.raw_y_zz = cy_zz + Ny * Pz * Pz;
+        raw_moment.raw_y_xy = cy_xy + Ny * Px * Py;
+        raw_moment.raw_y_yz = cy_yz + Ny * Py * Pz;
+        raw_moment.raw_y_zx = cy_zx + Ny * Pz * Px;
+
+        raw_moment.raw_z_xx = cz_xx + Nz * Px * Px;
+        raw_moment.raw_z_yy = cz_yy + Nz * Py * Py;
+        raw_moment.raw_z_zz = cz_zz + Nz * Pz * Pz;
+        raw_moment.raw_z_xy = cz_xy + Nz * Px * Py;
+        raw_moment.raw_z_yz = cz_yz + Nz * Py * Pz;
+        raw_moment.raw_z_zx = cz_zx + Nz * Pz * Px;
     }
     return true;
 }
@@ -387,6 +639,18 @@ struct gwn_moment_refit_traits {
             node.child_nyz_nzy[child_slot] = Real(0);
             node.child_nzx_nxz[child_slot] = Real(0);
         }
+        if constexpr (Order >= 2) {
+            node.child_nijk_xxx[child_slot] = Real(0);
+            node.child_nijk_yyy[child_slot] = Real(0);
+            node.child_nijk_zzz[child_slot] = Real(0);
+            node.child_sum_permute_nxyz[child_slot] = Real(0);
+            node.child_2nxxy_nyxx[child_slot] = Real(0);
+            node.child_2nxxz_nzxx[child_slot] = Real(0);
+            node.child_2nyyz_nzyy[child_slot] = Real(0);
+            node.child_2nyyx_nxyy[child_slot] = Real(0);
+            node.child_2nzzx_nxzz[child_slot] = Real(0);
+            node.child_2nzzy_nyzz[child_slot] = Real(0);
+        }
     }
 
     __device__ static void write_invalid(
@@ -448,6 +712,63 @@ struct gwn_moment_refit_traits {
             node.child_nxy_nyx[child_slot] = nxy + nyx;
             node.child_nyz_nzy[child_slot] = nyz + nzy;
             node.child_nzx_nxz[child_slot] = nzx + nxz;
+        }
+
+        if constexpr (Order >= 2) {
+            Real const Px = average_x, Py = average_y, Pz = average_z;
+            Real const Nx = payload.n_x, Ny = payload.n_y, Nz = payload.n_z;
+            // Reconstruct centred second moments from additive raw-origin moments:
+            //   centred_i_jk = raw_i_jk - P_j * F_i_k - P_k * F_i_j + P_j*P_k*N_i
+            // where F_i_j are first moments (payload.n?_?).
+            Real const x_xx =
+                payload.raw_x_xx - Real(2) * Px * payload.nx_x + Px * Px * Nx;
+            Real const x_yy =
+                payload.raw_x_yy - Real(2) * Py * payload.nx_y + Py * Py * Nx;
+            Real const x_zz =
+                payload.raw_x_zz - Real(2) * Pz * payload.nx_z + Pz * Pz * Nx;
+            Real const x_xy =
+                payload.raw_x_xy - Px * payload.nx_y - Py * payload.nx_x + Px * Py * Nx;
+            Real const x_yz =
+                payload.raw_x_yz - Py * payload.nx_z - Pz * payload.nx_y + Py * Pz * Nx;
+            Real const x_zx =
+                payload.raw_x_zx - Pz * payload.nx_x - Px * payload.nx_z + Pz * Px * Nx;
+
+            Real const y_xx =
+                payload.raw_y_xx - Real(2) * Px * payload.ny_x + Px * Px * Ny;
+            Real const y_yy =
+                payload.raw_y_yy - Real(2) * Py * payload.ny_y + Py * Py * Ny;
+            Real const y_zz =
+                payload.raw_y_zz - Real(2) * Pz * payload.ny_z + Pz * Pz * Ny;
+            Real const y_xy =
+                payload.raw_y_xy - Px * payload.ny_y - Py * payload.ny_x + Px * Py * Ny;
+            Real const y_yz =
+                payload.raw_y_yz - Py * payload.ny_z - Pz * payload.ny_y + Py * Pz * Ny;
+            Real const y_zx =
+                payload.raw_y_zx - Pz * payload.ny_x - Px * payload.ny_z + Pz * Px * Ny;
+
+            Real const z_xx =
+                payload.raw_z_xx - Real(2) * Px * payload.nz_x + Px * Px * Nz;
+            Real const z_yy =
+                payload.raw_z_yy - Real(2) * Py * payload.nz_y + Py * Py * Nz;
+            Real const z_zz =
+                payload.raw_z_zz - Real(2) * Pz * payload.nz_z + Pz * Pz * Nz;
+            Real const z_xy =
+                payload.raw_z_xy - Px * payload.nz_y - Py * payload.nz_x + Px * Py * Nz;
+            Real const z_yz =
+                payload.raw_z_yz - Py * payload.nz_z - Pz * payload.nz_y + Py * Pz * Nz;
+            Real const z_zx =
+                payload.raw_z_zx - Pz * payload.nz_x - Px * payload.nz_z + Pz * Px * Nz;
+
+            node.child_nijk_xxx[child_slot] = x_xx;
+            node.child_nijk_yyy[child_slot] = y_yy;
+            node.child_nijk_zzz[child_slot] = z_zz;
+            node.child_sum_permute_nxyz[child_slot] = Real(2) * (x_yz + y_zx + z_xy);
+            node.child_2nxxy_nyxx[child_slot] = Real(2) * x_xy + y_xx;
+            node.child_2nxxz_nzxx[child_slot] = Real(2) * x_zx + z_xx;
+            node.child_2nyyz_nzyy[child_slot] = Real(2) * y_yz + z_yy;
+            node.child_2nyyx_nxyy[child_slot] = Real(2) * y_xy + x_yy;
+            node.child_2nzzx_nxzz[child_slot] = Real(2) * z_zx + x_zz;
+            node.child_2nzzy_nyzz[child_slot] = Real(2) * z_yz + y_zz;
         }
     }
 };

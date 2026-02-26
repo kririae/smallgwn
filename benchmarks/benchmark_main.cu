@@ -567,6 +567,18 @@ int main(int argc, char **argv) try {
             );
         };
 
+        auto build_facade_o2 = [&]() noexcept -> gwn::gwn_status {
+            if (options.topology_builder == benchmark_topology_builder::k_hploc) {
+                return gwn::gwn_bvh_facade_build_topology_aabb_moment_hploc<
+                    2, k_bvh_width, Real, Index>(
+                    geometry, topology, aabb_tree, moment_tree, stream
+                );
+            }
+            return gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<2, k_bvh_width, Real, Index>(
+                geometry, topology, aabb_tree, moment_tree, stream
+            );
+        };
+
         std::cout << "Model: " << model_path.string() << " (V=" << mesh.vertex_x.size()
                   << ", F=" << mesh.tri_i0.size() << ", Q=" << options.query_count << ")\n";
 
@@ -623,6 +635,17 @@ int main(int argc, char **argv) try {
         );
         emit_result(refit_moment_o1_stage);
 
+        auto const refit_moment_o2_stage = run_stage(
+            "refit_moment_o2", "triangles/s", mesh.tri_i0.size(), options, mesh.vertex_x.size(),
+            mesh.tri_i0.size(), options.query_count, stream, setup_topology_and_aabb,
+            [&]() noexcept {
+            return gwn::gwn_bvh_refit_moment<2, k_bvh_width, Real, Index>(
+                geometry, topology, aabb_tree, moment_tree, stream
+            );
+        }
+        );
+        emit_result(refit_moment_o2_stage);
+
         auto const facade_o0_stage = run_stage(
             "facade_o0", "triangles/s", mesh.tri_i0.size(), options, mesh.vertex_x.size(),
             mesh.tri_i0.size(), options.query_count, stream,
@@ -636,6 +659,13 @@ int main(int argc, char **argv) try {
             [&]() noexcept { return gwn::gwn_status::ok(); }, build_facade_o1
         );
         emit_result(facade_o1_stage);
+
+        auto const facade_o2_stage = run_stage(
+            "facade_o2", "triangles/s", mesh.tri_i0.size(), options, mesh.vertex_x.size(),
+            mesh.tri_i0.size(), options.query_count, stream,
+            [&]() noexcept { return gwn::gwn_status::ok(); }, build_facade_o2
+        );
+        emit_result(facade_o2_stage);
 
         auto const query_o0_stage = run_stage(
             "query_taylor_o0", "queries/s", options.query_count, options, mesh.vertex_x.size(),
@@ -660,6 +690,18 @@ int main(int argc, char **argv) try {
         }
         );
         emit_result(query_o1_stage);
+
+        auto const query_o2_stage = run_stage(
+            "query_taylor_o2", "queries/s", options.query_count, options, mesh.vertex_x.size(),
+            mesh.tri_i0.size(), options.query_count, stream, build_facade_o2, [&]() noexcept {
+            return run_taylor_query_with_stack_capacity<2>(
+                options.stack_capacity, geometry.accessor(), topology.accessor(),
+                moment_tree.accessor(), d_qx.span(), d_qy.span(), d_qz.span(), d_out.span(),
+                options.accuracy_scale, stream
+            );
+        }
+        );
+        emit_result(query_o2_stage);
 
         std::cout << "\n";
         ++successful_models;

@@ -60,7 +60,7 @@ gwn_status gwn_bvh_refit_aabb(
 ///
 /// On success the bound stream of \p moment_tree is updated to \p stream.
 ///
-/// \tparam Order  Taylor expansion order (currently 0 or 1).
+/// \tparam Order  Taylor expansion order (0, 1, or 2).
 /// \tparam Width  BVH node fan-out.
 /// \tparam Real   Floating-point type.
 /// \tparam Index  Signed integer index type.

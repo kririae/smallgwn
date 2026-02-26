@@ -13,7 +13,7 @@
 
 // ---------------------------------------------------------------------------
 // BVH Taylor data build unit tests — verifies Taylor moment data existence
-// and basic validity for Order=0 and Order=1.
+// and basic validity for Order=0, Order=1, and Order=2.
 // ---------------------------------------------------------------------------
 
 using Real = gwn::tests::Real;
@@ -113,6 +113,28 @@ TEST_F(CudaFixture, taylor_order1_build_marks_accessor) {
     EXPECT_TRUE(data.accessor().template has_taylor_order<1>());
 }
 
+// ---------------------------------------------------------------------------
+// Order 2 — build succeeds and has_taylor_order<2>.
+// ---------------------------------------------------------------------------
+
+TEST_F(CudaFixture, taylor_order2_build_marks_accessor) {
+    auto maybe_geo = upload_octahedron();
+    if (!maybe_geo.has_value())
+        GTEST_SKIP() << "CUDA unavailable";
+    auto &geometry = *maybe_geo;
+
+    gwn::gwn_bvh4_topology_object<Real, Index> bvh;
+    gwn::gwn_bvh4_aabb_object<Real, Index> aabb;
+    gwn::gwn_bvh4_moment_object<Real, Index> data;
+    gwn::gwn_status const status =
+        gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<2, 4, Real, Index>(
+            geometry, bvh, aabb, data
+        );
+    ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
+
+    EXPECT_TRUE(data.accessor().template has_taylor_order<2>());
+}
+
 TEST_F(CudaFixture, taylor_order0_build_marks_accessor_hploc) {
     auto maybe_geo = upload_octahedron();
     if (!maybe_geo.has_value())
@@ -146,6 +168,22 @@ TEST_F(CudaFixture, taylor_order1_build_marks_accessor_hploc) {
     EXPECT_TRUE(data.accessor().template has_taylor_order<1>());
 }
 
+TEST_F(CudaFixture, taylor_order2_build_marks_accessor_hploc) {
+    auto maybe_geo = upload_octahedron();
+    if (!maybe_geo.has_value())
+        GTEST_SKIP() << "CUDA unavailable";
+    auto &geometry = *maybe_geo;
+
+    gwn::gwn_bvh4_topology_object<Real, Index> bvh;
+    gwn::gwn_bvh4_aabb_object<Real, Index> aabb;
+    gwn::gwn_bvh4_moment_object<Real, Index> data;
+    gwn::gwn_status const status =
+        build_taylor_tree<2>(taylor_topology_builder::k_hploc, geometry, bvh, aabb, data);
+    ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
+
+    EXPECT_TRUE(data.accessor().template has_taylor_order<2>());
+}
+
 // ---------------------------------------------------------------------------
 // Rebuild path keeps requested order data valid.
 // ---------------------------------------------------------------------------
@@ -168,6 +206,24 @@ TEST_F(CudaFixture, taylor_rebuild_order1_marks_accessor) {
     EXPECT_TRUE(data.accessor().template has_taylor_order<1>());
 }
 
+TEST_F(CudaFixture, taylor_rebuild_order2_marks_accessor) {
+    auto maybe_geo = upload_octahedron();
+    if (!maybe_geo.has_value())
+        GTEST_SKIP() << "CUDA unavailable";
+    auto &geometry = *maybe_geo;
+
+    gwn::gwn_bvh4_topology_object<Real, Index> bvh;
+    gwn::gwn_bvh4_aabb_object<Real, Index> aabb;
+    gwn::gwn_bvh4_moment_object<Real, Index> data;
+    gwn::gwn_status const status =
+        gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<2, 4, Real, Index>(
+            geometry, bvh, aabb, data
+        );
+    ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
+
+    EXPECT_TRUE(data.accessor().template has_taylor_order<2>());
+}
+
 // ---------------------------------------------------------------------------
 // Default data accessor is empty.
 // ---------------------------------------------------------------------------
@@ -177,6 +233,7 @@ TEST(smallgwn_unit_bvh_taylor, default_data_is_empty) {
     EXPECT_TRUE(data_acc.empty());
     EXPECT_FALSE(data_acc.has_taylor_order<0>());
     EXPECT_FALSE(data_acc.has_taylor_order<1>());
+    EXPECT_FALSE(data_acc.has_taylor_order<2>());
 }
 
 // ---------------------------------------------------------------------------

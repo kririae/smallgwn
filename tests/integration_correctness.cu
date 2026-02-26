@@ -354,7 +354,9 @@ summarize_error(std::span<Real const> const lhs, std::span<Real const> const rhs
 // Integration Tests.
 // ---------------------------------------------------------------------------
 
-TEST(smallgwn_integration_correctness, voxel_order1_rebuild_consistency) {
+template <int Order> void run_voxel_rebuild_consistency_test() {
+    static_assert(Order == 1 || Order == 2);
+
     std::vector<std::filesystem::path> const model_paths = gwn::tests::collect_model_paths();
     ASSERT_FALSE(model_paths.empty())
         << "No model input found. Set SMALLGWN_MODEL_DATA_DIR or SMALLGWN_MODEL_PATH.";
@@ -401,7 +403,7 @@ TEST(smallgwn_integration_correctness, voxel_order1_rebuild_consistency) {
         gwn::gwn_bvh4_topology_object<Real, Index> bvh_iterative;
         gwn::gwn_bvh4_aabb_object<Real, Index> aabb_iterative;
         gwn::gwn_bvh4_moment_object<Real, Index> data_iterative;
-        ASSERT_TRUE((gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<1, 4, Real, Index>(
+        ASSERT_TRUE((gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<Order, 4, Real, Index>(
                          geometry, bvh_iterative, aabb_iterative, data_iterative
         )
                          .is_ok()));
@@ -409,7 +411,7 @@ TEST(smallgwn_integration_correctness, voxel_order1_rebuild_consistency) {
         gwn::gwn_bvh4_topology_object<Real, Index> bvh_levelwise;
         gwn::gwn_bvh4_aabb_object<Real, Index> aabb_levelwise;
         gwn::gwn_bvh4_moment_object<Real, Index> data_levelwise;
-        ASSERT_TRUE((gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<1, 4, Real, Index>(
+        ASSERT_TRUE((gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<Order, 4, Real, Index>(
                          geometry, bvh_levelwise, aabb_levelwise, data_levelwise
         )
                          .is_ok()));
@@ -449,7 +451,7 @@ TEST(smallgwn_integration_correctness, voxel_order1_rebuild_consistency) {
                 d_qz.copy_from_host(cuda::std::span<Real const>(query_z.data(), count)).is_ok()
             );
 
-            ASSERT_TRUE((gwn::gwn_compute_winding_number_batch_bvh_taylor<1, Real, Index>(
+            ASSERT_TRUE((gwn::gwn_compute_winding_number_batch_bvh_taylor<Order, Real, Index>(
                              geometry.accessor(), bvh_iterative.accessor(),
                              data_iterative.accessor(),
                              cuda::std::span<Real const>(d_qx.data(), count),
@@ -459,7 +461,7 @@ TEST(smallgwn_integration_correctness, voxel_order1_rebuild_consistency) {
             )
                              .is_ok()));
 
-            ASSERT_TRUE((gwn::gwn_compute_winding_number_batch_bvh_taylor<1, Real, Index>(
+            ASSERT_TRUE((gwn::gwn_compute_winding_number_batch_bvh_taylor<Order, Real, Index>(
                              geometry.accessor(), bvh_levelwise.accessor(),
                              data_levelwise.accessor(),
                              cuda::std::span<Real const>(d_qx.data(), count),
@@ -509,7 +511,7 @@ TEST(smallgwn_integration_correctness, voxel_order1_rebuild_consistency) {
 
         EXPECT_TRUE(center_seen) << "Center voxel was not covered for " << model_path.string();
         EXPECT_EQ(stats.over_threshold, 0u)
-            << "Order-1 rebuild mismatch on model " << model_path.string();
+            << "Order-" << Order << " rebuild mismatch on model " << model_path.string();
     }
 
     ASSERT_GT(tested_model_count, 0u) << "No valid OBJ models were exercised.";
@@ -517,7 +519,17 @@ TEST(smallgwn_integration_correctness, voxel_order1_rebuild_consistency) {
         << "All tested models produced near-zero winding values across voxel queries.";
 }
 
-TEST(smallgwn_integration_correctness, voxel_order1_hploc_vs_lbvh_consistency_on_sampled_models) {
+TEST(smallgwn_integration_correctness, voxel_order1_rebuild_consistency) {
+    run_voxel_rebuild_consistency_test<1>();
+}
+
+TEST(smallgwn_integration_correctness, voxel_order2_rebuild_consistency) {
+    run_voxel_rebuild_consistency_test<2>();
+}
+
+template <int Order> void run_voxel_hploc_vs_lbvh_consistency_test() {
+    static_assert(Order == 1 || Order == 2);
+
     std::vector<std::filesystem::path> const model_paths = gwn::tests::collect_model_paths();
     ASSERT_FALSE(model_paths.empty())
         << "No model input found. Set SMALLGWN_MODEL_DATA_DIR or SMALLGWN_MODEL_PATH.";
@@ -589,11 +601,11 @@ TEST(smallgwn_integration_correctness, voxel_order1_hploc_vs_lbvh_consistency_on
         gwn::gwn_bvh4_aabb_object<Real, Index> aabb_hploc;
         gwn::gwn_bvh4_moment_object<Real, Index> moment_hploc;
 
-        ASSERT_TRUE((build_facade_for_builder<1>(
+        ASSERT_TRUE((build_facade_for_builder<Order>(
                          topology_builder::k_lbvh, geometry, bvh_lbvh, aabb_lbvh, moment_lbvh
         )
                          .is_ok()));
-        ASSERT_TRUE((build_facade_for_builder<1>(
+        ASSERT_TRUE((build_facade_for_builder<Order>(
                          topology_builder::k_hploc, geometry, bvh_hploc, aabb_hploc, moment_hploc
         )
                          .is_ok()));
@@ -613,7 +625,7 @@ TEST(smallgwn_integration_correctness, voxel_order1_hploc_vs_lbvh_consistency_on
             d_qz.copy_from_host(cuda::std::span<Real const>(query_z.data(), sample_count)).is_ok()
         );
 
-        ASSERT_TRUE((gwn::gwn_compute_winding_number_batch_bvh_taylor<1, Real, Index>(
+        ASSERT_TRUE((gwn::gwn_compute_winding_number_batch_bvh_taylor<Order, Real, Index>(
                          geometry.accessor(), bvh_lbvh.accessor(), moment_lbvh.accessor(),
                          d_qx.span(), d_qy.span(), d_qz.span(), d_out.span(), k_accuracy_scale
         )
@@ -625,7 +637,7 @@ TEST(smallgwn_integration_correctness, voxel_order1_hploc_vs_lbvh_consistency_on
                         .is_ok());
         ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
 
-        ASSERT_TRUE((gwn::gwn_compute_winding_number_batch_bvh_taylor<1, Real, Index>(
+        ASSERT_TRUE((gwn::gwn_compute_winding_number_batch_bvh_taylor<Order, Real, Index>(
                          geometry.accessor(), bvh_hploc.accessor(), moment_hploc.accessor(),
                          d_qx.span(), d_qy.span(), d_qz.span(), d_out.span(), k_accuracy_scale
         )
@@ -647,18 +659,29 @@ TEST(smallgwn_integration_correctness, voxel_order1_hploc_vs_lbvh_consistency_on
         std::cout << "[gwn-correctness] builders=(" << to_builder_name(topology_builder::k_lbvh)
                   << "," << to_builder_name(topology_builder::k_hploc)
                   << ") model=" << model_path.filename().string()
-                  << " triangles=" << mesh.tri_i0.size() << " samples=" << sample_count
+                  << " order=" << Order << " triangles=" << mesh.tri_i0.size()
+                  << " samples=" << sample_count
                   << " diff(max/p99/p95/mean)=" << builder_diff.max_abs << "/"
                   << builder_diff.p99_abs << "/" << builder_diff.p95_abs << "/"
                   << builder_diff.mean_abs << std::endl;
 
         EXPECT_LE(builder_diff.max_abs, k_max_abs_epsilon)
-            << "Order-1 Taylor mismatch (max) between LBVH and H-PLOC on " << model_path.string();
+            << "Order-" << Order << " Taylor mismatch (max) between LBVH and H-PLOC on "
+            << model_path.string();
         EXPECT_LE(builder_diff.p99_abs, k_p99_abs_epsilon)
-            << "Order-1 Taylor mismatch (p99) between LBVH and H-PLOC on " << model_path.string();
+            << "Order-" << Order << " Taylor mismatch (p99) between LBVH and H-PLOC on "
+            << model_path.string();
     }
 
     ASSERT_GT(tested_model_count, 0u) << "No valid OBJ models were exercised.";
+}
+
+TEST(smallgwn_integration_correctness, voxel_order1_hploc_vs_lbvh_consistency_on_sampled_models) {
+    run_voxel_hploc_vs_lbvh_consistency_test<1>();
+}
+
+TEST(smallgwn_integration_correctness, voxel_order2_hploc_vs_lbvh_consistency_on_sampled_models) {
+    run_voxel_hploc_vs_lbvh_consistency_test<2>();
 }
 
 #if 0

@@ -20,7 +20,8 @@ gwn_status gwn_bvh_refit_moment_impl(
 ) noexcept {
     return gwn_try_translate_status("gwn_bvh_refit_moment_impl", [&]() -> gwn_status {
         static_assert(
-            Order == 0 || Order == 1, "gwn_bvh_refit_moment currently supports Order 0 and Order 1."
+            Order == 0 || Order == 1 || Order == 2,
+            "gwn_bvh_refit_moment currently supports Order 0, 1, and 2."
         );
 
         if (!geometry.is_valid())
@@ -71,8 +72,10 @@ gwn_status gwn_bvh_refit_moment_impl(
 
             if constexpr (Order == 0)
                 staging_moment.taylor_order0_nodes = staging_nodes;
-            else
+            else if constexpr (Order == 1)
                 staging_moment.taylor_order1_nodes = staging_nodes;
+            else
+                staging_moment.taylor_order2_nodes = staging_nodes;
             cleanup_staging_nodes.release();
             return gwn_status::ok();
         };
