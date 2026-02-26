@@ -93,7 +93,7 @@ template <class... Args>
     } while (false)
 #endif
 
-#if !defined(NDEBUG)
+#if !defined(NDEBUG) || defined(GWN_ENABLE_ASSERTS)
 #if !defined(GWN_ASSERT)
 #define GWN_ASSERT(condition, ...) GWN_FORCE_ASSERT(condition __VA_OPT__(, ) __VA_ARGS__)
 #endif

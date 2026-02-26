@@ -120,6 +120,14 @@ __global__ __launch_bounds__(BlockSize) void gwn_collapse_convert_kernel(
         candidates[0] = binary_root_node.left;
         candidates[1] = binary_root_node.right;
         int candidate_count = 2;
+        GWN_ASSERT(
+            static_cast<gwn_bvh_child_kind>(candidates[0].kind) != gwn_bvh_child_kind::k_invalid,
+            "collapse: left child of binary root is invalid"
+        );
+        GWN_ASSERT(
+            static_cast<gwn_bvh_child_kind>(candidates[1].kind) != gwn_bvh_child_kind::k_invalid,
+            "collapse: right child of binary root is invalid"
+        );
 
         while (candidate_count < Width) {
             int best_slot = -1;
@@ -148,6 +156,7 @@ __global__ __launch_bounds__(BlockSize) void gwn_collapse_convert_kernel(
 
             if (best_slot < 0)
                 break;
+            GWN_ASSERT(candidate_count >= 2, "collapse: candidate_count shrank below 2");
 
             auto const expanded = params.binary_nodes[static_cast<std::size_t>(candidates[best_slot].index)];
             candidates[best_slot] = expanded.left;
@@ -192,6 +201,10 @@ __global__ __launch_bounds__(BlockSize) void gwn_collapse_convert_kernel(
             tasks[i].wide_node_id = static_cast<Index>(wide_child);
         }
 
+        GWN_ASSERT(
+            gwn_index_in_bounds(work.wide_node_id, params.output_nodes.size()),
+            "collapse: wide_node_id out of bounds before write"
+        );
         params.output_nodes[static_cast<std::size_t>(work.wide_node_id)] = output_node;
 
         slot->work = tasks[0];

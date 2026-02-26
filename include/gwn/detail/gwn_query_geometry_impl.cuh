@@ -86,7 +86,9 @@ __host__ __device__ inline Real gwn_point_triangle_distance_squared_impl(
     Real const denom = Real(1) / (va + vb + vc);
     Real const v = vb * denom;
     Real const w = vc * denom;
-    return gwn_query_squared_norm(p - (a + v * ab + w * ac));
+    Real const result = gwn_query_squared_norm(p - (a + v * ab + w * ac));
+    GWN_ASSERT(!(result < Real(0)), "point-triangle distance squared is negative");
+    return result;
 }
 
 template <gwn_real_type Real, gwn_index_type Index>
@@ -172,7 +174,9 @@ __host__ __device__ inline Real gwn_aabb_min_distance_squared_impl(
     Real const dx = clamp_delta(qx, min_x, max_x);
     Real const dy = clamp_delta(qy, min_y, max_y);
     Real const dz = clamp_delta(qz, min_z, max_z);
-    return dx * dx + dy * dy + dz * dz;
+    Real const result = dx * dx + dy * dy + dz * dz;
+    GWN_ASSERT(!(result < Real(0)), "AABB min distance squared is negative");
+    return result;
 }
 
 } // namespace detail

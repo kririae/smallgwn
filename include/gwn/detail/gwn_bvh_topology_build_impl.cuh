@@ -60,6 +60,10 @@ gwn_status gwn_bvh_topology_build_from_binary_impl(
                 root_internal_index
             ));
 
+            GWN_ASSERT(
+                preprocess.sorted_primitive_indices.size() == primitive_count,
+                "topology build: sorted primitive index count mismatch"
+            );
             if (preprocess.sorted_primitive_indices.size() != primitive_count) {
                 return gwn_bvh_internal_error(
                     k_gwn_bvh_phase_topology_build,
@@ -99,6 +103,10 @@ gwn_status gwn_bvh_topology_build_from_binary_impl(
                 ),
                 primitive_count, staging_topology, root_internal_index, stream
             )));
+            GWN_ASSERT(
+                !staging_topology.nodes.empty(),
+                "topology build: collapse produced empty wide node array"
+            );
 
             staging_topology.root_kind = gwn_bvh_child_kind::k_internal;
             staging_topology.root_index = Index(0);

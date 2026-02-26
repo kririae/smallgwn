@@ -548,6 +548,11 @@ struct gwn_refit_from_leaves_functor {
             unsigned int const next_arrivals = previous_arrivals + 1u;
             unsigned int const expected_arrivals =
                 static_cast<unsigned int>(arrays.internal_arity[parent_id]);
+            GWN_ASSERT(
+                next_arrivals <= expected_arrivals,
+                "refit: arrival count %u exceeds expected %u at node %zu",
+                next_arrivals, expected_arrivals, parent_id
+            );
             if (expected_arrivals == 0u || expected_arrivals > static_cast<unsigned int>(Width)) {
                 mark_error();
                 return;
@@ -699,6 +704,7 @@ gwn_status gwn_run_refit_pass(
         return gwn_status::internal_error("Refit node count overflow.");
 
     std::size_t const pending_count = node_count * std::size_t(Width);
+    GWN_ASSERT(pending_count / std::size_t(Width) == node_count, "refit: pending_count overflow");
     using payload_type = typename Traits::payload_type;
 
     gwn_device_array<Index> internal_parent{};

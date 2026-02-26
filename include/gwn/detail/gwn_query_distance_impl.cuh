@@ -127,10 +127,15 @@ __device__ inline Real gwn_unsigned_distance_point_bvh_impl(
 
     while (stack_size > 0) {
         Index const node_index = stack[--stack_size];
+        GWN_ASSERT(stack_size >= 0, "distance: stack underflow");
         if (!gwn_index_in_bounds(node_index, bvh.nodes.size()))
             continue;
 
         auto const &topo_node = bvh.nodes[static_cast<std::size_t>(node_index)];
+        GWN_ASSERT(
+            gwn_index_in_bounds(node_index, aabb_tree.nodes.size()),
+            "distance: node_index out of bounds for aabb_tree"
+        );
         auto const &aabb_node = aabb_tree.nodes[static_cast<std::size_t>(node_index)];
         int child_slot_order[Width];
         Real child_box_dist2[Width];

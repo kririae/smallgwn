@@ -49,6 +49,7 @@ __device__ inline Real gwn_winding_number_point_bvh_exact_impl(
     stack[stack_size++] = bvh.root_index;
     while (stack_size > 0) {
         Index const node_index = stack[--stack_size];
+        GWN_ASSERT(stack_size >= 0, "winding exact: stack underflow");
         if (!gwn_index_in_bounds(node_index, bvh.nodes.size()))
             continue;
 
@@ -147,6 +148,7 @@ __device__ inline Real gwn_winding_number_point_bvh_taylor_impl(
         return Real(0);
 
     auto const taylor_nodes = gwn_get_taylor_nodes_impl<Order, Width, Real, Index>(data_tree);
+    GWN_ASSERT(!taylor_nodes.empty(), "winding taylor: taylor_nodes empty for internal root");
     if (taylor_nodes.size() != bvh.nodes.size())
         return Real(0);
 
@@ -176,6 +178,7 @@ __device__ inline Real gwn_winding_number_point_bvh_taylor_impl(
     stack[stack_size++] = bvh.root_index;
     while (stack_size > 0) {
         Index const node_index = stack[--stack_size];
+        GWN_ASSERT(stack_size >= 0, "winding taylor: stack underflow");
         if (!gwn_index_in_bounds(node_index, bvh.nodes.size()))
             continue;
 

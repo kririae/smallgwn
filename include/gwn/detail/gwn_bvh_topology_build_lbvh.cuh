@@ -52,6 +52,10 @@ gwn_status gwn_bvh_topology_build_binary_lbvh(
     }
 
     std::size_t const binary_internal_count = primitive_count - 1;
+    GWN_ASSERT(
+        binary_internal_count == primitive_count - 1,
+        "LBVH: binary internal count invariant violated"
+    );
     constexpr int k_block_size = k_gwn_default_block_size;
     gwn_binary_parent_temporaries<Index> temps{};
     GWN_RETURN_ON_ERROR(gwn_prepare_binary_topology_buffers(
@@ -200,6 +204,7 @@ gwn_status gwn_bvh_topology_build_collapse_binary_wide(
             "Single-kernel wide collapse reported a fixed-slot conversion error."
         );
     }
+    GWN_ASSERT(host_wide_node_count >= 1u, "collapse: at least the root wide node must exist");
     if (host_wide_node_count == 0u || host_wide_node_count > binary_internal_count)
         return gwn_bvh_internal_error(
             k_gwn_bvh_phase_topology_collapse,

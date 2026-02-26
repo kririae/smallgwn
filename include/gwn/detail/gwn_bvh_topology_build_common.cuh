@@ -259,6 +259,13 @@ gwn_status gwn_compute_scene_aabb(
     ));
     GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaStreamSynchronize(stream)));
 
+    GWN_ASSERT(isfinite(result.min_x) && isfinite(result.max_x), "scene AABB x not finite");
+    GWN_ASSERT(isfinite(result.min_y) && isfinite(result.max_y), "scene AABB y not finite");
+    GWN_ASSERT(isfinite(result.min_z) && isfinite(result.max_z), "scene AABB z not finite");
+    GWN_ASSERT(result.min_x <= result.max_x, "scene AABB x: min > max");
+    GWN_ASSERT(result.min_y <= result.max_y, "scene AABB y: min > max");
+    GWN_ASSERT(result.min_z <= result.max_z, "scene AABB z: min > max");
+
     auto const safe_inv = [](Real const lo, Real const hi) noexcept {
         return (hi > lo) ? Real(1) / (hi - lo) : Real(1);
     };
@@ -340,6 +347,10 @@ gwn_status gwn_compute_and_sort_morton(
             sorted_primitive_indices.data(), radix_item_count, 0, radix_sort_end_bit, stream
         )
     ));
+    GWN_ASSERT(sorted_morton_codes.size() == primitive_count, "sorted morton codes size mismatch");
+    GWN_ASSERT(
+        sorted_primitive_indices.size() == primitive_count, "sorted primitive indices size mismatch"
+    );
 
     GWN_RETURN_ON_ERROR(sorted_primitive_aabbs.resize(primitive_count, stream));
     GWN_RETURN_ON_ERROR(
