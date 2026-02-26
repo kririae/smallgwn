@@ -3,6 +3,8 @@
 #include <cuda/std/span>
 #include <cuda_runtime_api.h>
 
+#include "gwn_assert.cuh"
+
 #include <cstddef>
 #include <format>
 #include <limits>
@@ -11,11 +13,6 @@
 #include <string>
 #include <type_traits>
 #include <utility>
-
-#if defined(__CUDACC__) && defined(__NVCC__) && !defined(__CUDACC_RELAXED_CONSTEXPR__)
-#error                                                                                             \
-    "smallgwn requires NVCC flag --expt-relaxed-constexpr. Link gwn::smallgwn in CMake or add the flag manually."
-#endif
 
 namespace gwn {
 template <class Real>
@@ -291,12 +288,24 @@ inline gwn_status gwn_cuda_to_status(
 inline gwn_status gwn_cuda_malloc(
     void **ptr, std::size_t const bytes, cudaStream_t const stream = gwn_default_stream()
 ) noexcept {
+    if (ptr == nullptr)
+        return gwn_status::invalid_argument("gwn_cuda_malloc requires non-null output pointer.");
+
     if (bytes == 0) {
         *ptr = nullptr;
         return gwn_status::ok();
     }
 
-    return gwn_cuda_to_status(cudaMallocAsync(ptr, bytes, stream));
+    gwn_status const alloc_status = gwn_cuda_to_status(cudaMallocAsync(ptr, bytes, stream));
+    if (!alloc_status.is_ok())
+        return alloc_status;
+
+    GWN_ASSERT(
+        *ptr != nullptr,
+        "gwn_cuda_malloc succeeded for %zu bytes but returned a null pointer.",
+        bytes
+    );
+    return gwn_status::ok();
 }
 
 /// \brief Free device memory via the CUDA stream-ordered allocator.
@@ -349,6 +358,10 @@ public:
     ///         old storage is released on the previously bound stream.
     [[nodiscard]] gwn_status
     resize(std::size_t const count, cudaStream_t const stream = gwn_default_stream()) noexcept {
+        GWN_ASSERT(
+            invariant_storage_ok_(), "gwn_device_array storage invariant violated before resize."
+        );
+
         if (count == size_) {
             // No-op: size unchanged, stream binding preserved
             return gwn_status::ok();
@@ -363,6 +376,12 @@ public:
         gwn_status const alloc_status = gwn_cuda_malloc(&new_ptr, count * sizeof(T), stream);
         if (!alloc_status.is_ok())
             return alloc_status;
+
+        GWN_ASSERT(
+            new_ptr != nullptr,
+            "gwn_device_array::resize allocated %zu elements but returned null storage.",
+            count
+        );
 
         auto cleanup_new_ptr = gwn_make_scope_exit([&]() noexcept {
             if (new_ptr != nullptr)
@@ -380,6 +399,9 @@ public:
         stream_ = stream;
         new_ptr = nullptr;
         cleanup_new_ptr.release();
+        GWN_ASSERT(
+            invariant_storage_ok_(), "gwn_device_array storage invariant violated after resize."
+        );
         return gwn_status::ok();
     }
 
@@ -391,10 +413,17 @@ public:
     /// \remark The free operation is enqueued on the stream that was bound before this call.
     /// \remark On success, the object is rebound to \p stream; on failure, the old binding stays.
     [[nodiscard]] gwn_status clear(cudaStream_t const stream) noexcept {
+        GWN_ASSERT(
+            invariant_storage_ok_(), "gwn_device_array storage invariant violated before clear."
+        );
+
         cudaStream_t const release_stream = stream_;
         if (data_ == nullptr) {
             size_ = 0;
             stream_ = stream;
+            GWN_ASSERT(
+                invariant_storage_ok_(), "gwn_device_array storage invariant violated after clear."
+            );
             return gwn_status::ok();
         }
 
@@ -404,6 +433,9 @@ public:
         data_ = nullptr;
         size_ = 0;
         stream_ = stream;
+        GWN_ASSERT(
+            invariant_storage_ok_(), "gwn_device_array storage invariant violated after clear."
+        );
         return gwn_status::ok();
     }
 
@@ -428,6 +460,11 @@ public:
         if (src.empty())
             return gwn_status::ok();
 
+        GWN_ASSERT(
+            data_ != nullptr,
+            "gwn_device_array::copy_from_host requires non-null device storage for non-empty copy."
+        );
+
         return gwn_cuda_to_status(
             cudaMemcpyAsync(data_, src.data(), src.size_bytes(), cudaMemcpyHostToDevice, stream)
         );
@@ -447,6 +484,11 @@ public:
             );
         if (dst.empty())
             return gwn_status::ok();
+
+        GWN_ASSERT(
+            data_ != nullptr,
+            "gwn_device_array::copy_to_host requires non-null device storage for non-empty copy."
+        );
 
         return gwn_cuda_to_status(
             cudaMemcpyAsync(dst.data(), data_, dst.size_bytes(), cudaMemcpyDeviceToHost, stream)
@@ -487,6 +529,10 @@ public:
     }
 
 private:
+    [[nodiscard]] bool invariant_storage_ok_() const noexcept {
+        return size_ == 0 || data_ != nullptr;
+    }
+
     T *data_{nullptr};
     std::size_t size_{0};
     cudaStream_t stream_{gwn_default_stream()};
@@ -512,12 +558,20 @@ gwn_status gwn_allocate_span(
 
     void *ptr = nullptr;
     GWN_RETURN_ON_ERROR(gwn_cuda_malloc(&ptr, count * sizeof(T), stream));
+    GWN_ASSERT(
+        ptr != nullptr,
+        "gwn_allocate_span allocated %zu elements but returned null storage.",
+        count
+    );
     dst = cuda::std::span<T const>(static_cast<T const *>(ptr), count);
+    GWN_ASSERT(gwn_span_has_storage(dst), "gwn_allocate_span produced invalid span storage.");
     return gwn_status::ok();
 }
 
 template <class T>
 void gwn_free_span(cuda::std::span<T const> &span_view, cudaStream_t const stream) noexcept {
+    GWN_ASSERT(gwn_span_has_storage(span_view), "gwn_free_span requires valid span storage.");
+
     if (span_view.data() != nullptr) {
         gwn_status const status = gwn_cuda_free(gwn_mutable_data(span_view), stream);
         if (!status.is_ok())
@@ -533,6 +587,11 @@ gwn_status gwn_copy_h2d(
 ) noexcept {
     if (dst_device.size() != src_host.size())
         return gwn_status::invalid_argument("gwn_copy_h2d span size mismatch.");
+    if (!gwn_span_has_storage(dst_device))
+        return gwn_status::invalid_argument("gwn_copy_h2d destination span has null storage.");
+    if (!gwn_span_has_storage(src_host))
+        return gwn_status::invalid_argument("gwn_copy_h2d source span has null storage.");
+
     if (src_host.empty())
         return gwn_status::ok();
 
@@ -549,6 +608,11 @@ gwn_status gwn_copy_d2h(
 ) noexcept {
     if (dst_host.size() != src_device.size())
         return gwn_status::invalid_argument("gwn_copy_d2h span size mismatch.");
+    if (!gwn_span_has_storage(dst_host))
+        return gwn_status::invalid_argument("gwn_copy_d2h destination span has null storage.");
+    if (!gwn_span_has_storage(src_device))
+        return gwn_status::invalid_argument("gwn_copy_d2h source span has null storage.");
+
     if (src_device.empty())
         return gwn_status::ok();
 
@@ -564,6 +628,11 @@ gwn_status gwn_copy_d2d(
 ) noexcept {
     if (dst_device.size() != src_device.size())
         return gwn_status::invalid_argument("gwn_copy_d2d span size mismatch.");
+    if (!gwn_span_has_storage(dst_device))
+        return gwn_status::invalid_argument("gwn_copy_d2d destination span has null storage.");
+    if (!gwn_span_has_storage(src_device))
+        return gwn_status::invalid_argument("gwn_copy_d2d source span has null storage.");
+
     if (src_device.empty())
         return gwn_status::ok();
 

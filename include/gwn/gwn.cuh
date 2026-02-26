@@ -1,5 +1,6 @@
 #pragma once
 
+#include "gwn_assert.cuh"
 #include "gwn_bvh.cuh"
 #include "gwn_bvh_facade.cuh"
 #include "gwn_bvh_refit.cuh"

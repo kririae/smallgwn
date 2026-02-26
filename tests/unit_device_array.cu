@@ -204,3 +204,76 @@ TEST(smallgwn_unit_device_array_noexcept, methods_are_noexcept) {
     static_assert(noexcept(buffer.copy_from_host(cuda::std::span<float const>{})));
     static_assert(noexcept(std::as_const(buffer).copy_to_host(cuda::std::span<float>{})));
 }
+
+// ---------------------------------------------------------------------------
+// Null-storage argument validation.
+// ---------------------------------------------------------------------------
+
+TEST(smallgwn_unit_device_array_null_storage, cuda_malloc_null_output_pointer) {
+    gwn::gwn_status const status = gwn::gwn_cuda_malloc(nullptr, sizeof(float));
+    ASSERT_FALSE(status.is_ok());
+    EXPECT_EQ(status.error(), gwn::gwn_error::invalid_argument);
+}
+
+TEST(smallgwn_unit_device_array_null_storage, copy_h2d_null_destination) {
+    float const source[1] = {1.0f};
+    gwn::gwn_status const status = gwn::detail::gwn_copy_h2d<float>(
+        cuda::std::span<float const>(static_cast<float const *>(nullptr), 1),
+        cuda::std::span<float const>(source, 1), gwn::gwn_default_stream()
+    );
+    ASSERT_FALSE(status.is_ok());
+    EXPECT_EQ(status.error(), gwn::gwn_error::invalid_argument);
+}
+
+TEST(smallgwn_unit_device_array_null_storage, copy_h2d_null_source) {
+    float const destination_storage[1] = {0.0f};
+    gwn::gwn_status const status = gwn::detail::gwn_copy_h2d<float>(
+        cuda::std::span<float const>(destination_storage, 1),
+        cuda::std::span<float const>(static_cast<float const *>(nullptr), 1),
+        gwn::gwn_default_stream()
+    );
+    ASSERT_FALSE(status.is_ok());
+    EXPECT_EQ(status.error(), gwn::gwn_error::invalid_argument);
+}
+
+TEST(smallgwn_unit_device_array_null_storage, copy_d2h_null_source) {
+    float destination[1] = {0.0f};
+    gwn::gwn_status const status = gwn::detail::gwn_copy_d2h<float>(
+        cuda::std::span<float>(destination, 1),
+        cuda::std::span<float const>(static_cast<float const *>(nullptr), 1),
+        gwn::gwn_default_stream()
+    );
+    ASSERT_FALSE(status.is_ok());
+    EXPECT_EQ(status.error(), gwn::gwn_error::invalid_argument);
+}
+
+TEST(smallgwn_unit_device_array_null_storage, copy_d2h_null_destination) {
+    float const source_storage[1] = {0.0f};
+    gwn::gwn_status const status = gwn::detail::gwn_copy_d2h<float>(
+        cuda::std::span<float>(static_cast<float *>(nullptr), 1),
+        cuda::std::span<float const>(source_storage, 1), gwn::gwn_default_stream()
+    );
+    ASSERT_FALSE(status.is_ok());
+    EXPECT_EQ(status.error(), gwn::gwn_error::invalid_argument);
+}
+
+TEST(smallgwn_unit_device_array_null_storage, copy_d2d_null_source) {
+    float destination_storage[1] = {0.0f};
+    gwn::gwn_status const status = gwn::detail::gwn_copy_d2d<float>(
+        cuda::std::span<float const>(destination_storage, 1),
+        cuda::std::span<float const>(static_cast<float const *>(nullptr), 1),
+        gwn::gwn_default_stream()
+    );
+    ASSERT_FALSE(status.is_ok());
+    EXPECT_EQ(status.error(), gwn::gwn_error::invalid_argument);
+}
+
+TEST(smallgwn_unit_device_array_null_storage, copy_d2d_null_destination) {
+    float const source_storage[1] = {0.0f};
+    gwn::gwn_status const status = gwn::detail::gwn_copy_d2d<float>(
+        cuda::std::span<float const>(static_cast<float const *>(nullptr), 1),
+        cuda::std::span<float const>(source_storage, 1), gwn::gwn_default_stream()
+    );
+    ASSERT_FALSE(status.is_ok());
+    EXPECT_EQ(status.error(), gwn::gwn_error::invalid_argument);
+}

@@ -73,6 +73,7 @@ if(SMALLGWN_BUILD_TESTS)
         # ---------------------------------------------------------------
         # Unit tests.
         # ---------------------------------------------------------------
+        smallgwn_add_test(smallgwn_unit_assert         SOURCES tests/unit_assert.cu)
         smallgwn_add_test(smallgwn_unit_status         SOURCES tests/unit_status.cu)
         smallgwn_add_test(smallgwn_unit_device_array   SOURCES tests/unit_device_array.cu)
         smallgwn_add_test(smallgwn_unit_stream_mixin   SOURCES tests/unit_stream_mixin.cu)
