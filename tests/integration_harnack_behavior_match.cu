@@ -14,22 +14,17 @@
 #include <gwn/gwn.cuh>
 
 #include "test_fixtures.hpp"
+#include "test_harnack_meshes.hpp"
 #include "test_utils.hpp"
 
 using Real = gwn::tests::Real;
 using Index = gwn::tests::Index;
 using gwn::tests::CudaFixture;
+using gwn::tests::HalfOctahedronMesh;
+using gwn::tests::OctahedronMesh;
+using gwn::tests::OpenCubeMesh;
 
 namespace {
-
-struct HalfOctahedronMesh {
-    std::array<Real, 5> vx{1, -1, 0, 0, 0};
-    std::array<Real, 5> vy{0, 0, 1, -1, 0};
-    std::array<Real, 5> vz{0, 0, 0, 0, 1};
-    std::array<Index, 4> i0{0, 2, 1, 3};
-    std::array<Index, 4> i1{2, 1, 3, 0};
-    std::array<Index, 4> i2{4, 4, 4, 4};
-};
 
 struct RaysSoA {
     std::vector<Real> ox;
@@ -51,7 +46,7 @@ enum class TraceTerminalReason : int {
     unknown = 0,
     invalid_ray_dir = 1,
     hit_grad_stop = 2,
-    hit_closed_shell = 3,
+    hit_singular_radius = 3,
     invalid_radius = 4,
     invalid_rho = 5,
     nonpositive_rho = 6,
@@ -135,38 +130,6 @@ __device__ inline gwn::detail::gwn_query_vec3<Real> eval_grad_w(
     );
 }
 
-template <class T>
-__device__ inline T ref_glsl_mod(T const x, T const y) noexcept {
-    return x - y * floor(x / y);
-}
-
-template <class T>
-__device__ inline T ref_two_sided_step(
-    T const fx, T const lo_bound, T const hi_bound, T const shift, T const R, T const ray_dir_len
-) noexcept {
-    if (!(R > T(0)) || !(ray_dir_len > T(0)))
-        return T(0);
-
-    T const v_denom = lo_bound + shift;
-    T const w_denom = hi_bound + shift;
-    if (!(v_denom > T(0)) || !(w_denom > T(0)))
-        return T(0);
-
-    T const v = (fx + shift) / v_denom;
-    T const w = (fx + shift) / w_denom;
-    T const v_disc = v * v + T(8) * v;
-    T const w_disc = w * w + T(8) * w;
-    if (!(v_disc > T(0)) || !(w_disc > T(0)))
-        return T(0);
-
-    T const lo_r = -R / T(2) * (v + T(2) - diag_sqrt(v_disc));
-    T const hi_r = R / T(2) * (w + T(2) - diag_sqrt(w_disc));
-    T r = ((lo_r < hi_r) ? lo_r : hi_r) / ray_dir_len;
-    if (r < T(0))
-        r = T(0);
-    return r;
-}
-
 template <int Order, EvalMode Mode>
 __device__ inline TraceDiagnostic trace_reference_semantics(
     gwn::gwn_geometry_accessor<Real, Index> const &geometry,
@@ -213,8 +176,7 @@ __device__ inline TraceDiagnostic trace_reference_semantics(
         Real const w =
             eval_w<Order, Mode>(geometry, bvh, moment_tree, px, py, pz, accuracy_scale);
         Real const omega = k_four_pi * w;
-        Real const wrapped = ref_glsl_mod<Real>(omega - target_omega, k_four_pi);
-
+        Real const wrapped = gwn::detail::gwn_glsl_mod<Real>(omega - target_omega, k_four_pi);
         Real const lower_levelset = Real(0);
         Real const upper_levelset = k_four_pi;
         Real const dist_lo = wrapped - lower_levelset;
@@ -229,18 +191,25 @@ __device__ inline TraceDiagnostic trace_reference_semantics(
         Real const grad_omega_mag = k_four_pi * grad_w_mag;
         diag.last_grad_omega_mag = grad_omega_mag;
 
-        Real const R = gwn::detail::gwn_unsigned_edge_distance_point_bvh_impl<
-            k_width, Real, Index, k_stack>(
-            geometry, bvh, aabb_tree, px, py, pz, std::numeric_limits<Real>::infinity()
+        Real R_singular = gwn::detail::gwn_unsigned_singular_edge_distance_point_impl<
+            Real, Index>(
+            geometry, px, py, pz, std::numeric_limits<Real>::infinity()
         );
+        Real const R_face = gwn::detail::gwn_unsigned_distance_point_bvh_impl<
+            k_width, Real, Index, k_stack>(
+            geometry, bvh, aabb_tree, px, py, pz, R_singular
+        );
+        Real const R = (R_face < R_singular) ? R_face : R_singular;
         diag.last_R = R;
         if (!(R >= Real(0))) {
             diag.terminal_reason = static_cast<int>(TraceTerminalReason::invalid_radius);
             return diag;
         }
 
-        Real const rho =
-            ref_two_sided_step(wrapped, lower_levelset, upper_levelset, k_four_pi, R, dir_len);
+        Real const rho = gwn::detail::gwn_harnack_constrained_two_sided_step(
+                             wrapped, lower_levelset, upper_levelset, -k_four_pi, R
+                         ) /
+                         dir_len;
         diag.last_rho = rho;
         if (!(rho >= Real(0))) {
             diag.terminal_reason = static_cast<int>(TraceTerminalReason::invalid_rho);
@@ -257,7 +226,7 @@ __device__ inline TraceDiagnostic trace_reference_semantics(
             if (R < epsilon) {
                 diag.hit = 1;
                 diag.t = t_eval;
-                diag.terminal_reason = static_cast<int>(TraceTerminalReason::hit_closed_shell);
+                diag.terminal_reason = static_cast<int>(TraceTerminalReason::hit_singular_radius);
                 return diag;
             }
 
@@ -335,7 +304,8 @@ struct TraceHarness {
     gwn::gwn_bvh4_aabb_object<Real, Index> aabb;
     gwn::gwn_bvh4_moment_object<Order, Real, Index> moment;
 
-    bool build(HalfOctahedronMesh const &mesh, std::string &error_message) {
+    template <class Mesh>
+    bool build(Mesh const &mesh, std::string &error_message) {
         gwn::gwn_status s = geometry.upload(
             cuda::std::span<Real const>(mesh.vx.data(), mesh.vx.size()),
             cuda::std::span<Real const>(mesh.vy.data(), mesh.vy.size()),
@@ -526,6 +496,17 @@ RaysSoA make_edge_stress_rays() {
     return rays;
 }
 
+RaysSoA make_closed_off_axis_rays() {
+    RaysSoA rays;
+    append_ray(rays, Real(5.0), Real(0.20), Real(0.10), Real(-1.0), Real(0.0), Real(0.0));
+    append_ray(rays, Real(-5.0), Real(-0.20), Real(0.10), Real(1.0), Real(0.0), Real(0.0));
+    append_ray(rays, Real(0.20), Real(5.0), Real(-0.10), Real(0.0), Real(-1.0), Real(0.0));
+    append_ray(rays, Real(-0.20), Real(-5.0), Real(-0.10), Real(0.0), Real(1.0), Real(0.0));
+    append_ray(rays, Real(0.10), Real(-0.10), Real(5.0), Real(0.0), Real(0.0), Real(-1.0));
+    append_ray(rays, Real(-0.10), Real(0.10), Real(-5.0), Real(0.0), Real(0.0), Real(1.0));
+    return rays;
+}
+
 char const *reason_to_cstr(int const reason) {
     switch (static_cast<TraceTerminalReason>(reason)) {
     case TraceTerminalReason::unknown:
@@ -534,8 +515,8 @@ char const *reason_to_cstr(int const reason) {
         return "invalid_ray_dir";
     case TraceTerminalReason::hit_grad_stop:
         return "hit_grad_stop";
-    case TraceTerminalReason::hit_closed_shell:
-        return "hit_closed_shell";
+    case TraceTerminalReason::hit_singular_radius:
+        return "hit_singular_radius";
     case TraceTerminalReason::invalid_radius:
         return "invalid_radius";
     case TraceTerminalReason::invalid_rho:
@@ -615,9 +596,9 @@ ComparisonSummary compare_behavior(
     return summary;
 }
 
-template <int Order>
+template <int Order, class Mesh>
 ComparisonSummary run_behavior_case(
-    HalfOctahedronMesh const &mesh, RaysSoA const &rays, Real const target_winding,
+    Mesh const &mesh, RaysSoA const &rays, Real const target_winding,
     Real const epsilon, int const max_iterations, Real const t_max, Real const accuracy_scale
 ) {
     TraceHarness<Order> harness;
@@ -679,6 +660,43 @@ TEST_F(CudaFixture, harnack_behavior_match_reference_semantics_basic_and_branchc
 TEST_F(CudaFixture, harnack_behavior_match_reference_semantics_edge_stress) {
     HalfOctahedronMesh mesh;
     RaysSoA const rays = make_edge_stress_rays();
+
+    ComparisonSummary const summary = run_behavior_case<1>(
+        mesh, rays,
+        /*target_winding=*/Real(0.5), /*epsilon=*/Real(1e-3),
+        /*max_iterations=*/512, /*t_max=*/Real(100), /*accuracy_scale=*/Real(2)
+    );
+
+    EXPECT_EQ(summary.algorithmic_mismatch, 0) << summary.detail;
+    EXPECT_GT(summary.exact_fallback_samples, 0) << "exact fallback evaluator did not run";
+}
+
+TEST_F(CudaFixture, harnack_behavior_match_reference_semantics_closed_off_axis) {
+    OctahedronMesh mesh;
+    RaysSoA const rays = make_closed_off_axis_rays();
+
+    ComparisonSummary const summary = run_behavior_case<1>(
+        mesh, rays,
+        /*target_winding=*/Real(0.5), /*epsilon=*/Real(1e-3),
+        /*max_iterations=*/512, /*t_max=*/Real(100), /*accuracy_scale=*/Real(2)
+    );
+
+    EXPECT_EQ(summary.algorithmic_mismatch, 0) << summary.detail;
+    EXPECT_GT(summary.exact_fallback_samples, 0) << "exact fallback evaluator did not run";
+}
+
+TEST_F(CudaFixture, harnack_behavior_match_open_cube) {
+    OpenCubeMesh mesh;
+
+    // Forward rays from z=+3 toward -z, passing through the open z=+1 face.
+    RaysSoA rays;
+    for (int yi = -1; yi <= 1; ++yi) {
+        for (int xi = -1; xi <= 1; ++xi)
+            append_ray(
+                rays, Real(0.3) * Real(xi), Real(0.3) * Real(yi), Real(3),
+                Real(0), Real(0), Real(-1)
+            );
+    }
 
     ComparisonSummary const summary = run_behavior_case<1>(
         mesh, rays,

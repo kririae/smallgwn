@@ -9,67 +9,22 @@
 #include <gwn/gwn.cuh>
 
 #include "test_fixtures.hpp"
+#include "test_harnack_meshes.hpp"
 #include "test_utils.hpp"
 
-// Integration test for Harnack tracing: traces a grid of rays from a
-// bounding sphere through a closed octahedron.  Validates:
-//   1. All rays hit (closed mesh → all ray/surface intersections exist).
-//   2. Winding number at hit ≈ 0.5 (convergence).
-//   3. Normals are unit length and oppose the ray direction.
-//   4. Consistency across Taylor orders 0, 1, 2.
+// Integration tests for the one-path wrapped-angle tracer.
+// For closed meshes this validates order-consistent behavior and plausible hit
+// geometry where hits occur. For open meshes it validates broad hit coverage.
 
 using Real = gwn::tests::Real;
 using Index = gwn::tests::Index;
 using gwn::tests::CudaFixture;
+using gwn::tests::OctahedronMesh;
+using gwn::tests::HalfOctahedronMesh;
+using gwn::tests::CubeMesh;
+using gwn::tests::generate_sphere_rays;
 
 namespace {
-
-struct OctahedronMesh {
-    std::array<Real, 6> vx{1, -1, 0, 0, 0, 0};
-    std::array<Real, 6> vy{0, 0, 1, -1, 0, 0};
-    std::array<Real, 6> vz{0, 0, 0, 0, 1, -1};
-    std::array<Index, 8> i0{0, 2, 1, 3, 2, 1, 3, 0};
-    std::array<Index, 8> i1{2, 1, 3, 0, 0, 2, 1, 3};
-    std::array<Index, 8> i2{4, 4, 4, 4, 5, 5, 5, 5};
-};
-
-struct HalfOctahedronMesh {
-    std::array<Real, 5> vx{1, -1, 0, 0, 0};
-    std::array<Real, 5> vy{0, 0, 1, -1, 0};
-    std::array<Real, 5> vz{0, 0, 0, 0, 1};
-    std::array<Index, 4> i0{0, 2, 1, 3};
-    std::array<Index, 4> i1{2, 1, 3, 0};
-    std::array<Index, 4> i2{4, 4, 4, 4};
-};
-
-// Generate rays from a sphere of given radius, all pointing at the origin.
-// Uses a latitude/longitude grid.
-void generate_sphere_rays(
-    Real const radius, int const n_lat, int const n_lon,
-    std::vector<Real> &ox, std::vector<Real> &oy, std::vector<Real> &oz,
-    std::vector<Real> &dx, std::vector<Real> &dy, std::vector<Real> &dz
-) {
-    constexpr Real pi = Real(3.14159265358979323846);
-    for (int la = 1; la < n_lat; ++la) {         // skip poles
-        Real const theta = pi * Real(la) / Real(n_lat);
-        Real const st = std::sin(theta);
-        Real const ct = std::cos(theta);
-        for (int lo = 0; lo < n_lon; ++lo) {
-            Real const phi = Real(2) * pi * Real(lo) / Real(n_lon);
-            Real const x = radius * st * std::cos(phi);
-            Real const y = radius * st * std::sin(phi);
-            Real const z = radius * ct;
-            ox.push_back(x);
-            oy.push_back(y);
-            oz.push_back(z);
-            // Direction toward origin.
-            Real const inv_r = Real(1) / radius;
-            dx.push_back(-x * inv_r);
-            dy.push_back(-y * inv_r);
-            dz.push_back(-z * inv_r);
-        }
-    }
-}
 
 template <int Order>
 struct TraceResults {
@@ -77,9 +32,9 @@ struct TraceResults {
     bool ok{false};
 };
 
-template <int Order>
+template <int Order, class Mesh>
 TraceResults<Order> run_trace(
-    OctahedronMesh const &mesh,
+    Mesh const &mesh,
     std::vector<Real> const &ox, std::vector<Real> const &oy, std::vector<Real> const &oz,
     std::vector<Real> const &dx, std::vector<Real> const &dy, std::vector<Real> const &dz,
     Real const epsilon = Real(1e-3),
@@ -278,8 +233,9 @@ TEST_F(CudaFixture, integration_harnack_octahedron_sphere_rays) {
     if (!res2.ok)
         GTEST_SKIP() << "CUDA unavailable";
 
-    // --- Check: closed-mesh branch-cut hits are generally not reported by the
-    // single edge-distance/lifted-angle path. ---
+    // --- Check: single wrapped-angle path is deterministic across orders.
+    // For watertight closed meshes this path can hit only a subset of rays,
+    // but hit/miss classification should remain order-stable. ---
     int hits0 = 0, hits1 = 0, hits2 = 0;
     for (std::size_t i = 0; i < n; ++i) {
         if (res0.t[i] >= Real(0)) ++hits0;
@@ -290,25 +246,20 @@ TEST_F(CudaFixture, integration_harnack_octahedron_sphere_rays) {
               << " Order-1=" << hits1 << " Order-2=" << hits2
               << " / " << n << "\n";
 
-    EXPECT_GE(hits0, static_cast<int>(n * 0.25))
+    // With correct R(x) = min(singular_edge_dist, face_dist), the tracer
+    // reliably hits the closed-mesh surface for all inward-pointing rays.
+    EXPECT_GE(hits0, static_cast<int>(n * 0.90))
         << "Order-0: too few closed-mesh shell hits (" << hits0 << "/" << n << ")";
-    EXPECT_LE(hits0, static_cast<int>(n * 0.50))
-        << "Order-0: too many closed-mesh shell hits (" << hits0 << "/" << n << ")";
-    EXPECT_GE(hits1, static_cast<int>(n * 0.25))
+    EXPECT_GE(hits1, static_cast<int>(n * 0.90))
         << "Order-1: too few closed-mesh shell hits (" << hits1 << "/" << n << ")";
-    EXPECT_LE(hits1, static_cast<int>(n * 0.50))
-        << "Order-1: too many closed-mesh shell hits (" << hits1 << "/" << n << ")";
-    EXPECT_GE(hits2, static_cast<int>(n * 0.25))
+    EXPECT_GE(hits2, static_cast<int>(n * 0.90))
         << "Order-2: too few closed-mesh shell hits (" << hits2 << "/" << n << ")";
-    EXPECT_LE(hits2, static_cast<int>(n * 0.50))
-        << "Order-2: too many closed-mesh shell hits (" << hits2 << "/" << n << ")";
     EXPECT_EQ(hits0, hits1) << "single-path tracer should be consistent across orders";
     EXPECT_EQ(hits1, hits2) << "single-path tracer should be consistent across orders";
 
-    // --- Check: hit points are near the mesh surface ---
-    // For an octahedron with unit vertices, surface distance from origin
-    // is 1/sqrt(3) ≈ 0.577.  The GWN iso-surface is smooth and should
-    // be in [0.3, 0.9].
+    // --- Check: hit points are near the octahedron scale ---
+    // For a unit octahedron, geometric face radius is 1/sqrt(3) ≈ 0.577.
+    // We use a coarse but stable acceptance band.
     for (std::size_t i = 0; i < n; ++i) {
         if (res1.t[i] < Real(0))
             continue;
@@ -408,6 +359,84 @@ TEST_F(CudaFixture, integration_harnack_angle_half_octahedron_forward_rays) {
     }
 
     EXPECT_GE(hits, 20) << "angle-mode tracer should hit most forward rays";
-    EXPECT_GE(crossed_face, 12) << "expected many hits with face-crossing comparison";
+    // With face-distance in R(x), the tracer converges tightly near the face
+    // crossing rather than overshooting past it.
     EXPECT_GE(sane_normals, 12) << "angle-mode hits should usually return finite normals";
+}
+
+// ---------------------------------------------------------------------------
+// Integration test: trace sphere rays through a closed cube.
+// ---------------------------------------------------------------------------
+TEST_F(CudaFixture, integration_harnack_cube_sphere_rays) {
+    CubeMesh mesh;
+
+    std::vector<Real> ox, oy, oz, dx, dy, dz;
+    generate_sphere_rays(Real(5), 7, 12, ox, oy, oz, dx, dy, dz);
+    std::size_t const n = ox.size();
+
+    std::cout << "[harnack cube integration] Tracing " << n << " rays\n";
+
+    auto res0 = run_trace<0>(mesh, ox, oy, oz, dx, dy, dz);
+    if (!res0.ok)
+        GTEST_SKIP() << "CUDA unavailable";
+
+    auto res1 = run_trace<1>(mesh, ox, oy, oz, dx, dy, dz);
+    if (!res1.ok)
+        GTEST_SKIP() << "CUDA unavailable";
+
+    auto res2 = run_trace<2>(mesh, ox, oy, oz, dx, dy, dz);
+    if (!res2.ok)
+        GTEST_SKIP() << "CUDA unavailable";
+
+    int hits0 = 0, hits1 = 0, hits2 = 0;
+    for (std::size_t i = 0; i < n; ++i) {
+        if (res0.t[i] >= Real(0)) ++hits0;
+        if (res1.t[i] >= Real(0)) ++hits1;
+        if (res2.t[i] >= Real(0)) ++hits2;
+    }
+    std::cout << "[harnack cube integration] Hits: Order-0=" << hits0
+              << " Order-1=" << hits1 << " Order-2=" << hits2
+              << " / " << n << "\n";
+
+    EXPECT_GE(hits0, static_cast<int>(n * 0.90))
+        << "Order-0: too few closed-cube hits (" << hits0 << "/" << n << ")";
+    EXPECT_GE(hits1, static_cast<int>(n * 0.90))
+        << "Order-1: too few closed-cube hits (" << hits1 << "/" << n << ")";
+    EXPECT_GE(hits2, static_cast<int>(n * 0.90))
+        << "Order-2: too few closed-cube hits (" << hits2 << "/" << n << ")";
+    EXPECT_EQ(hits0, hits1) << "single-path tracer should be consistent across orders";
+    EXPECT_EQ(hits1, hits2) << "single-path tracer should be consistent across orders";
+
+    // Hit points should be near the cube surface (distance from origin 1.0–1.73).
+    for (std::size_t i = 0; i < n; ++i) {
+        if (res1.t[i] < Real(0))
+            continue;
+        Real const hx = ox[i] + res1.t[i] * dx[i];
+        Real const hy = oy[i] + res1.t[i] * dy[i];
+        Real const hz = oz[i] + res1.t[i] * dz[i];
+        Real const hr = std::sqrt(hx * hx + hy * hy + hz * hz);
+        EXPECT_GT(hr, Real(0.8))
+            << "ray " << i << ": hit too close to origin (r=" << hr << ")";
+        EXPECT_LT(hr, Real(2.0))
+            << "ray " << i << ": hit too far from origin (r=" << hr << ")";
+    }
+
+    // Hit distance consistency across orders.
+    Real max_t_diff_01 = 0, max_t_diff_12 = 0;
+    int compared = 0;
+    for (std::size_t i = 0; i < n; ++i) {
+        if (res0.t[i] < Real(0) || res1.t[i] < Real(0) || res2.t[i] < Real(0))
+            continue;
+        max_t_diff_01 = std::max(max_t_diff_01, std::abs(res0.t[i] - res1.t[i]));
+        max_t_diff_12 = std::max(max_t_diff_12, std::abs(res1.t[i] - res2.t[i]));
+        ++compared;
+    }
+    std::cout << "[harnack cube integration] Max t-diff Order-0 vs 1: " << max_t_diff_01
+              << "  Order-1 vs 2: " << max_t_diff_12
+              << "  (compared " << compared << " rays)\n";
+
+    EXPECT_LT(max_t_diff_01, Real(0.3))
+        << "Order-0 vs Order-1 hit distance disagrees by " << max_t_diff_01;
+    EXPECT_LT(max_t_diff_12, Real(0.3))
+        << "Order-1 vs Order-2 hit distance disagrees by " << max_t_diff_12;
 }
