@@ -110,6 +110,20 @@ gwn::gwn_upload_from_eigen(geometry, V, F, stream);
 
 Alternatively, if libigl is not available, you can load OBJ files manually and populate Eigen matrices yourself.
 
+## Visual Debug App
+
+The repository includes a small Harnack-tracing debug renderer that writes PNG images:
+
+```bash
+cmake --build build --target smallgwn_harnack_debug_app
+./build/smallgwn_harnack_debug_app --width 800 --height 600 --mesh half \
+    --normal-out normal.png --depth-out depth.png
+```
+
+Useful options:
+- `--mesh octa|half` selects the built-in closed/open test mesh (default: `half`).
+- `--epsilon`, `--max-iters`, `--tmax`, `--accuracy` control tracing behavior.
+
 ## Testing
 
 Build tests:

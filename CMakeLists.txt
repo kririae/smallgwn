@@ -58,6 +58,16 @@ if(SMALLGWN_BUILD_BENCHMARKS)
     )
 endif()
 
+option(SMALLGWN_BUILD_APPS "Build smallgwn sample applications" ON)
+if(SMALLGWN_BUILD_APPS)
+    add_executable(smallgwn_harnack_debug_app apps/harnack_debug/main.cu)
+    target_link_libraries(smallgwn_harnack_debug_app PRIVATE gwn::smallgwn)
+    target_include_directories(smallgwn_harnack_debug_app
+        PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb"
+    )
+endif()
+
 option(SMALLGWN_BUILD_TESTS "Build smallgwn tests" ON)
 if(SMALLGWN_BUILD_TESTS)
     include(CTest)
