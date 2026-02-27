@@ -6,6 +6,10 @@
 #error "gwn_eigen_bridge.cuh requires Eigen/Core in the include path."
 #endif
 
+#if !__has_include(<tbb/blocked_range.h>) || !__has_include(<tbb/parallel_for.h>)
+#error "gwn_eigen_bridge.cuh requires Intel TBB (tbb/blocked_range.h and tbb/parallel_for.h) in the include path."
+#endif
+
 #include <atomic>
 #include <cmath>
 #include <exception>

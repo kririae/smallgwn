@@ -8,8 +8,8 @@
 namespace gwn {
 namespace detail {
 template <gwn_index_type Index> struct gwn_binary_child_ref {
-    std::uint8_t kind{};
     Index index{};
+    std::uint8_t kind{};
 };
 
 template <gwn_index_type Index> struct gwn_binary_node {
