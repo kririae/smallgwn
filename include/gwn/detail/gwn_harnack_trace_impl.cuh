@@ -56,7 +56,7 @@ __host__ __device__ inline Real gwn_harnack_step_size(
 
     Real const a = (f_t - c) / denom;
     if (a <= Real(0))
-        return Real(0); // shouldn't happen if c is a true lower bound
+        return R * Real(1e-4); // Taylor error can push f_t < c; nudge forward
 
     Real const disc = a * a + Real(8) * a;
     if (disc <= Real(0))
@@ -204,9 +204,9 @@ __device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_ray_impl(
 // Per-ray Harnack trace (angle-valued, Algorithm 2).
 //
 // Uses:
-//   • edge distance (not face distance) for safe-ball radius R
-//   • mod 4π remapping of solid angle relative to target phase
-//   • two-sided Harnack step bound against {0, 4π} in wrapped coordinates
+//   • wrapped angle representative in [0, 4π) around target phase
+//   • safe-ball radius R = min(singular-edge distance, face distance)
+//   • two-sided Harnack step bound against fixed wrapped bounds {0, 4π}
 //   • overstepping with backoff (paper §3.1.4 / reference implementation)
 // ---------------------------------------------------------------------------
 
@@ -244,31 +244,52 @@ __device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_angle_ray_imp
     constexpr Real k_four_pi = Real(4) * k_pi;
     Real const target_omega = k_four_pi * target_winding;
 
-    auto eval_w = [&](Real t_) -> Real {
+    auto eval_w = [&](Real const px, Real const py, Real const pz) -> Real {
         return gwn_winding_number_point_bvh_taylor_impl<Order, Width, Real, Index, StackCapacity>(
-            geometry, bvh, moment_tree,
-            ray_ox + t_ * ray_dx, ray_oy + t_ * ray_dy, ray_oz + t_ * ray_dz,
-            accuracy_scale
+            geometry, bvh, moment_tree, px, py, pz, accuracy_scale
         );
     };
 
-    auto fill_result = [&](Real t_, Real w_, int iters) {
+    auto eval_grad = [&](Real const px, Real const py, Real const pz) -> gwn_query_vec3<Real> {
+        return gwn_winding_gradient_point_bvh_taylor_impl<Order, Width, Real, Index, StackCapacity>(
+            geometry, bvh, moment_tree, px, py, pz, accuracy_scale
+        );
+    };
+
+    auto eval_grad_shading = [&](Real const, Real const, Real const,
+                                 gwn_query_vec3<Real> const &fallback) -> gwn_query_vec3<Real> {
+        return fallback;
+    };
+
+    auto eval_closest_triangle_normal = [&](Real const px, Real const py,
+                                            Real const pz) -> gwn_query_vec3<Real> {
+        auto const r = gwn_closest_triangle_normal_point_bvh_impl<
+            Width, Real, Index, StackCapacity>(
+            geometry, bvh, aabb_tree, px, py, pz,
+            std::numeric_limits<Real>::infinity());
+        return gwn_query_vec3<Real>(r.normal_x, r.normal_y, r.normal_z);
+    };
+
+    auto fill_result = [&](Real t_, Real w_, gwn_query_vec3<Real> const &g, int iters) {
         result.t = t_;
         result.winding = w_;
         result.iterations = iters;
-        Real const px = ray_ox + t_ * ray_dx;
-        Real const py = ray_oy + t_ * ray_dy;
-        Real const pz = ray_oz + t_ * ray_dz;
-        gwn_query_vec3<Real> const g =
-            gwn_winding_gradient_point_bvh_taylor_impl<Order, Width, Real, Index, StackCapacity>(
-                geometry, bvh, moment_tree, px, py, pz, accuracy_scale
-            );
-        Real const gm = sqrt(g.x * g.x + g.y * g.y + g.z * g.z);
+        constexpr Real k_grad_floor = Real(1e-8);
+
+        gwn_query_vec3<Real> n = g;
+        Real gm = sqrt(n.x * n.x + n.y * n.y + n.z * n.z);
+        if (!(gm > k_grad_floor) || !isfinite(gm)) {
+            Real const px = ray_ox + t_ * ray_dx;
+            Real const py = ray_oy + t_ * ray_dy;
+            Real const pz = ray_oz + t_ * ray_dz;
+            n = eval_closest_triangle_normal(px, py, pz);
+            gm = sqrt(n.x * n.x + n.y * n.y + n.z * n.z);
+        }
         if (gm > Real(0)) {
             Real const inv_gm = Real(1) / gm;
-            result.normal_x = g.x * inv_gm;
-            result.normal_y = g.y * inv_gm;
-            result.normal_z = g.z * inv_gm;
+            result.normal_x = n.x * inv_gm;
+            result.normal_y = n.y * inv_gm;
+            result.normal_z = n.z * inv_gm;
         }
     };
 
@@ -287,35 +308,37 @@ __device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_angle_ray_imp
         Real const py = ray_oy + t_eval * ray_dy;
         Real const pz = ray_oz + t_eval * ray_dz;
 
-        Real const w = eval_w(t_eval);
-        Real const omega = k_four_pi * w;
-        Real const wrapped = gwn_glsl_mod<Real>(omega - target_omega, k_four_pi);
-
-        Real const lower_levelset = Real(0);
-        Real const upper_levelset = k_four_pi;
-        Real const dist_lo = wrapped - lower_levelset;
-        Real const dist_hi = upper_levelset - wrapped;
-        Real const dist = (dist_lo < dist_hi) ? dist_lo : dist_hi;
-
-        gwn_query_vec3<Real> const grad_w =
-            gwn_winding_gradient_point_bvh_taylor_impl<Order, Width, Real, Index, StackCapacity>(
-                geometry, bvh, moment_tree, px, py, pz, accuracy_scale
-            );
+        Real const w = eval_w(px, py, pz);
+        gwn_query_vec3<Real> const grad_w = eval_grad(px, py, pz);
         Real const grad_w_mag =
             sqrt(grad_w.x * grad_w.x + grad_w.y * grad_w.y + grad_w.z * grad_w.z);
+        Real const omega = k_four_pi * w;
+        Real const val = gwn_glsl_mod<Real>(omega - target_omega, k_four_pi);
+        Real const lower_levelset = Real(0);
+        Real const upper_levelset = k_four_pi;
+        Real const dist_lo = val - lower_levelset;
+        Real const dist_hi = upper_levelset - val;
+        Real const dist = (dist_lo < dist_hi) ? dist_lo : dist_hi;
         Real const grad_omega_mag = k_four_pi * grad_w_mag;
 
-        Real const R =
-            gwn_unsigned_edge_distance_point_bvh_impl<Width, Real, Index, StackCapacity>(
-                geometry, bvh, aabb_tree, px, py, pz,
-                std::numeric_limits<Real>::infinity()
-            );
+        // R(x) = distance to the nearest singularity of the harmonic function.
+        // For open meshes this is the singular (boundary) edges; for closed
+        // meshes the singular edge set is empty but the winding number is
+        // discontinuous across triangle faces, so we also need face distance.
+        Real R_singular = gwn_unsigned_singular_edge_distance_point_impl<Real, Index>(
+            geometry, px, py, pz, std::numeric_limits<Real>::infinity()
+        );
+        Real const R_face = gwn_unsigned_distance_point_bvh_impl<
+            Width, Real, Index, StackCapacity>(
+            geometry, bvh, aabb_tree, px, py, pz, R_singular
+        );
+        Real const R = (R_face < R_singular) ? R_face : R_singular;
         if (!(R >= Real(0)))
             break;
 
         Real const c = -k_four_pi;
         Real rho = gwn_harnack_constrained_two_sided_step(
-            wrapped, lower_levelset, upper_levelset, c, R
+            val, lower_levelset, upper_levelset, c, R
         );
         rho /= dir_len;
         if (!(rho >= Real(0)))
@@ -326,7 +349,10 @@ __device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_angle_ray_imp
             // 1) gradient-scaled level-set proximity (paper §3.1.2)
             // 2) very small safe-ball radius near singular boundary
             if (dist < epsilon * grad_omega_mag || R < epsilon) {
-                fill_result(t_eval, w, iter + 1);
+                gwn_query_vec3<Real> grad_shading = eval_grad_shading(px, py, pz, grad_w);
+                if (R < epsilon)
+                    grad_shading = eval_closest_triangle_normal(px, py, pz);
+                fill_result(t_eval, w, grad_shading, iter + 1);
                 return result;
             }
 

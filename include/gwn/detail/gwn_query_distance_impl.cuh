@@ -223,6 +223,173 @@ __device__ inline Real gwn_unsigned_distance_point_bvh_impl(
     return sqrt(best_dist2);
 }
 
+/// \brief Result of a closest-triangle-normal query.
+template <gwn_real_type Real>
+struct gwn_closest_triangle_normal_result {
+    Real normal_x{Real(0)};
+    Real normal_y{Real(0)};
+    Real normal_z{Real(0)};
+};
+
+/// \brief BVH-accelerated closest triangle face normal from a query point.
+///
+/// Same traversal as gwn_unsigned_distance_point_bvh_impl, but additionally
+/// tracks the closest primitive ID and computes its unit face normal.
+template <int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity>
+__device__ inline gwn_closest_triangle_normal_result<Real>
+gwn_closest_triangle_normal_point_bvh_impl(
+    gwn_geometry_accessor<Real, Index> const &geometry,
+    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
+    gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree, Real const qx, Real const qy,
+    Real const qz, Real const culling_band
+) noexcept {
+    static_assert(Width >= 2, "BVH width must be at least 2.");
+    static_assert(StackCapacity > 0, "Traversal stack capacity must be positive.");
+
+    gwn_closest_triangle_normal_result<Real> result;
+    if (!geometry.is_valid() || !bvh.is_valid() || !aabb_tree.is_valid_for(bvh))
+        return result;
+
+    gwn_query_vec3<Real> const query(qx, qy, qz);
+    Real band = culling_band;
+    if (!(band >= Real(0)))
+        band = Real(0);
+
+    Real best_dist2 = band * band;
+    if (!isfinite(best_dist2))
+        best_dist2 = std::numeric_limits<Real>::infinity();
+    Index best_pi = Index(0);
+    bool found = false;
+
+    auto update_leaf = [&](Index const pi) {
+        Real const d2 =
+            gwn_triangle_distance_squared_from_primitive_impl<Real, Index>(geometry, pi, query);
+        if (d2 < best_dist2) {
+            best_dist2 = d2;
+            best_pi = pi;
+            found = true;
+        }
+    };
+
+    if (bvh.root_kind == gwn_bvh_child_kind::k_leaf) {
+        for (Index off = 0; off < bvh.root_count; ++off) {
+            Index const si = bvh.root_index + off;
+            if (!gwn_index_in_bounds(si, bvh.primitive_indices.size()))
+                continue;
+            update_leaf(bvh.primitive_indices[static_cast<std::size_t>(si)]);
+        }
+    } else if (bvh.root_kind == gwn_bvh_child_kind::k_internal) {
+        Index stack[StackCapacity];
+        int stack_size = 0;
+        stack[stack_size++] = bvh.root_index;
+
+        while (stack_size > 0) {
+            Index const node_index = stack[--stack_size];
+            if (!gwn_index_in_bounds(node_index, bvh.nodes.size()))
+                continue;
+
+            auto const &topo_node = bvh.nodes[static_cast<std::size_t>(node_index)];
+            auto const &aabb_node = aabb_tree.nodes[static_cast<std::size_t>(node_index)];
+            int child_slot_order[Width];
+            Real child_box_dist2[Width];
+            std::uint8_t child_kind[Width];
+            std::uint8_t constexpr k_inv =
+                static_cast<std::uint8_t>(gwn_bvh_child_kind::k_invalid);
+            Real constexpr k_inf = std::numeric_limits<Real>::infinity();
+            GWN_PRAGMA_UNROLL
+            for (int i = 0; i < Width; ++i) {
+                child_slot_order[i] = 0;
+                child_box_dist2[i] = k_inf;
+                child_kind[i] = k_inv;
+            }
+            int child_count = 0;
+
+            GWN_PRAGMA_UNROLL
+            for (int s = 0; s < Width; ++s) {
+                auto const kind = static_cast<gwn_bvh_child_kind>(topo_node.child_kind[s]);
+                if (kind == gwn_bvh_child_kind::k_invalid)
+                    continue;
+                if (kind != gwn_bvh_child_kind::k_internal && kind != gwn_bvh_child_kind::k_leaf)
+                    continue;
+                Real const box_dist2 = gwn_aabb_min_distance_squared_impl(
+                    qx, qy, qz, aabb_node.child_min_x[s], aabb_node.child_min_y[s],
+                    aabb_node.child_min_z[s], aabb_node.child_max_x[s], aabb_node.child_max_y[s],
+                    aabb_node.child_max_z[s]
+                );
+                if (box_dist2 >= best_dist2)
+                    continue;
+                if (child_count >= Width)
+                    continue;
+                child_slot_order[child_count] = s;
+                child_box_dist2[child_count] = box_dist2;
+                child_kind[child_count] = topo_node.child_kind[s];
+                ++child_count;
+            }
+
+            if (child_count > 1)
+                gwn_sort_children_by_dist2_impl<Width>(child_box_dist2, child_slot_order, child_kind);
+
+            GWN_PRAGMA_UNROLL
+            for (int i = 0; i < Width; ++i) {
+                if (static_cast<gwn_bvh_child_kind>(child_kind[i]) != gwn_bvh_child_kind::k_leaf)
+                    continue;
+                if (child_box_dist2[i] >= best_dist2)
+                    continue;
+                int const s = child_slot_order[i];
+                Index const begin = topo_node.child_index[s];
+                Index const count = topo_node.child_count[s];
+                for (Index off = 0; off < count; ++off) {
+                    Index const si = begin + off;
+                    if (!gwn_index_in_bounds(si, bvh.primitive_indices.size()))
+                        continue;
+                    update_leaf(bvh.primitive_indices[static_cast<std::size_t>(si)]);
+                }
+            }
+
+            GWN_PRAGMA_UNROLL
+            for (int i = Width - 1; i >= 0; --i) {
+                if (static_cast<gwn_bvh_child_kind>(child_kind[i]) != gwn_bvh_child_kind::k_internal)
+                    continue;
+                if (child_box_dist2[i] >= best_dist2)
+                    continue;
+                if (stack_size >= StackCapacity)
+                    gwn_trap();
+                stack[stack_size++] = topo_node.child_index[child_slot_order[i]];
+            }
+        }
+    }
+
+    if (!found)
+        return result;
+
+    // Compute face normal of the closest triangle.
+    if (!gwn_index_in_bounds(best_pi, geometry.triangle_count()))
+        return result;
+    auto const tri = static_cast<std::size_t>(best_pi);
+    Index const ia = geometry.tri_i0[tri];
+    Index const ib = geometry.tri_i1[tri];
+    Index const ic = geometry.tri_i2[tri];
+    if (!gwn_index_in_bounds(ia, geometry.vertex_count()) ||
+        !gwn_index_in_bounds(ib, geometry.vertex_count()) ||
+        !gwn_index_in_bounds(ic, geometry.vertex_count()))
+        return result;
+
+    auto idx = [](Index const v) { return static_cast<std::size_t>(v); };
+    gwn_query_vec3<Real> const a(geometry.vertex_x[idx(ia)], geometry.vertex_y[idx(ia)], geometry.vertex_z[idx(ia)]);
+    gwn_query_vec3<Real> const b(geometry.vertex_x[idx(ib)], geometry.vertex_y[idx(ib)], geometry.vertex_z[idx(ib)]);
+    gwn_query_vec3<Real> const c(geometry.vertex_x[idx(ic)], geometry.vertex_y[idx(ic)], geometry.vertex_z[idx(ic)]);
+    gwn_query_vec3<Real> const n = gwn_query_cross(b - a, c - a);
+    Real const n2 = gwn_query_squared_norm(n);
+    if (!(n2 > Real(0)) || !isfinite(n2))
+        return result;
+
+    Real const inv_n = Real(1) / sqrt(n2);
+    result.normal_x = n.x * inv_n;
+    result.normal_y = n.y * inv_n;
+    result.normal_z = n.z * inv_n;
+    return result;
+}
+
 /// \brief BVH-accelerated unsigned distance from a point to the nearest triangle **edge**.
 ///
 /// Identical traversal to gwn_unsigned_distance_point_bvh_impl, but at leaf
@@ -364,6 +531,57 @@ __device__ inline Real gwn_unsigned_edge_distance_point_bvh_impl(
         }
     }
 
+    return sqrt(best_dist2);
+}
+
+/// \brief Unsigned distance from a point to the mesh singular edge set.
+///
+/// The singular edge set is derived at upload time by canceling opposite edge
+/// orientations across adjacent triangles; only non-canceling edges remain.
+/// For consistently oriented closed meshes this set is empty.
+template <gwn_real_type Real, gwn_index_type Index>
+__device__ inline Real gwn_unsigned_singular_edge_distance_point_impl(
+    gwn_geometry_accessor<Real, Index> const &geometry, Real const qx, Real const qy,
+    Real const qz, Real const culling_band
+) noexcept {
+    if (!geometry.is_valid())
+        return Real(0);
+
+    Real band = culling_band;
+    if (!(band >= Real(0)))
+        band = Real(0);
+
+    Real best_dist2 = band * band;
+    if (!isfinite(best_dist2))
+        best_dist2 = std::numeric_limits<Real>::infinity();
+
+    if (geometry.singular_edge_count() == 0)
+        return sqrt(best_dist2);
+
+    gwn_query_vec3<Real> const query(qx, qy, qz);
+    for (std::size_t edge_id = 0; edge_id < geometry.singular_edge_count(); ++edge_id) {
+        Index const ia = geometry.singular_edge_i0[edge_id];
+        Index const ib = geometry.singular_edge_i1[edge_id];
+        if (!gwn_index_in_bounds(ia, geometry.vertex_count()) ||
+            !gwn_index_in_bounds(ib, geometry.vertex_count())) {
+            continue;
+        }
+
+        std::size_t const a_index = static_cast<std::size_t>(ia);
+        std::size_t const b_index = static_cast<std::size_t>(ib);
+        gwn_query_vec3<Real> const a(
+            geometry.vertex_x[a_index], geometry.vertex_y[a_index], geometry.vertex_z[a_index]
+        );
+        gwn_query_vec3<Real> const b(
+            geometry.vertex_x[b_index], geometry.vertex_y[b_index], geometry.vertex_z[b_index]
+        );
+        Real const d2 = gwn_point_segment_distance_squared_impl(query, a, b);
+        if (d2 < best_dist2) {
+            best_dist2 = d2;
+            if (!(best_dist2 > Real(0)))
+                return Real(0);
+        }
+    }
     return sqrt(best_dist2);
 }
 

@@ -30,6 +30,32 @@ TEST(smallgwn_unit_geometry, default_accessor_is_empty_and_valid) {
     EXPECT_EQ(accessor.triangle_count(), 0u);
 }
 
+TEST(smallgwn_unit_geometry, singular_edge_extraction_octahedron_is_empty) {
+    std::array<Index, 8> const i0{0, 2, 1, 3, 2, 1, 3, 0};
+    std::array<Index, 8> const i1{2, 1, 3, 0, 0, 2, 1, 3};
+    std::array<Index, 8> const i2{4, 4, 4, 4, 5, 5, 5, 5};
+    auto const edges = gwn::detail::gwn_extract_singular_edges<Index>(
+        cuda::std::span<Index const>(i0.data(), i0.size()),
+        cuda::std::span<Index const>(i1.data(), i1.size()),
+        cuda::std::span<Index const>(i2.data(), i2.size())
+    );
+    EXPECT_EQ(edges.i0.size(), 0u);
+    EXPECT_EQ(edges.i1.size(), 0u);
+}
+
+TEST(smallgwn_unit_geometry, singular_edge_extraction_half_octahedron_has_boundary_loop) {
+    std::array<Index, 4> const i0{0, 2, 1, 3};
+    std::array<Index, 4> const i1{2, 1, 3, 0};
+    std::array<Index, 4> const i2{4, 4, 4, 4};
+    auto const edges = gwn::detail::gwn_extract_singular_edges<Index>(
+        cuda::std::span<Index const>(i0.data(), i0.size()),
+        cuda::std::span<Index const>(i1.data(), i1.size()),
+        cuda::std::span<Index const>(i2.data(), i2.size())
+    );
+    EXPECT_EQ(edges.i0.size(), 4u);
+    EXPECT_EQ(edges.i1.size(), 4u);
+}
+
 // ---------------------------------------------------------------------------
 // Upload — success path.
 // ---------------------------------------------------------------------------
@@ -54,7 +80,33 @@ TEST_F(CudaFixture, upload_valid_single_triangle) {
 
     EXPECT_EQ(geometry.vertex_count(), 3u);
     EXPECT_EQ(geometry.triangle_count(), 1u);
+    EXPECT_EQ(geometry.singular_edge_count(), 3u);
     EXPECT_TRUE(geometry.accessor().is_valid());
+}
+
+TEST_F(CudaFixture, singular_edges_ignore_interior_triangulation_edges) {
+    // Planar square split into two triangles: the interior diagonal is not a
+    // singular edge of the solid-angle field and must be excluded.
+    std::array<Real, 4> const vx{-1.0f, 1.0f, 1.0f, -1.0f};
+    std::array<Real, 4> const vy{-1.0f, -1.0f, 1.0f, 1.0f};
+    std::array<Real, 4> const vz{0.0f, 0.0f, 0.0f, 0.0f};
+    std::array<Index, 2> const i0{0, 0};
+    std::array<Index, 2> const i1{1, 2};
+    std::array<Index, 2> const i2{2, 3};
+
+    gwn::gwn_geometry_object<Real, Index> geometry;
+    gwn::gwn_status const status = geometry.upload(
+        cuda::std::span<Real const>(vx.data(), vx.size()),
+        cuda::std::span<Real const>(vy.data(), vy.size()),
+        cuda::std::span<Real const>(vz.data(), vz.size()),
+        cuda::std::span<Index const>(i0.data(), i0.size()),
+        cuda::std::span<Index const>(i1.data(), i1.size()),
+        cuda::std::span<Index const>(i2.data(), i2.size())
+    );
+    SMALLGWN_SKIP_IF_STATUS_CUDA_UNAVAILABLE(status);
+    ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
+
+    EXPECT_EQ(geometry.singular_edge_count(), 4u);
 }
 
 // ---------------------------------------------------------------------------
@@ -217,4 +269,102 @@ TEST_F(CudaFixture, move_preserves_accessor) {
     EXPECT_EQ(dst.vertex_count(), 3u);
     EXPECT_TRUE(dst.accessor().is_valid());
     EXPECT_EQ(src.triangle_count(), 0u);
+}
+
+// ---------------------------------------------------------------------------
+// GPU singular edge build parity with CPU reference.
+// ---------------------------------------------------------------------------
+
+TEST_F(CudaFixture, gpu_singular_edges_match_cpu_reference_single_triangle) {
+    std::array<Real, 3> const vx{1.0f, 0.0f, 0.0f};
+    std::array<Real, 3> const vy{0.0f, 1.0f, 0.0f};
+    std::array<Real, 3> const vz{0.0f, 0.0f, 1.0f};
+    std::array<Index, 1> const i0{0}, i1{1}, i2{2};
+
+    // CPU reference.
+    auto const cpu_edges = gwn::detail::gwn_extract_singular_edges<Index>(
+        cuda::std::span<Index const>(i0.data(), i0.size()),
+        cuda::std::span<Index const>(i1.data(), i1.size()),
+        cuda::std::span<Index const>(i2.data(), i2.size())
+    );
+
+    // GPU path (via upload).
+    gwn::gwn_geometry_object<Real, Index> geometry;
+    gwn::gwn_status const status = geometry.upload(
+        cuda::std::span<Real const>(vx.data(), vx.size()),
+        cuda::std::span<Real const>(vy.data(), vy.size()),
+        cuda::std::span<Real const>(vz.data(), vz.size()),
+        cuda::std::span<Index const>(i0.data(), i0.size()),
+        cuda::std::span<Index const>(i1.data(), i1.size()),
+        cuda::std::span<Index const>(i2.data(), i2.size())
+    );
+    SMALLGWN_SKIP_IF_STATUS_CUDA_UNAVAILABLE(status);
+    ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
+
+    EXPECT_EQ(geometry.singular_edge_count(), cpu_edges.i0.size());
+
+    // Download GPU results and compare.
+    std::vector<Index> gpu_i0(geometry.singular_edge_count());
+    std::vector<Index> gpu_i1(geometry.singular_edge_count());
+    if (!gpu_i0.empty()) {
+        cudaMemcpy(gpu_i0.data(), geometry.accessor().singular_edge_i0.data(),
+                   gpu_i0.size() * sizeof(Index), cudaMemcpyDeviceToHost);
+        cudaMemcpy(gpu_i1.data(), geometry.accessor().singular_edge_i1.data(),
+                   gpu_i1.size() * sizeof(Index), cudaMemcpyDeviceToHost);
+    }
+
+    // Both should be sorted by (i0, i1), so direct comparison works.
+    ASSERT_EQ(gpu_i0.size(), cpu_edges.i0.size());
+    for (std::size_t e = 0; e < gpu_i0.size(); ++e) {
+        EXPECT_EQ(gpu_i0[e], cpu_edges.i0[e]) << "edge " << e << " i0 mismatch";
+        EXPECT_EQ(gpu_i1[e], cpu_edges.i1[e]) << "edge " << e << " i1 mismatch";
+    }
+}
+
+TEST_F(CudaFixture, gpu_singular_edges_match_cpu_reference_single_triangle_uint64) {
+    using Index64 = std::uint64_t;
+
+    std::array<Real, 3> const vx{1.0f, 0.0f, 0.0f};
+    std::array<Real, 3> const vy{0.0f, 1.0f, 0.0f};
+    std::array<Real, 3> const vz{0.0f, 0.0f, 1.0f};
+    std::array<Index64, 1> const i0{0}, i1{1}, i2{2};
+
+    auto const cpu_edges = gwn::detail::gwn_extract_singular_edges<Index64>(
+        cuda::std::span<Index64 const>(i0.data(), i0.size()),
+        cuda::std::span<Index64 const>(i1.data(), i1.size()),
+        cuda::std::span<Index64 const>(i2.data(), i2.size())
+    );
+
+    gwn::gwn_geometry_object<Real, Index64> geometry;
+    gwn::gwn_status const status = geometry.upload(
+        cuda::std::span<Real const>(vx.data(), vx.size()),
+        cuda::std::span<Real const>(vy.data(), vy.size()),
+        cuda::std::span<Real const>(vz.data(), vz.size()),
+        cuda::std::span<Index64 const>(i0.data(), i0.size()),
+        cuda::std::span<Index64 const>(i1.data(), i1.size()),
+        cuda::std::span<Index64 const>(i2.data(), i2.size())
+    );
+    SMALLGWN_SKIP_IF_STATUS_CUDA_UNAVAILABLE(status);
+    ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
+
+    EXPECT_EQ(geometry.singular_edge_count(), cpu_edges.i0.size());
+
+    std::vector<Index64> gpu_i0(geometry.singular_edge_count());
+    std::vector<Index64> gpu_i1(geometry.singular_edge_count());
+    if (!gpu_i0.empty()) {
+        cudaMemcpy(
+            gpu_i0.data(), geometry.accessor().singular_edge_i0.data(),
+            gpu_i0.size() * sizeof(Index64), cudaMemcpyDeviceToHost
+        );
+        cudaMemcpy(
+            gpu_i1.data(), geometry.accessor().singular_edge_i1.data(),
+            gpu_i1.size() * sizeof(Index64), cudaMemcpyDeviceToHost
+        );
+    }
+
+    ASSERT_EQ(gpu_i0.size(), cpu_edges.i0.size());
+    for (std::size_t e = 0; e < gpu_i0.size(); ++e) {
+        EXPECT_EQ(gpu_i0[e], cpu_edges.i0[e]) << "edge " << e << " i0 mismatch";
+        EXPECT_EQ(gpu_i1[e], cpu_edges.i1[e]) << "edge " << e << " i1 mismatch";
+    }
 }

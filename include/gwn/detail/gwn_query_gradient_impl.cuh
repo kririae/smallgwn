@@ -100,6 +100,31 @@ __device__ inline gwn_query_vec3<Real> gwn_triangle_gradient_from_primitive_impl
     return gwn_gradient_solid_angle_triangle_impl(a, b, c, query);
 }
 
+template <gwn_real_type Real, gwn_index_type Index>
+__device__ inline gwn_query_vec3<Real> gwn_winding_gradient_point_exact_impl(
+    gwn_geometry_accessor<Real, Index> const &geometry, Real const qx, Real const qy,
+    Real const qz
+) noexcept {
+    gwn_query_vec3<Real> const zero(Real(0), Real(0), Real(0));
+    if (!geometry.is_valid())
+        return zero;
+
+    constexpr Real k_pi = Real(3.141592653589793238462643383279502884L);
+    constexpr Real k_inv_4pi = Real(1) / (Real(4) * k_pi);
+
+    gwn_query_vec3<Real> const query(qx, qy, qz);
+    gwn_query_vec3<Real> grad_sum(Real(0), Real(0), Real(0));
+    for (std::size_t primitive_id = 0; primitive_id < geometry.triangle_count(); ++primitive_id) {
+        grad_sum += gwn_triangle_gradient_from_primitive_impl<Real, Index>(
+            geometry, static_cast<Index>(primitive_id), query
+        );
+    }
+
+    return gwn_query_vec3<Real>(
+        grad_sum.x * k_inv_4pi, grad_sum.y * k_inv_4pi, grad_sum.z * k_inv_4pi
+    );
+}
+
 // ---------------------------------------------------------------------------
 // BVH-accelerated Taylor gradient of the winding number.
 //
