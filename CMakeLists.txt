@@ -103,6 +103,7 @@ if(SMALLGWN_BUILD_TESTS)
         smallgwn_add_test(smallgwn_unit_uint64_compile SOURCES tests/unit_uint64_compile.cu)
         smallgwn_add_test(smallgwn_unit_bvh_taylor     SOURCES tests/unit_bvh_taylor.cu)
         smallgwn_add_test(smallgwn_unit_winding_taylor SOURCES tests/unit_winding_taylor.cu)
+        smallgwn_add_test(smallgwn_unit_winding_gradient SOURCES tests/unit_winding_gradient.cu)
 
         # SDF tests (libigl parity).
         find_package(libigl QUIET HINTS /usr/lib/cmake/igl)
@@ -119,6 +120,7 @@ if(SMALLGWN_BUILD_TESTS)
         smallgwn_add_test(smallgwn_integration_model_parity SOURCES tests/integration_model_parity.cu
             EXTRA_SOURCES tests/reference_hdk/UT_Array.cpp tests/reference_hdk/UT_SolidAngle.cpp)
         smallgwn_add_test(smallgwn_integration_correctness  SOURCES tests/integration_correctness.cu)
+        smallgwn_add_test(smallgwn_integration_gradient     SOURCES tests/integration_gradient.cu)
         smallgwn_add_test(smallgwn_integration_hploc_performance SOURCES tests/integration_hploc_performance.cu)
 
         smallgwn_add_test(smallgwn_integration_taylor_matrix NO_CTEST

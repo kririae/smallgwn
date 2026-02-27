@@ -18,6 +18,7 @@
 
 #include "detail/gwn_query_distance_impl.cuh"
 #include "detail/gwn_query_geometry_impl.cuh"
+#include "detail/gwn_query_gradient_impl.cuh"
 #include "detail/gwn_query_winding_impl.cuh"
 #include "gwn_bvh.cuh"
 #include "gwn_geometry.cuh"
@@ -151,6 +152,84 @@ gwn_status gwn_compute_winding_number_batch_bvh_taylor(
 ) noexcept {
     return gwn_compute_winding_number_batch_bvh_taylor<Order, 4, Real, Index, StackCapacity>(
         geometry, bvh, data_tree, query_x, query_y, query_z, output, accuracy_scale, stream
+    );
+}
+
+/// \brief Compute winding-number gradient for a batch using
+///        Taylor-accelerated BVH traversal.
+///
+/// Each query yields a 3-component gradient vector; the components are
+/// written to three separate output spans (SoA layout).
+///
+/// \tparam Order Taylor winding-number order (0 or 1).
+template <
+    int Order, int Width, gwn_real_type Real, gwn_index_type Index = std::uint32_t,
+    int StackCapacity = k_gwn_default_traversal_stack_capacity>
+gwn_status gwn_compute_winding_gradient_batch_bvh_taylor(
+    gwn_geometry_accessor<Real, Index> const &geometry,
+    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
+    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &data_tree,
+    cuda::std::span<Real const> const query_x, cuda::std::span<Real const> const query_y,
+    cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output_x,
+    cuda::std::span<Real> const output_y, cuda::std::span<Real> const output_z,
+    Real const accuracy_scale = Real(2), cudaStream_t const stream = gwn_default_stream()
+) noexcept {
+    static_assert(
+        Order == 0 || Order == 1 || Order == 2,
+        "gwn_compute_winding_gradient_batch_bvh_taylor currently supports Order 0, 1, and 2."
+    );
+    static_assert(StackCapacity > 0, "Traversal stack capacity must be positive.");
+
+    if (!geometry.is_valid())
+        return gwn_status::invalid_argument("Geometry accessor contains mismatched span lengths.");
+    if (!bvh.is_valid())
+        return gwn_status::invalid_argument("BVH accessor is invalid.");
+    if (!data_tree.is_valid_for(bvh))
+        return gwn_status::invalid_argument("BVH data tree is invalid for the given topology.");
+    if (query_x.size() != query_y.size() || query_x.size() != query_z.size())
+        return gwn_status::invalid_argument("Query SoA spans must have identical lengths.");
+    if (query_x.size() != output_x.size() || query_x.size() != output_y.size() ||
+        query_x.size() != output_z.size())
+        return gwn_status::invalid_argument("Output span sizes must match query count.");
+    if (!gwn_span_has_storage(query_x) || !gwn_span_has_storage(query_y) ||
+        !gwn_span_has_storage(query_z) || !gwn_span_has_storage(output_x) ||
+        !gwn_span_has_storage(output_y) || !gwn_span_has_storage(output_z)) {
+        return gwn_status::invalid_argument(
+            "Query/output spans must use non-null storage when non-empty."
+        );
+    }
+    if (output_x.empty())
+        return gwn_status::ok();
+
+    constexpr int k_block_size = detail::k_gwn_default_block_size;
+    return detail::gwn_launch_linear_kernel<k_block_size>(
+        output_x.size(),
+        detail::gwn_make_winding_gradient_batch_bvh_taylor_functor<
+            Order, Width, Real, Index, StackCapacity>(
+            geometry, bvh, data_tree, query_x, query_y, query_z, output_x, output_y, output_z,
+            accuracy_scale
+        ),
+        stream
+    );
+}
+
+/// \brief Width-4 convenience wrapper for Taylor BVH batch winding-gradient
+///        queries.
+template <
+    int Order, gwn_real_type Real, gwn_index_type Index = std::uint32_t,
+    int StackCapacity = k_gwn_default_traversal_stack_capacity>
+gwn_status gwn_compute_winding_gradient_batch_bvh_taylor(
+    gwn_geometry_accessor<Real, Index> const &geometry,
+    gwn_bvh4_topology_accessor<Real, Index> const &bvh,
+    gwn_bvh4_moment_accessor<Order, Real, Index> const &data_tree,
+    cuda::std::span<Real const> const query_x, cuda::std::span<Real const> const query_y,
+    cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output_x,
+    cuda::std::span<Real> const output_y, cuda::std::span<Real> const output_z,
+    Real const accuracy_scale = Real(2), cudaStream_t const stream = gwn_default_stream()
+) noexcept {
+    return gwn_compute_winding_gradient_batch_bvh_taylor<Order, 4, Real, Index, StackCapacity>(
+        geometry, bvh, data_tree, query_x, query_y, query_z, output_x, output_y, output_z,
+        accuracy_scale, stream
     );
 }
 
