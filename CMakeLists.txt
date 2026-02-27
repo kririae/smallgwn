@@ -104,6 +104,7 @@ if(SMALLGWN_BUILD_TESTS)
         smallgwn_add_test(smallgwn_unit_bvh_taylor     SOURCES tests/unit_bvh_taylor.cu)
         smallgwn_add_test(smallgwn_unit_winding_taylor SOURCES tests/unit_winding_taylor.cu)
         smallgwn_add_test(smallgwn_unit_winding_gradient SOURCES tests/unit_winding_gradient.cu)
+        smallgwn_add_test(smallgwn_unit_harnack_trace    SOURCES tests/unit_harnack_trace.cu)
 
         # SDF tests (libigl parity).
         find_package(libigl QUIET HINTS /usr/lib/cmake/igl)
@@ -121,6 +122,8 @@ if(SMALLGWN_BUILD_TESTS)
             EXTRA_SOURCES tests/reference_hdk/UT_Array.cpp tests/reference_hdk/UT_SolidAngle.cpp)
         smallgwn_add_test(smallgwn_integration_correctness  SOURCES tests/integration_correctness.cu)
         smallgwn_add_test(smallgwn_integration_gradient     SOURCES tests/integration_gradient.cu)
+        smallgwn_add_test(smallgwn_integration_harnack_trace SOURCES tests/integration_harnack_trace.cu)
+        smallgwn_add_test(smallgwn_integration_harnack_behavior_match SOURCES tests/integration_harnack_behavior_match.cu)
         smallgwn_add_test(smallgwn_integration_hploc_performance SOURCES tests/integration_hploc_performance.cu)
 
         smallgwn_add_test(smallgwn_integration_taylor_matrix NO_CTEST

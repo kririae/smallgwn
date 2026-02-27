@@ -39,6 +39,37 @@ __host__ __device__ inline Real gwn_signed_solid_angle_triangle_impl(
     return Real(2) * atan2(numerator, denominator);
 }
 
+/// \brief Squared distance from point \p p to line segment [a, b].
+template <gwn_real_type Real>
+__host__ __device__ inline Real gwn_point_segment_distance_squared_impl(
+    gwn_query_vec3<Real> const &p, gwn_query_vec3<Real> const &a, gwn_query_vec3<Real> const &b
+) noexcept {
+    gwn_query_vec3<Real> const ab = b - a;
+    gwn_query_vec3<Real> const ap = p - a;
+    Real const ab_dot_ab = gwn_query_dot(ab, ab);
+    if (!(ab_dot_ab > Real(0)))
+        return gwn_query_squared_norm(ap); // degenerate segment
+    Real t = gwn_query_dot(ap, ab) / ab_dot_ab;
+    if (t < Real(0)) t = Real(0);
+    if (t > Real(1)) t = Real(1);
+    return gwn_query_squared_norm(p - (a + t * ab));
+}
+
+/// \brief Min squared distance from point \p p to the 3 edges of triangle (a, b, c).
+template <gwn_real_type Real>
+__host__ __device__ inline Real gwn_point_triangle_edge_distance_squared_impl(
+    gwn_query_vec3<Real> const &p, gwn_query_vec3<Real> const &a, gwn_query_vec3<Real> const &b,
+    gwn_query_vec3<Real> const &c
+) noexcept {
+    Real d2_ab = gwn_point_segment_distance_squared_impl(p, a, b);
+    Real d2_bc = gwn_point_segment_distance_squared_impl(p, b, c);
+    Real d2_ca = gwn_point_segment_distance_squared_impl(p, c, a);
+    Real result = d2_ab;
+    if (d2_bc < result) result = d2_bc;
+    if (d2_ca < result) result = d2_ca;
+    return result;
+}
+
 template <gwn_real_type Real>
 __host__ __device__ inline Real gwn_point_triangle_distance_squared_impl(
     gwn_query_vec3<Real> const &p, gwn_query_vec3<Real> const &a, gwn_query_vec3<Real> const &b,
@@ -157,6 +188,41 @@ __device__ inline Real gwn_triangle_distance_squared_from_primitive_impl(
         geometry.vertex_x[c_index], geometry.vertex_y[c_index], geometry.vertex_z[c_index]
     );
     return gwn_point_triangle_distance_squared_impl(query, a, b, c);
+}
+
+/// \brief Min squared distance from query to the 3 edges of a triangle primitive.
+template <gwn_real_type Real, gwn_index_type Index>
+__device__ inline Real gwn_triangle_edge_distance_squared_from_primitive_impl(
+    gwn_geometry_accessor<Real, Index> const &geometry, Index const primitive_id,
+    gwn_query_vec3<Real> const &query
+) noexcept {
+    if (!gwn_index_in_bounds(primitive_id, geometry.triangle_count()))
+        return std::numeric_limits<Real>::infinity();
+
+    auto const triangle_id = static_cast<std::size_t>(primitive_id);
+    Index const ia = geometry.tri_i0[triangle_id];
+    Index const ib = geometry.tri_i1[triangle_id];
+    Index const ic = geometry.tri_i2[triangle_id];
+    if (!gwn_index_in_bounds(ia, geometry.vertex_count()) ||
+        !gwn_index_in_bounds(ib, geometry.vertex_count()) ||
+        !gwn_index_in_bounds(ic, geometry.vertex_count())) {
+        return std::numeric_limits<Real>::infinity();
+    }
+
+    auto const a_index = static_cast<std::size_t>(ia);
+    auto const b_index = static_cast<std::size_t>(ib);
+    auto const c_index = static_cast<std::size_t>(ic);
+
+    gwn_query_vec3<Real> const a(
+        geometry.vertex_x[a_index], geometry.vertex_y[a_index], geometry.vertex_z[a_index]
+    );
+    gwn_query_vec3<Real> const b(
+        geometry.vertex_x[b_index], geometry.vertex_y[b_index], geometry.vertex_z[b_index]
+    );
+    gwn_query_vec3<Real> const c(
+        geometry.vertex_x[c_index], geometry.vertex_y[c_index], geometry.vertex_z[c_index]
+    );
+    return gwn_point_triangle_edge_distance_squared_impl(query, a, b, c);
 }
 
 template <gwn_real_type Real>

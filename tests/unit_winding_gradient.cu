@@ -554,7 +554,34 @@ TEST_F(CudaFixture, gradient_order2_more_accurate_than_order1_half_octahedron) {
 }
 
 // ---------------------------------------------------------------------------
-// Test 7: Error-handling — mismatched output spans.
+// Test 7: Closed-mesh interior points should have near-zero gradient.
+//
+// For a consistently oriented closed mesh, winding number is constant (=1)
+// at interior points. The exact interior gradient is therefore zero.
+// ---------------------------------------------------------------------------
+TEST_F(CudaFixture, gradient_closed_octahedron_interior_near_zero) {
+    OctahedronMesh mesh;
+
+    std::vector<Real> qx{0.0f, 0.05f, -0.04f, 0.02f};
+    std::vector<Real> qy{0.0f, -0.03f, 0.04f, -0.02f};
+    std::vector<Real> qz{0.0f, 0.02f, -0.05f, 0.03f};
+
+    std::vector<Real> gx, gy, gz;
+    if (!run_gradient_query<1>(
+            mesh.vx, mesh.vy, mesh.vz, mesh.i0, mesh.i1, mesh.i2,
+            qx, qy, qz, gx, gy, gz, Real(2)
+        ))
+        GTEST_SKIP() << "CUDA unavailable or build failed";
+
+    for (std::size_t i = 0; i < qx.size(); ++i) {
+        Real const gm = std::sqrt(gx[i] * gx[i] + gy[i] * gy[i] + gz[i] * gz[i]);
+        EXPECT_LT(gm, Real(5e-3))
+            << "interior gradient should be near zero at query " << i;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Test 8: Error-handling — mismatched output spans.
 // ---------------------------------------------------------------------------
 TEST_F(CudaFixture, gradient_mismatched_output_returns_error) {
     gwn::gwn_geometry_accessor<Real, Index> accessor{};
@@ -569,5 +596,5 @@ TEST_F(CudaFixture, gradient_mismatched_output_returns_error) {
         gwn::gwn_compute_winding_gradient_batch_bvh_taylor<0, Real, Index>(
             accessor, bvh, data, empty, empty, empty, output, empty_out, empty_out
         );
-    EXPECT_FALSE(status.is_ok());
+    EXPECT_EQ(status.error(), gwn::gwn_error::invalid_argument);
 }

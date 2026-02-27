@@ -311,7 +311,6 @@ __device__ inline gwn_query_vec3<Real> gwn_winding_gradient_point_bvh_taylor_imp
 
                     // Assemble: ∇_m ω₂ = (1/r⁵)[3/2 Pm − 15/2 (r̂m·L + Rm) + 105/2 r̂m·C]
                     Real const half_105_C = Real(52.5) * C2;
-                    Real const half_15_L = Real(7.5) * L2;
 
                     grad_approx_x += qlength_m5 * (Real(1.5) * Px -
                         Real(7.5) * (qnx * L2 + Rx) + qnx * half_105_C);
