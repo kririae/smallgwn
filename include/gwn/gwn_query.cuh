@@ -140,9 +140,9 @@ template <
 gwn_status gwn_compute_unsigned_edge_distance_batch_bvh(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh4_topology_accessor<Real, Index> const &bvh,
-    gwn_bvh4_aabb_accessor<Real, Index> const &aabb_tree,
-    cuda::std::span<Real const> const query_x, cuda::std::span<Real const> const query_y,
-    cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output,
+    gwn_bvh4_aabb_accessor<Real, Index> const &aabb_tree, cuda::std::span<Real const> const query_x,
+    cuda::std::span<Real const> const query_y, cuda::std::span<Real const> const query_z,
+    cuda::std::span<Real> const output,
     Real const culling_band = std::numeric_limits<Real>::infinity(),
     cudaStream_t const stream = gwn_default_stream()
 ) noexcept {
@@ -318,13 +318,10 @@ __device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_ray_bvh_taylo
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
     gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree,
-    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &moment_tree,
-    Real const ray_ox, Real const ray_oy, Real const ray_oz,
-    Real const ray_dx, Real const ray_dy, Real const ray_dz,
-    Real const target_winding = Real(0.5),
-    Real const epsilon = Real(1e-4),
-    int const max_iterations = 512,
-    Real const t_max = Real(1e6),
+    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &moment_tree, Real const ray_ox,
+    Real const ray_oy, Real const ray_oz, Real const ray_dx, Real const ray_dy, Real const ray_dz,
+    Real const target_winding = Real(0.5), Real const epsilon = Real(1e-4),
+    int const max_iterations = 512, Real const t_max = Real(1e6),
     Real const accuracy_scale = Real(2)
 ) noexcept {
     static_assert(
@@ -332,8 +329,7 @@ __device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_ray_bvh_taylo
         "gwn_harnack_trace_ray_bvh_taylor currently supports Order 0, 1, and 2."
     );
     return detail::gwn_harnack_trace_ray_impl<Order, Width, Real, Index, StackCapacity>(
-        geometry, bvh, aabb_tree, moment_tree,
-        ray_ox, ray_oy, ray_oz, ray_dx, ray_dy, ray_dz,
+        geometry, bvh, aabb_tree, moment_tree, ray_ox, ray_oy, ray_oz, ray_dx, ray_dy, ray_dz,
         target_winding, epsilon, max_iterations, t_max, accuracy_scale
     );
 }
@@ -352,22 +348,14 @@ gwn_status gwn_compute_harnack_trace_batch_bvh_taylor(
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
     gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree,
     gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &moment_tree,
-    cuda::std::span<Real const> const ray_origin_x,
-    cuda::std::span<Real const> const ray_origin_y,
-    cuda::std::span<Real const> const ray_origin_z,
-    cuda::std::span<Real const> const ray_dir_x,
-    cuda::std::span<Real const> const ray_dir_y,
-    cuda::std::span<Real const> const ray_dir_z,
-    cuda::std::span<Real> const output_t,
-    cuda::std::span<Real> const output_normal_x,
-    cuda::std::span<Real> const output_normal_y,
-    cuda::std::span<Real> const output_normal_z,
-    Real const target_winding = Real(0.5),
-    Real const epsilon = Real(1e-4),
-    int const max_iterations = 512,
-    Real const t_max = Real(1e6),
-    Real const accuracy_scale = Real(2),
-    cudaStream_t const stream = gwn_default_stream()
+    cuda::std::span<Real const> const ray_origin_x, cuda::std::span<Real const> const ray_origin_y,
+    cuda::std::span<Real const> const ray_origin_z, cuda::std::span<Real const> const ray_dir_x,
+    cuda::std::span<Real const> const ray_dir_y, cuda::std::span<Real const> const ray_dir_z,
+    cuda::std::span<Real> const output_t, cuda::std::span<Real> const output_normal_x,
+    cuda::std::span<Real> const output_normal_y, cuda::std::span<Real> const output_normal_z,
+    Real const target_winding = Real(0.5), Real const epsilon = Real(1e-4),
+    int const max_iterations = 512, Real const t_max = Real(1e6),
+    Real const accuracy_scale = Real(2), cudaStream_t const stream = gwn_default_stream()
 ) noexcept {
     static_assert(
         Order == 0 || Order == 1 || Order == 2,
@@ -383,10 +371,9 @@ gwn_status gwn_compute_harnack_trace_batch_bvh_taylor(
         return gwn_status::invalid_argument("BVH data tree is invalid for the given topology.");
 
     std::size_t const n = ray_origin_x.size();
-    if (ray_origin_y.size() != n || ray_origin_z.size() != n ||
-        ray_dir_x.size() != n || ray_dir_y.size() != n || ray_dir_z.size() != n ||
-        output_t.size() != n || output_normal_x.size() != n ||
-        output_normal_y.size() != n || output_normal_z.size() != n) {
+    if (ray_origin_y.size() != n || ray_origin_z.size() != n || ray_dir_x.size() != n ||
+        ray_dir_y.size() != n || ray_dir_z.size() != n || output_t.size() != n ||
+        output_normal_x.size() != n || output_normal_y.size() != n || output_normal_z.size() != n) {
         return gwn_status::invalid_argument("harnack trace: mismatched span sizes");
     }
     if (!gwn_span_has_storage(ray_origin_x) || !gwn_span_has_storage(ray_origin_y) ||
@@ -435,28 +422,18 @@ gwn_status gwn_compute_harnack_trace_batch_bvh_taylor(
     gwn_bvh4_topology_accessor<Real, Index> const &bvh,
     gwn_bvh4_aabb_accessor<Real, Index> const &aabb_tree,
     gwn_bvh4_moment_accessor<Order, Real, Index> const &moment_tree,
-    cuda::std::span<Real const> const ray_origin_x,
-    cuda::std::span<Real const> const ray_origin_y,
-    cuda::std::span<Real const> const ray_origin_z,
-    cuda::std::span<Real const> const ray_dir_x,
-    cuda::std::span<Real const> const ray_dir_y,
-    cuda::std::span<Real const> const ray_dir_z,
-    cuda::std::span<Real> const output_t,
-    cuda::std::span<Real> const output_normal_x,
-    cuda::std::span<Real> const output_normal_y,
-    cuda::std::span<Real> const output_normal_z,
-    Real const target_winding = Real(0.5),
-    Real const epsilon = Real(1e-4),
-    int const max_iterations = 512,
-    Real const t_max = Real(1e6),
-    Real const accuracy_scale = Real(2),
-    cudaStream_t const stream = gwn_default_stream()
+    cuda::std::span<Real const> const ray_origin_x, cuda::std::span<Real const> const ray_origin_y,
+    cuda::std::span<Real const> const ray_origin_z, cuda::std::span<Real const> const ray_dir_x,
+    cuda::std::span<Real const> const ray_dir_y, cuda::std::span<Real const> const ray_dir_z,
+    cuda::std::span<Real> const output_t, cuda::std::span<Real> const output_normal_x,
+    cuda::std::span<Real> const output_normal_y, cuda::std::span<Real> const output_normal_z,
+    Real const target_winding = Real(0.5), Real const epsilon = Real(1e-4),
+    int const max_iterations = 512, Real const t_max = Real(1e6),
+    Real const accuracy_scale = Real(2), cudaStream_t const stream = gwn_default_stream()
 ) noexcept {
     return gwn_compute_harnack_trace_batch_bvh_taylor<Order, 4, Real, Index, StackCapacity>(
-        geometry, bvh, aabb_tree, moment_tree,
-        ray_origin_x, ray_origin_y, ray_origin_z,
-        ray_dir_x, ray_dir_y, ray_dir_z,
-        output_t, output_normal_x, output_normal_y, output_normal_z,
+        geometry, bvh, aabb_tree, moment_tree, ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x,
+        ray_dir_y, ray_dir_z, output_t, output_normal_x, output_normal_y, output_normal_z,
         target_winding, epsilon, max_iterations, t_max, accuracy_scale, stream
     );
 }
@@ -470,18 +447,14 @@ __device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_angle_ray_bvh
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
     gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree,
-    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &moment_tree,
-    Real const ray_ox, Real const ray_oy, Real const ray_oz,
-    Real const ray_dx, Real const ray_dy, Real const ray_dz,
-    Real const target_winding = Real(0.5),
-    Real const epsilon = Real(1e-4),
-    int const max_iterations = 512,
-    Real const t_max = Real(1e6),
+    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &moment_tree, Real const ray_ox,
+    Real const ray_oy, Real const ray_oz, Real const ray_dx, Real const ray_dy, Real const ray_dz,
+    Real const target_winding = Real(0.5), Real const epsilon = Real(1e-4),
+    int const max_iterations = 512, Real const t_max = Real(1e6),
     Real const accuracy_scale = Real(2)
 ) noexcept {
     return gwn_harnack_trace_ray_bvh_taylor<Order, Width, Real, Index, StackCapacity>(
-        geometry, bvh, aabb_tree, moment_tree,
-        ray_ox, ray_oy, ray_oz, ray_dx, ray_dy, ray_dz,
+        geometry, bvh, aabb_tree, moment_tree, ray_ox, ray_oy, ray_oz, ray_dx, ray_dy, ray_dz,
         target_winding, epsilon, max_iterations, t_max, accuracy_scale
     );
 }
@@ -496,28 +469,18 @@ gwn_status gwn_compute_harnack_trace_angle_batch_bvh_taylor(
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
     gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree,
     gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &moment_tree,
-    cuda::std::span<Real const> const ray_origin_x,
-    cuda::std::span<Real const> const ray_origin_y,
-    cuda::std::span<Real const> const ray_origin_z,
-    cuda::std::span<Real const> const ray_dir_x,
-    cuda::std::span<Real const> const ray_dir_y,
-    cuda::std::span<Real const> const ray_dir_z,
-    cuda::std::span<Real> const output_t,
-    cuda::std::span<Real> const output_normal_x,
-    cuda::std::span<Real> const output_normal_y,
-    cuda::std::span<Real> const output_normal_z,
-    Real const target_winding = Real(0.5),
-    Real const epsilon = Real(1e-4),
-    int const max_iterations = 512,
-    Real const t_max = Real(1e6),
-    Real const accuracy_scale = Real(2),
-    cudaStream_t const stream = gwn_default_stream()
+    cuda::std::span<Real const> const ray_origin_x, cuda::std::span<Real const> const ray_origin_y,
+    cuda::std::span<Real const> const ray_origin_z, cuda::std::span<Real const> const ray_dir_x,
+    cuda::std::span<Real const> const ray_dir_y, cuda::std::span<Real const> const ray_dir_z,
+    cuda::std::span<Real> const output_t, cuda::std::span<Real> const output_normal_x,
+    cuda::std::span<Real> const output_normal_y, cuda::std::span<Real> const output_normal_z,
+    Real const target_winding = Real(0.5), Real const epsilon = Real(1e-4),
+    int const max_iterations = 512, Real const t_max = Real(1e6),
+    Real const accuracy_scale = Real(2), cudaStream_t const stream = gwn_default_stream()
 ) noexcept {
     return gwn_compute_harnack_trace_batch_bvh_taylor<Order, Width, Real, Index, StackCapacity>(
-        geometry, bvh, aabb_tree, moment_tree,
-        ray_origin_x, ray_origin_y, ray_origin_z,
-        ray_dir_x, ray_dir_y, ray_dir_z,
-        output_t, output_normal_x, output_normal_y, output_normal_z,
+        geometry, bvh, aabb_tree, moment_tree, ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x,
+        ray_dir_y, ray_dir_z, output_t, output_normal_x, output_normal_y, output_normal_z,
         target_winding, epsilon, max_iterations, t_max, accuracy_scale, stream
     );
 }
@@ -531,29 +494,18 @@ gwn_status gwn_compute_harnack_trace_angle_batch_bvh_taylor(
     gwn_bvh4_topology_accessor<Real, Index> const &bvh,
     gwn_bvh4_aabb_accessor<Real, Index> const &aabb_tree,
     gwn_bvh4_moment_accessor<Order, Real, Index> const &moment_tree,
-    cuda::std::span<Real const> const ray_origin_x,
-    cuda::std::span<Real const> const ray_origin_y,
-    cuda::std::span<Real const> const ray_origin_z,
-    cuda::std::span<Real const> const ray_dir_x,
-    cuda::std::span<Real const> const ray_dir_y,
-    cuda::std::span<Real const> const ray_dir_z,
-    cuda::std::span<Real> const output_t,
-    cuda::std::span<Real> const output_normal_x,
-    cuda::std::span<Real> const output_normal_y,
-    cuda::std::span<Real> const output_normal_z,
-    Real const target_winding = Real(0.5),
-    Real const epsilon = Real(1e-4),
-    int const max_iterations = 512,
-    Real const t_max = Real(1e6),
-    Real const accuracy_scale = Real(2),
-    cudaStream_t const stream = gwn_default_stream()
+    cuda::std::span<Real const> const ray_origin_x, cuda::std::span<Real const> const ray_origin_y,
+    cuda::std::span<Real const> const ray_origin_z, cuda::std::span<Real const> const ray_dir_x,
+    cuda::std::span<Real const> const ray_dir_y, cuda::std::span<Real const> const ray_dir_z,
+    cuda::std::span<Real> const output_t, cuda::std::span<Real> const output_normal_x,
+    cuda::std::span<Real> const output_normal_y, cuda::std::span<Real> const output_normal_z,
+    Real const target_winding = Real(0.5), Real const epsilon = Real(1e-4),
+    int const max_iterations = 512, Real const t_max = Real(1e6),
+    Real const accuracy_scale = Real(2), cudaStream_t const stream = gwn_default_stream()
 ) noexcept {
-    return gwn_compute_harnack_trace_angle_batch_bvh_taylor<
-        Order, 4, Real, Index, StackCapacity>(
-        geometry, bvh, aabb_tree, moment_tree,
-        ray_origin_x, ray_origin_y, ray_origin_z,
-        ray_dir_x, ray_dir_y, ray_dir_z,
-        output_t, output_normal_x, output_normal_y, output_normal_z,
+    return gwn_compute_harnack_trace_angle_batch_bvh_taylor<Order, 4, Real, Index, StackCapacity>(
+        geometry, bvh, aabb_tree, moment_tree, ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x,
+        ray_dir_y, ray_dir_z, output_t, output_normal_x, output_normal_y, output_normal_z,
         target_winding, epsilon, max_iterations, t_max, accuracy_scale, stream
     );
 }

@@ -50,8 +50,10 @@ __host__ __device__ inline Real gwn_point_segment_distance_squared_impl(
     if (!(ab_dot_ab > Real(0)))
         return gwn_query_squared_norm(ap); // degenerate segment
     Real t = gwn_query_dot(ap, ab) / ab_dot_ab;
-    if (t < Real(0)) t = Real(0);
-    if (t > Real(1)) t = Real(1);
+    if (t < Real(0))
+        t = Real(0);
+    if (t > Real(1))
+        t = Real(1);
     return gwn_query_squared_norm(p - (a + t * ab));
 }
 
@@ -65,8 +67,10 @@ __host__ __device__ inline Real gwn_point_triangle_edge_distance_squared_impl(
     Real d2_bc = gwn_point_segment_distance_squared_impl(p, b, c);
     Real d2_ca = gwn_point_segment_distance_squared_impl(p, c, a);
     Real result = d2_ab;
-    if (d2_bc < result) result = d2_bc;
-    if (d2_ca < result) result = d2_ca;
+    if (d2_bc < result)
+        result = d2_bc;
+    if (d2_ca < result)
+        result = d2_ca;
     return result;
 }
 

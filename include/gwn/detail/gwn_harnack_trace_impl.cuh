@@ -20,14 +20,13 @@ namespace detail {
 // Harnack trace result — returned per ray.
 // ---------------------------------------------------------------------------
 
-template <gwn_real_type Real>
-struct gwn_harnack_trace_result {
+template <gwn_real_type Real> struct gwn_harnack_trace_result {
     Real t{Real(-1)};       ///< Ray parameter at hit (negative ⟹ no hit).
     Real winding{Real(0)};  ///< Winding number at the hit point.
     Real normal_x{Real(0)}; ///< Surface normal x (unit gradient direction).
     Real normal_y{Real(0)};
     Real normal_z{Real(0)};
-    int iterations{0};      ///< Number of marching iterations.
+    int iterations{0}; ///< Number of marching iterations.
 
     __host__ __device__ constexpr bool hit() const noexcept { return t >= Real(0); }
 };
@@ -45,9 +44,8 @@ struct gwn_harnack_trace_result {
 // ---------------------------------------------------------------------------
 
 template <gwn_real_type Real>
-__host__ __device__ inline Real gwn_harnack_step_size(
-    Real const f_t, Real const f_star, Real const c, Real const R
-) noexcept {
+__host__ __device__ inline Real
+gwn_harnack_step_size(Real const f_t, Real const f_star, Real const c, Real const R) noexcept {
     if (R <= Real(0))
         return Real(0);
 
@@ -81,12 +79,8 @@ __host__ __device__ inline Real gwn_harnack_step_size(
 // 4) final clamp to [0, R]
 template <gwn_real_type Real>
 __host__ __device__ inline Real gwn_harnack_constrained_step(
-    Real const f_t,
-    Real const f_star,
-    Real const c,
-    Real const R,
-    Real const overstep_factor = Real(1),
-    Real const min_abs_step = Real(0),
+    Real const f_t, Real const f_star, Real const c, Real const R,
+    Real const overstep_factor = Real(1), Real const min_abs_step = Real(0),
     Real const min_relative_step = Real(0)
 ) noexcept {
     if (R <= Real(0))
@@ -121,13 +115,8 @@ __host__ __device__ inline Real gwn_glsl_mod(Real const x, Real const y) noexcep
 // same runtime guards used by the face-distance tracer.
 template <gwn_real_type Real>
 __host__ __device__ inline Real gwn_harnack_constrained_two_sided_step(
-    Real const f_t,
-    Real const lower_levelset,
-    Real const upper_levelset,
-    Real const c,
-    Real const R,
-    Real const overstep_factor = Real(1),
-    Real const min_abs_step = Real(0),
+    Real const f_t, Real const lower_levelset, Real const upper_levelset, Real const c,
+    Real const R, Real const overstep_factor = Real(1), Real const min_abs_step = Real(0),
     Real const min_relative_step = Real(0)
 ) noexcept {
     if (R <= Real(0))
@@ -159,14 +148,9 @@ __device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_angle_ray_imp
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
     gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree,
-    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &moment_tree,
-    Real ray_ox, Real ray_oy, Real ray_oz,
-    Real ray_dx, Real ray_dy, Real ray_dz,
-    Real const target_winding,
-    Real const epsilon,
-    int const max_iterations,
-    Real const t_max,
-    Real const accuracy_scale
+    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &moment_tree, Real ray_ox,
+    Real ray_oy, Real ray_oz, Real ray_dx, Real ray_dy, Real ray_dz, Real const target_winding,
+    Real const epsilon, int const max_iterations, Real const t_max, Real const accuracy_scale
 ) noexcept;
 
 // ---------------------------------------------------------------------------
@@ -181,22 +165,16 @@ __device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_ray_impl(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
     gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree,
-    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &moment_tree,
-    Real ray_ox, Real ray_oy, Real ray_oz,
-    Real ray_dx, Real ray_dy, Real ray_dz,
-    Real const target_winding,
-    Real const epsilon,
-    int const max_iterations,
-    Real const t_max,
-    Real const accuracy_scale
+    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &moment_tree, Real ray_ox,
+    Real ray_oy, Real ray_oz, Real ray_dx, Real ray_dy, Real ray_dz, Real const target_winding,
+    Real const epsilon, int const max_iterations, Real const t_max, Real const accuracy_scale
 ) noexcept {
     static_assert(
         Order == 0 || Order == 1 || Order == 2,
         "gwn_harnack_trace_ray currently supports Order 0, 1, and 2."
     );
     return gwn_harnack_trace_angle_ray_impl<Order, Width, Real, Index, StackCapacity>(
-        geometry, bvh, aabb_tree, moment_tree,
-        ray_ox, ray_oy, ray_oz, ray_dx, ray_dy, ray_dz,
+        geometry, bvh, aabb_tree, moment_tree, ray_ox, ray_oy, ray_oz, ray_dx, ray_dy, ray_dz,
         target_winding, epsilon, max_iterations, t_max, accuracy_scale
     );
 }
@@ -216,14 +194,9 @@ __device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_angle_ray_imp
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
     gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree,
-    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &moment_tree,
-    Real ray_ox, Real ray_oy, Real ray_oz,
-    Real ray_dx, Real ray_dy, Real ray_dz,
-    Real const target_winding,
-    Real const epsilon,
-    int const max_iterations,
-    Real const t_max,
-    Real const accuracy_scale
+    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &moment_tree, Real ray_ox,
+    Real ray_oy, Real ray_oz, Real ray_dx, Real ray_dy, Real ray_dz, Real const target_winding,
+    Real const epsilon, int const max_iterations, Real const t_max, Real const accuracy_scale
 ) noexcept {
     static_assert(
         Order == 0 || Order == 1 || Order == 2,
@@ -246,7 +219,8 @@ __device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_angle_ray_imp
     Real const target_omega = k_four_pi * target_winding;
 
     auto eval_w_and_grad = [&](Real const px, Real const py, Real const pz) {
-        return gwn_winding_and_gradient_point_bvh_taylor_impl<Order, Width, Real, Index, StackCapacity>(
+        return gwn_winding_and_gradient_point_bvh_taylor_impl<
+            Order, Width, Real, Index, StackCapacity>(
             geometry, bvh, moment_tree, px, py, pz, accuracy_scale
         );
     };
@@ -258,10 +232,10 @@ __device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_angle_ray_imp
 
     auto eval_closest_triangle_normal = [&](Real const px, Real const py,
                                             Real const pz) -> gwn_query_vec3<Real> {
-        auto const r = gwn_closest_triangle_normal_point_bvh_impl<
-            Width, Real, Index, StackCapacity>(
-            geometry, bvh, aabb_tree, px, py, pz,
-            std::numeric_limits<Real>::infinity());
+        auto const r =
+            gwn_closest_triangle_normal_point_bvh_impl<Width, Real, Index, StackCapacity>(
+                geometry, bvh, aabb_tree, px, py, pz, std::numeric_limits<Real>::infinity()
+            );
         return gwn_query_vec3<Real>(r.normal_x, r.normal_y, r.normal_z);
     };
 
@@ -321,8 +295,7 @@ __device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_angle_ray_imp
         // R(x) = distance to the nearest triangle (face + edges + vertices).
         // This subsumes singular-edge distance because every singular edge is
         // geometrically a subset of at least one triangle.
-        Real const R = gwn_unsigned_distance_point_bvh_impl<
-            Width, Real, Index, StackCapacity>(
+        Real const R = gwn_unsigned_distance_point_bvh_impl<Width, Real, Index, StackCapacity>(
             geometry, bvh, aabb_tree, px, py, pz, R_prev
         );
         if (!(R >= Real(0)))
@@ -330,9 +303,8 @@ __device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_angle_ray_imp
         R_prev = R;
 
         Real const c = -k_four_pi;
-        Real rho = gwn_harnack_constrained_two_sided_step(
-            val, lower_levelset, upper_levelset, c, R
-        );
+        Real rho =
+            gwn_harnack_constrained_two_sided_step(val, lower_levelset, upper_levelset, c, R);
         rho /= dir_len;
         if (!(rho >= Real(0)))
             break;
@@ -355,6 +327,7 @@ __device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_angle_ray_imp
         } else {
             // Overstep was too aggressive; retry from committed t without overstep.
             t_overstep = Real(0);
+            R_prev = std::numeric_limits<Real>::infinity();
         }
         ++iter;
     }
@@ -392,13 +365,11 @@ struct gwn_harnack_trace_batch_functor {
     Real accuracy_scale{};
 
     __device__ void operator()(std::size_t const ray_id) const {
-        auto const res =
-            gwn_harnack_trace_ray_impl<Order, Width, Real, Index, StackCapacity>(
-                geometry, bvh, aabb_tree, moment_tree,
-                ray_origin_x[ray_id], ray_origin_y[ray_id], ray_origin_z[ray_id],
-                ray_dir_x[ray_id], ray_dir_y[ray_id], ray_dir_z[ray_id],
-                target_winding, epsilon, max_iterations, t_max, accuracy_scale
-            );
+        auto const res = gwn_harnack_trace_ray_impl<Order, Width, Real, Index, StackCapacity>(
+            geometry, bvh, aabb_tree, moment_tree, ray_origin_x[ray_id], ray_origin_y[ray_id],
+            ray_origin_z[ray_id], ray_dir_x[ray_id], ray_dir_y[ray_id], ray_dir_z[ray_id],
+            target_winding, epsilon, max_iterations, t_max, accuracy_scale
+        );
         output_t[ray_id] = res.t;
         output_normal_x[ray_id] = res.normal_x;
         output_normal_y[ray_id] = res.normal_y;

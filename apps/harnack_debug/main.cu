@@ -7,9 +7,9 @@
 #include <exception>
 #include <iostream>
 #include <limits>
+#include <stdexcept>
 #include <string>
 #include <string_view>
-#include <stdexcept>
 #include <vector>
 
 #include <gwn/gwn.cuh>
@@ -67,9 +67,7 @@ struct Options {
 }
 
 [[nodiscard]] Vec3 cross(Vec3 const &a, Vec3 const &b) noexcept {
-    return Vec3{
-        a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x
-    };
+    return Vec3{a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
 }
 
 [[nodiscard]] Vec3 normalize(Vec3 const &v) noexcept {
@@ -110,9 +108,7 @@ struct Options {
             return false;
         v = parsed;
         return true;
-    } catch (...) {
-        return false;
-    }
+    } catch (...) { return false; }
 }
 
 [[nodiscard]] bool parse_real(std::string const &s, Real &v) {
@@ -123,26 +119,23 @@ struct Options {
             return false;
         v = parsed;
         return true;
-    } catch (...) {
-        return false;
-    }
+    } catch (...) { return false; }
 }
 
 void print_help(char const *argv0) {
-    std::cout
-        << "Usage: " << argv0 << " [options]\n"
-        << "Options:\n"
-        << "  --width <int>         Image width (default: 640)\n"
-        << "  --height <int>        Image height (default: 480)\n"
-        << "  --fov <float>         Vertical FOV in degrees (default: 40)\n"
-        << "  --mesh <octa|half>    Built-in mesh (default: half)\n"
-        << "  --normal-out <path>   Normal PNG output path (default: normal.png)\n"
-        << "  --depth-out <path>    Depth PNG output path (default: depth.png)\n"
-        << "  --epsilon <float>     Harnack epsilon (default: 1e-3)\n"
-        << "  --max-iters <int>     Max iterations (default: 2048)\n"
-        << "  --tmax <float>        Ray t_max (default: 100)\n"
-        << "  --accuracy <float>    Taylor accuracy scale (default: 2)\n"
-        << "  --help                Show this message\n";
+    std::cout << "Usage: " << argv0 << " [options]\n"
+              << "Options:\n"
+              << "  --width <int>         Image width (default: 640)\n"
+              << "  --height <int>        Image height (default: 480)\n"
+              << "  --fov <float>         Vertical FOV in degrees (default: 40)\n"
+              << "  --mesh <octa|half>    Built-in mesh (default: half)\n"
+              << "  --normal-out <path>   Normal PNG output path (default: normal.png)\n"
+              << "  --depth-out <path>    Depth PNG output path (default: depth.png)\n"
+              << "  --epsilon <float>     Harnack epsilon (default: 1e-3)\n"
+              << "  --max-iters <int>     Max iterations (default: 2048)\n"
+              << "  --tmax <float>        Ray t_max (default: 100)\n"
+              << "  --accuracy <float>    Taylor accuracy scale (default: 2)\n"
+              << "  --help                Show this message\n";
 }
 
 [[nodiscard]] bool parse_options(int argc, char **argv, Options &opt) {
@@ -226,9 +219,7 @@ void print_help(char const *argv0) {
 void throw_if_error(gwn::gwn_status const &status, std::string_view const context) {
     if (status.is_ok())
         return;
-    throw std::runtime_error(
-        std::string(context) + ": " + status.message()
-    );
+    throw std::runtime_error(std::string(context) + ": " + status.message());
 }
 
 [[nodiscard]] bool write_png_rgb(
@@ -268,7 +259,8 @@ int main(int argc, char **argv) {
             return 2;
         }
 
-        MeshData const mesh = (opt.mesh == "half") ? make_half_octahedron_mesh() : make_octahedron_mesh();
+        MeshData const mesh =
+            (opt.mesh == "half") ? make_half_octahedron_mesh() : make_octahedron_mesh();
 
         gwn::gwn_geometry_object<Real, Index> geometry;
         throw_if_error(
@@ -323,12 +315,12 @@ int main(int argc, char **argv) {
             for (int px = 0; px < opt.width; ++px) {
                 std::size_t const idx = static_cast<std::size_t>(py) * opt.width + px;
 
-                Real const sx = ((static_cast<Real>(px) + Real(0.5)) / static_cast<Real>(opt.width)) *
-                                    Real(2) -
-                                Real(1);
-                Real const sy = Real(1) -
-                                ((static_cast<Real>(py) + Real(0.5)) / static_cast<Real>(opt.height)) *
-                                    Real(2);
+                Real const sx =
+                    ((static_cast<Real>(px) + Real(0.5)) / static_cast<Real>(opt.width)) * Real(2) -
+                    Real(1);
+                Real const sy =
+                    Real(1) -
+                    ((static_cast<Real>(py) + Real(0.5)) / static_cast<Real>(opt.height)) * Real(2);
                 Vec3 const rd = normalize(
                     forward + right * (sx * aspect * tan_half_fov) + up * (sy * tan_half_fov)
                 );
@@ -345,12 +337,24 @@ int main(int argc, char **argv) {
         gwn::gwn_device_array<Real> d_ox, d_oy, d_oz, d_dx, d_dy, d_dz;
         gwn::gwn_device_array<Real> d_t, d_nx, d_ny, d_nz;
 
-        throw_if_error(d_ox.copy_from_host(cuda::std::span<Real const>(ox.data(), ox.size())), "copy d_ox");
-        throw_if_error(d_oy.copy_from_host(cuda::std::span<Real const>(oy.data(), oy.size())), "copy d_oy");
-        throw_if_error(d_oz.copy_from_host(cuda::std::span<Real const>(oz.data(), oz.size())), "copy d_oz");
-        throw_if_error(d_dx.copy_from_host(cuda::std::span<Real const>(dx.data(), dx.size())), "copy d_dx");
-        throw_if_error(d_dy.copy_from_host(cuda::std::span<Real const>(dy.data(), dy.size())), "copy d_dy");
-        throw_if_error(d_dz.copy_from_host(cuda::std::span<Real const>(dz.data(), dz.size())), "copy d_dz");
+        throw_if_error(
+            d_ox.copy_from_host(cuda::std::span<Real const>(ox.data(), ox.size())), "copy d_ox"
+        );
+        throw_if_error(
+            d_oy.copy_from_host(cuda::std::span<Real const>(oy.data(), oy.size())), "copy d_oy"
+        );
+        throw_if_error(
+            d_oz.copy_from_host(cuda::std::span<Real const>(oz.data(), oz.size())), "copy d_oz"
+        );
+        throw_if_error(
+            d_dx.copy_from_host(cuda::std::span<Real const>(dx.data(), dx.size())), "copy d_dx"
+        );
+        throw_if_error(
+            d_dy.copy_from_host(cuda::std::span<Real const>(dy.data(), dy.size())), "copy d_dy"
+        );
+        throw_if_error(
+            d_dz.copy_from_host(cuda::std::span<Real const>(dz.data(), dz.size())), "copy d_dz"
+        );
         throw_if_error(d_t.resize(pixel_count), "resize d_t");
         throw_if_error(d_nx.resize(pixel_count), "resize d_nx");
         throw_if_error(d_ny.resize(pixel_count), "resize d_ny");
@@ -359,21 +363,29 @@ int main(int argc, char **argv) {
         throw_if_error(
             gwn::gwn_compute_harnack_trace_batch_bvh_taylor<1, Real, Index>(
                 geometry.accessor(), bvh.accessor(), aabb.accessor(), moments.accessor(),
-                d_ox.span(), d_oy.span(), d_oz.span(),
-                d_dx.span(), d_dy.span(), d_dz.span(),
-                d_t.span(), d_nx.span(), d_ny.span(), d_nz.span(),
-                Real(0.5), opt.epsilon, opt.max_iterations, opt.t_max, opt.accuracy_scale
+                d_ox.span(), d_oy.span(), d_oz.span(), d_dx.span(), d_dy.span(), d_dz.span(),
+                d_t.span(), d_nx.span(), d_ny.span(), d_nz.span(), Real(0.5), opt.epsilon,
+                opt.max_iterations, opt.t_max, opt.accuracy_scale
             ),
             "gwn_compute_harnack_trace_batch_bvh_taylor"
         );
 
         throw_if_error(gwn::gwn_cuda_to_status(cudaDeviceSynchronize()), "cudaDeviceSynchronize");
 
-        std::vector<Real> host_t(pixel_count), host_nx(pixel_count), host_ny(pixel_count), host_nz(pixel_count);
-        throw_if_error(d_t.copy_to_host(cuda::std::span<Real>(host_t.data(), host_t.size())), "copy host_t");
-        throw_if_error(d_nx.copy_to_host(cuda::std::span<Real>(host_nx.data(), host_nx.size())), "copy host_nx");
-        throw_if_error(d_ny.copy_to_host(cuda::std::span<Real>(host_ny.data(), host_ny.size())), "copy host_ny");
-        throw_if_error(d_nz.copy_to_host(cuda::std::span<Real>(host_nz.data(), host_nz.size())), "copy host_nz");
+        std::vector<Real> host_t(pixel_count), host_nx(pixel_count), host_ny(pixel_count),
+            host_nz(pixel_count);
+        throw_if_error(
+            d_t.copy_to_host(cuda::std::span<Real>(host_t.data(), host_t.size())), "copy host_t"
+        );
+        throw_if_error(
+            d_nx.copy_to_host(cuda::std::span<Real>(host_nx.data(), host_nx.size())), "copy host_nx"
+        );
+        throw_if_error(
+            d_ny.copy_to_host(cuda::std::span<Real>(host_ny.data(), host_ny.size())), "copy host_ny"
+        );
+        throw_if_error(
+            d_nz.copy_to_host(cuda::std::span<Real>(host_nz.data(), host_nz.size())), "copy host_nz"
+        );
         throw_if_error(gwn::gwn_cuda_to_status(cudaDeviceSynchronize()), "cudaDeviceSynchronize");
 
         std::size_t hit_count = 0;
@@ -386,14 +398,12 @@ int main(int argc, char **argv) {
                 t_max = std::max(t_max, t);
             }
         }
-        if (hit_count == 0) {
+        if (hit_count == 0)
             std::cerr << "No hits found. Try changing camera or mesh.\n";
-        }
         Real const hit_ratio = static_cast<Real>(hit_count) / static_cast<Real>(pixel_count);
         if (hit_ratio < Real(0.02)) {
-            std::cerr
-                << "warning: low hit ratio (" << hit_ratio
-                << "). For debugging this tracer, prefer --mesh half.\n";
+            std::cerr << "warning: low hit ratio (" << hit_ratio
+                      << "). For debugging this tracer, prefer --mesh half.\n";
         }
 
         std::vector<std::uint8_t> normal_rgb(pixel_count * 3, std::uint8_t(0));
@@ -416,15 +426,13 @@ int main(int argc, char **argv) {
             depth_rgb[o + 2] = d;
         }
 
-        if (!write_png_rgb(opt.normal_out, opt.width, opt.height, normal_rgb)) {
+        if (!write_png_rgb(opt.normal_out, opt.width, opt.height, normal_rgb))
             throw std::runtime_error("failed to write normal PNG");
-        }
-        if (!write_png_rgb(opt.depth_out, opt.width, opt.height, depth_rgb)) {
+        if (!write_png_rgb(opt.depth_out, opt.width, opt.height, depth_rgb))
             throw std::runtime_error("failed to write depth PNG");
-        }
 
-        std::cout << "Rendered " << opt.width << "x" << opt.height << " pixels. hits=" << hit_count << "/"
-                  << pixel_count << "\n";
+        std::cout << "Rendered " << opt.width << "x" << opt.height << " pixels. hits=" << hit_count
+                  << "/" << pixel_count << "\n";
         std::cout << "Wrote normal: " << opt.normal_out << "\n";
         std::cout << "Wrote depth : " << opt.depth_out << "\n";
         return 0;

@@ -224,8 +224,7 @@ __device__ inline Real gwn_unsigned_distance_point_bvh_impl(
 }
 
 /// \brief Result of a closest-triangle-normal query.
-template <gwn_real_type Real>
-struct gwn_closest_triangle_normal_result {
+template <gwn_real_type Real> struct gwn_closest_triangle_normal_result {
     Real normal_x{Real(0)};
     Real normal_y{Real(0)};
     Real normal_z{Real(0)};
@@ -293,8 +292,7 @@ gwn_closest_triangle_normal_point_bvh_impl(
             int child_slot_order[Width];
             Real child_box_dist2[Width];
             std::uint8_t child_kind[Width];
-            std::uint8_t constexpr k_inv =
-                static_cast<std::uint8_t>(gwn_bvh_child_kind::k_invalid);
+            std::uint8_t constexpr k_inv = static_cast<std::uint8_t>(gwn_bvh_child_kind::k_invalid);
             Real constexpr k_inf = std::numeric_limits<Real>::infinity();
             GWN_PRAGMA_UNROLL
             for (int i = 0; i < Width; ++i) {
@@ -327,7 +325,9 @@ gwn_closest_triangle_normal_point_bvh_impl(
             }
 
             if (child_count > 1)
-                gwn_sort_children_by_dist2_impl<Width>(child_box_dist2, child_slot_order, child_kind);
+                gwn_sort_children_by_dist2_impl<Width>(
+                    child_box_dist2, child_slot_order, child_kind
+                );
 
             GWN_PRAGMA_UNROLL
             for (int i = 0; i < Width; ++i) {
@@ -348,7 +348,8 @@ gwn_closest_triangle_normal_point_bvh_impl(
 
             GWN_PRAGMA_UNROLL
             for (int i = Width - 1; i >= 0; --i) {
-                if (static_cast<gwn_bvh_child_kind>(child_kind[i]) != gwn_bvh_child_kind::k_internal)
+                if (static_cast<gwn_bvh_child_kind>(child_kind[i]) !=
+                    gwn_bvh_child_kind::k_internal)
                     continue;
                 if (child_box_dist2[i] >= best_dist2)
                     continue;
@@ -375,9 +376,15 @@ gwn_closest_triangle_normal_point_bvh_impl(
         return result;
 
     auto idx = [](Index const v) { return static_cast<std::size_t>(v); };
-    gwn_query_vec3<Real> const a(geometry.vertex_x[idx(ia)], geometry.vertex_y[idx(ia)], geometry.vertex_z[idx(ia)]);
-    gwn_query_vec3<Real> const b(geometry.vertex_x[idx(ib)], geometry.vertex_y[idx(ib)], geometry.vertex_z[idx(ib)]);
-    gwn_query_vec3<Real> const c(geometry.vertex_x[idx(ic)], geometry.vertex_y[idx(ic)], geometry.vertex_z[idx(ic)]);
+    gwn_query_vec3<Real> const a(
+        geometry.vertex_x[idx(ia)], geometry.vertex_y[idx(ia)], geometry.vertex_z[idx(ia)]
+    );
+    gwn_query_vec3<Real> const b(
+        geometry.vertex_x[idx(ib)], geometry.vertex_y[idx(ib)], geometry.vertex_z[idx(ib)]
+    );
+    gwn_query_vec3<Real> const c(
+        geometry.vertex_x[idx(ic)], geometry.vertex_y[idx(ic)], geometry.vertex_z[idx(ic)]
+    );
     gwn_query_vec3<Real> const n = gwn_query_cross(b - a, c - a);
     Real const n2 = gwn_query_squared_norm(n);
     if (!(n2 > Real(0)) || !isfinite(n2))
@@ -424,8 +431,9 @@ __device__ inline Real gwn_unsigned_edge_distance_point_bvh_impl(
             if (!gwn_index_in_bounds(si, bvh.primitive_indices.size()))
                 continue;
             Index const pi = bvh.primitive_indices[static_cast<std::size_t>(si)];
-            Real const d2 =
-                gwn_triangle_edge_distance_squared_from_primitive_impl<Real, Index>(geometry, pi, query);
+            Real const d2 = gwn_triangle_edge_distance_squared_from_primitive_impl<Real, Index>(
+                geometry, pi, query
+            );
             if (d2 < best_dist2)
                 best_dist2 = d2;
         }
@@ -555,8 +563,7 @@ struct gwn_unsigned_edge_distance_batch_bvh_functor {
 };
 
 template <int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity>
-[[nodiscard]] inline gwn_unsigned_edge_distance_batch_bvh_functor<
-    Width, Real, Index, StackCapacity>
+[[nodiscard]] inline gwn_unsigned_edge_distance_batch_bvh_functor<Width, Real, Index, StackCapacity>
 gwn_make_unsigned_edge_distance_batch_bvh_functor(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,

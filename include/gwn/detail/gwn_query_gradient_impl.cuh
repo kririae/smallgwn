@@ -15,8 +15,7 @@ namespace detail {
 
 template <gwn_real_type Real, gwn_index_type Index>
 __device__ inline gwn_query_vec3<Real> gwn_winding_gradient_point_exact_impl(
-    gwn_geometry_accessor<Real, Index> const &geometry, Real const qx, Real const qy,
-    Real const qz
+    gwn_geometry_accessor<Real, Index> const &geometry, Real const qx, Real const qy, Real const qz
 ) noexcept {
     gwn_query_vec3<Real> const zero(Real(0), Real(0), Real(0));
     if (!geometry.is_valid())
@@ -53,10 +52,10 @@ __device__ inline gwn_query_vec3<Real> gwn_winding_gradient_point_bvh_taylor_imp
     gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &data_tree, Real const qx,
     Real const qy, Real const qz, Real const accuracy_scale
 ) noexcept {
-    return gwn_winding_and_gradient_point_bvh_taylor_impl<
-        Order, Width, Real, Index, StackCapacity>(
-        geometry, bvh, data_tree, qx, qy, qz, accuracy_scale
-    ).gradient;
+    return gwn_winding_and_gradient_point_bvh_taylor_impl<Order, Width, Real, Index, StackCapacity>(
+               geometry, bvh, data_tree, qx, qy, qz, accuracy_scale
+    )
+        .gradient;
 }
 
 // ---------------------------------------------------------------------------
@@ -101,8 +100,8 @@ gwn_make_winding_gradient_batch_bvh_taylor_functor(
     Real const accuracy_scale
 ) {
     return gwn_winding_gradient_batch_bvh_taylor_functor<Order, Width, Real, Index, StackCapacity>{
-        geometry, bvh, data_tree, query_x, query_y, query_z, output_x, output_y, output_z,
-        accuracy_scale
+        geometry, bvh,      data_tree, query_x,  query_y,
+        query_z,  output_x, output_y,  output_z, accuracy_scale
     };
 }
 

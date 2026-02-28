@@ -97,10 +97,10 @@ __device__ inline Real gwn_winding_number_point_bvh_taylor_impl(
     gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &data_tree, Real const qx,
     Real const qy, Real const qz, Real const accuracy_scale
 ) noexcept {
-    return gwn_winding_and_gradient_point_bvh_taylor_impl<
-        Order, Width, Real, Index, StackCapacity>(
-        geometry, bvh, data_tree, qx, qy, qz, accuracy_scale
-    ).winding;
+    return gwn_winding_and_gradient_point_bvh_taylor_impl<Order, Width, Real, Index, StackCapacity>(
+               geometry, bvh, data_tree, qx, qy, qz, accuracy_scale
+    )
+        .winding;
 }
 
 template <int Order, int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity>

@@ -41,7 +41,8 @@ enum class topology_builder {
 template <int Order>
 gwn::gwn_status build_facade_for_builder(
     topology_builder const builder, gwn::gwn_geometry_object<Real, Index> const &geometry,
-    gwn::gwn_bvh4_topology_object<Real, Index> &topology, gwn::gwn_bvh4_aabb_object<Real, Index> &aabb,
+    gwn::gwn_bvh4_topology_object<Real, Index> &topology,
+    gwn::gwn_bvh4_aabb_object<Real, Index> &aabb,
     gwn::gwn_bvh4_moment_object<Order, Real, Index> &moment
 ) {
     if (builder == topology_builder::k_hploc) {
@@ -658,9 +659,8 @@ template <int Order> void run_voxel_hploc_vs_lbvh_consistency_test() {
         ++tested_model_count;
         std::cout << "[gwn-correctness] builders=(" << to_builder_name(topology_builder::k_lbvh)
                   << "," << to_builder_name(topology_builder::k_hploc)
-                  << ") model=" << model_path.filename().string()
-                  << " order=" << Order << " triangles=" << mesh.tri_i0.size()
-                  << " samples=" << sample_count
+                  << ") model=" << model_path.filename().string() << " order=" << Order
+                  << " triangles=" << mesh.tri_i0.size() << " samples=" << sample_count
                   << " diff(max/p99/p95/mean)=" << builder_diff.max_abs << "/"
                   << builder_diff.p99_abs << "/" << builder_diff.p95_abs << "/"
                   << builder_diff.mean_abs << std::endl;

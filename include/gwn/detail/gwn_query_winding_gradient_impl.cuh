@@ -93,8 +93,7 @@ __device__ inline gwn_query_vec3<Real> gwn_triangle_gradient_from_primitive_impl
     return gwn_gradient_solid_angle_triangle_impl(a, b, c, query);
 }
 
-template <gwn_real_type Real>
-struct gwn_winding_and_gradient_result {
+template <gwn_real_type Real> struct gwn_winding_and_gradient_result {
     Real winding{};
     gwn_query_vec3<Real> gradient{};
 };
@@ -104,9 +103,8 @@ __device__ inline gwn_winding_and_gradient_result<Real>
 gwn_winding_and_gradient_point_bvh_taylor_impl(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
-    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &data_tree,
-    Real const qx, Real const qy, Real const qz,
-    Real const accuracy_scale
+    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &data_tree, Real const qx,
+    Real const qy, Real const qz, Real const accuracy_scale
 ) noexcept {
     static_assert(
         Order == 0 || Order == 1 || Order == 2,
@@ -231,19 +229,15 @@ gwn_winding_and_gradient_point_bvh_taylor_impl(
 
                     Real const T = Nij_xx + Nij_yy + Nij_zz;
                     Real const S = qxx * Nij_xx + qyy * Nij_yy + qzz * Nij_zz +
-                                   qnx * qny * Nxy_Nyx + qnx * qnz * Nzx_Nxz +
-                                   qny * qnz * Nyz_Nzy;
+                                   qnx * qny * Nxy_Nyx + qnx * qnz * Nzx_Nxz + qny * qnz * Nyz_Nzy;
 
                     // Winding order-1
                     omega_approx += qlength_m3 * (T - Real(3) * S);
 
                     // Gradient order-1
-                    Real const vu_x =
-                        Real(2) * Nij_xx * qnx + Nxy_Nyx * qny + Nzx_Nxz * qnz;
-                    Real const vu_y =
-                        Nxy_Nyx * qnx + Real(2) * Nij_yy * qny + Nyz_Nzy * qnz;
-                    Real const vu_z =
-                        Nzx_Nxz * qnx + Nyz_Nzy * qny + Real(2) * Nij_zz * qnz;
+                    Real const vu_x = Real(2) * Nij_xx * qnx + Nxy_Nyx * qny + Nzx_Nxz * qnz;
+                    Real const vu_y = Nxy_Nyx * qnx + Real(2) * Nij_yy * qny + Nyz_Nzy * qnz;
+                    Real const vu_z = Nzx_Nxz * qnx + Nyz_Nzy * qny + Real(2) * Nij_zz * qnz;
                     Real const coeff = Real(15) * S - Real(3) * T;
 
                     grad_approx_x += qlength_m4 * (coeff * qnx - Real(3) * vu_x);
@@ -279,12 +273,9 @@ gwn_winding_and_gradient_point_bvh_taylor_impl(
 
                     Real const L2 = qnx * Px + qny * Py + qnz * Pz;
 
-                    Real const C2 =
-                        qnx3 * nijk_xxx + qny3 * nijk_yyy + qnz3 * nijk_zzz +
-                        qnx * qny * qnz * spn +
-                        qnx2 * (qny * Axy + qnz * Axz) +
-                        qny2 * (qnz * Ayz + qnx * Ayx) +
-                        qnz2 * (qnx * Azx + qny * Azy);
+                    Real const C2 = qnx3 * nijk_xxx + qny3 * nijk_yyy + qnz3 * nijk_zzz +
+                                    qnx * qny * qnz * spn + qnx2 * (qny * Axy + qnz * Axz) +
+                                    qny2 * (qnz * Ayz + qnx * Ayx) + qnz2 * (qnx * Azx + qny * Azy);
 
                     // Winding order-2 (uses temp variables matching original)
                     Real const temp0_x = Ayx + Azx;
@@ -294,40 +285,38 @@ gwn_winding_and_gradient_point_bvh_taylor_impl(
                     Real const temp1_y = qnz * Ayz + qnx * Ayx;
                     Real const temp1_z = qnx * Azx + qny * Azy;
 
-                    omega_approx += qlength_m4 *
+                    omega_approx +=
+                        qlength_m4 *
                         (Real(1.5) * (qnx * (Real(3) * nijk_xxx + temp0_x) +
                                       qny * (Real(3) * nijk_yyy + temp0_y) +
                                       qnz * (Real(3) * nijk_zzz + temp0_z)) -
                          Real(7.5) * (qnx3 * nijk_xxx + qny3 * nijk_yyy + qnz3 * nijk_zzz +
-                                      qnx * qny * qnz * spn +
-                                      qnx2 * temp1_x + qny2 * temp1_y + qnz2 * temp1_z));
+                                      qnx * qny * qnz * spn + qnx2 * temp1_x + qny2 * temp1_y +
+                                      qnz2 * temp1_z));
 
                     // Gradient order-2
-                    Real const Rx =
-                        Real(3) * nijk_xxx * qnx2 + Real(2) * Axy * qnx * qny +
-                        Real(2) * Axz * qnx * qnz + Ayx * qny2 + Azx * qnz2 +
-                        spn * qny * qnz;
-                    Real const Ry =
-                        Real(3) * nijk_yyy * qny2 + Real(2) * Ayx * qnx * qny +
-                        Real(2) * Ayz * qny * qnz + Axy * qnx2 + Azy * qnz2 +
-                        spn * qnx * qnz;
-                    Real const Rz =
-                        Real(3) * nijk_zzz * qnz2 + Real(2) * Azx * qnx * qnz +
-                        Real(2) * Azy * qny * qnz + Axz * qnx2 + Ayz * qny2 +
-                        spn * qnx * qny;
+                    Real const Rx = Real(3) * nijk_xxx * qnx2 + Real(2) * Axy * qnx * qny +
+                                    Real(2) * Axz * qnx * qnz + Ayx * qny2 + Azx * qnz2 +
+                                    spn * qny * qnz;
+                    Real const Ry = Real(3) * nijk_yyy * qny2 + Real(2) * Ayx * qnx * qny +
+                                    Real(2) * Ayz * qny * qnz + Axy * qnx2 + Azy * qnz2 +
+                                    spn * qnx * qnz;
+                    Real const Rz = Real(3) * nijk_zzz * qnz2 + Real(2) * Azx * qnx * qnz +
+                                    Real(2) * Azy * qny * qnz + Axz * qnx2 + Ayz * qny2 +
+                                    spn * qnx * qny;
 
                     Real const half_105_C = Real(52.5) * C2;
 
-                    grad_approx_x += qlength_m5 * (Real(1.5) * Px -
-                        Real(7.5) * (qnx * L2 + Rx) + qnx * half_105_C);
-                    grad_approx_y += qlength_m5 * (Real(1.5) * Py -
-                        Real(7.5) * (qny * L2 + Ry) + qny * half_105_C);
-                    grad_approx_z += qlength_m5 * (Real(1.5) * Pz -
-                        Real(7.5) * (qnz * L2 + Rz) + qnz * half_105_C);
+                    grad_approx_x += qlength_m5 * (Real(1.5) * Px - Real(7.5) * (qnx * L2 + Rx) +
+                                                   qnx * half_105_C);
+                    grad_approx_y += qlength_m5 * (Real(1.5) * Py - Real(7.5) * (qny * L2 + Ry) +
+                                                   qny * half_105_C);
+                    grad_approx_z += qlength_m5 * (Real(1.5) * Pz - Real(7.5) * (qnz * L2 + Rz) +
+                                                   qnz * half_105_C);
                 }
 
-                if (isfinite(omega_approx) && isfinite(grad_approx_x) &&
-                    isfinite(grad_approx_y) && isfinite(grad_approx_z)) {
+                if (isfinite(omega_approx) && isfinite(grad_approx_x) && isfinite(grad_approx_y) &&
+                    isfinite(grad_approx_z)) {
                     omega_sum += omega_approx;
                     grad_sum.x += grad_approx_x;
                     grad_sum.y += grad_approx_y;

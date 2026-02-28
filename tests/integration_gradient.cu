@@ -56,8 +56,8 @@ struct HalfOctaMesh {
 // ---------------------------------------------------------------------------
 void fd_gradient(
     std::span<Real const> vx, std::span<Real const> vy, std::span<Real const> vz,
-    std::span<Index const> i0, std::span<Index const> i1, std::span<Index const> i2,
-    Real const qx, Real const qy, Real const qz, Real const h, Real &gx, Real &gy, Real &gz
+    std::span<Index const> i0, std::span<Index const> i1, std::span<Index const> i2, Real const qx,
+    Real const qy, Real const qz, Real const h, Real &gx, Real &gy, Real &gz
 ) {
     auto w = [&](Real x, Real y, Real z) {
         return gwn::tests::reference_winding_number_point<Real, Index>(
@@ -110,8 +110,7 @@ bool run_gpu_gradient(
     gwn::gwn_device_array<Real> d_qx, d_qy, d_qz, d_gx, d_gy, d_gz;
     bool ok = d_qx.resize(n).is_ok() && d_qy.resize(n).is_ok() && d_qz.resize(n).is_ok() &&
               d_gx.resize(n).is_ok() && d_gy.resize(n).is_ok() && d_gz.resize(n).is_ok();
-    ok = ok &&
-         d_qx.copy_from_host(cuda::std::span<Real const>(qx.data(), n)).is_ok() &&
+    ok = ok && d_qx.copy_from_host(cuda::std::span<Real const>(qx.data(), n)).is_ok() &&
          d_qy.copy_from_host(cuda::std::span<Real const>(qy.data(), n)).is_ok() &&
          d_qz.copy_from_host(cuda::std::span<Real const>(qz.data(), n)).is_ok();
     if (!ok) {
@@ -120,8 +119,8 @@ bool run_gpu_gradient(
     }
 
     s = gwn::gwn_compute_winding_gradient_batch_bvh_taylor<Order, Real, Index>(
-        geometry.accessor(), bvh.accessor(), data.accessor(), d_qx.span(), d_qy.span(),
-        d_qz.span(), d_gx.span(), d_gy.span(), d_gz.span(), accuracy_scale
+        geometry.accessor(), bvh.accessor(), data.accessor(), d_qx.span(), d_qy.span(), d_qz.span(),
+        d_gx.span(), d_gy.span(), d_gz.span(), accuracy_scale
     );
     if (!s.is_ok()) {
         ADD_FAILURE() << "gradient query: " << gwn::tests::status_to_debug_string(s);
@@ -165,7 +164,7 @@ Real max_error_3d(
 // Main integration test: 5×5×5 lattice grid around the half-octahedron.
 // ---------------------------------------------------------------------------
 TEST_F(CudaFixture, integration_gradient_half_octahedron_order0_and_order1) {
-    constexpr Real k_fd_h = 1e-3f;           // FD step (float: avoid cancellation)
+    constexpr Real k_fd_h = 1e-3f; // FD step (float: avoid cancellation)
     constexpr Real k_accuracy_scale = Real(2);
     constexpr Real k_order0_max_err = 5e-2f;
     constexpr Real k_order1_max_err = 1e-2f;
@@ -208,11 +207,12 @@ TEST_F(CudaFixture, integration_gradient_half_octahedron_order0_and_order1) {
     std::vector<Real> ref_gx(n), ref_gy(n), ref_gz(n);
     int nontrivial_count = 0;
     for (std::size_t i = 0; i < n; ++i) {
-        fd_gradient(spvx, spvy, spvz, spi0, spi1, spi2,
-                    qx[i], qy[i], qz[i], k_fd_h,
-                    ref_gx[i], ref_gy[i], ref_gz[i]);
-        Real const mag = std::sqrt(ref_gx[i] * ref_gx[i] + ref_gy[i] * ref_gy[i] +
-                                   ref_gz[i] * ref_gz[i]);
+        fd_gradient(
+            spvx, spvy, spvz, spi0, spi1, spi2, qx[i], qy[i], qz[i], k_fd_h, ref_gx[i], ref_gy[i],
+            ref_gz[i]
+        );
+        Real const mag =
+            std::sqrt(ref_gx[i] * ref_gx[i] + ref_gy[i] * ref_gy[i] + ref_gz[i] * ref_gz[i]);
         if (mag > k_nontrivial_mag)
             ++nontrivial_count;
     }
@@ -221,9 +221,8 @@ TEST_F(CudaFixture, integration_gradient_half_octahedron_order0_and_order1) {
     // (unlike the symmetric closed octahedron which has ∇w=0 inside).
     double const nontrivial_frac = static_cast<double>(nontrivial_count) / static_cast<double>(n);
     ASSERT_GE(nontrivial_frac, static_cast<double>(k_nontrivial_frac))
-        << "Only " << nontrivial_count << "/" << n
-        << " query points have |FD gradient| > " << k_nontrivial_mag
-        << " — test may be a false positive due to geometric symmetry";
+        << "Only " << nontrivial_count << "/" << n << " query points have |FD gradient| > "
+        << k_nontrivial_mag << " — test may be a false positive due to geometric symmetry";
 
     // --- GPU Order-0 ---
     std::vector<Real> gpu0_gx, gpu0_gy, gpu0_gz;
@@ -244,8 +243,8 @@ TEST_F(CudaFixture, integration_gradient_half_octahedron_order0_and_order1) {
     EXPECT_LE(err1, k_order1_max_err) << "Order-1 gradient max error exceeds threshold";
 
     // Order-1 must be at least as accurate as Order-0 (within float noise).
-    EXPECT_LE(err1, err0 + 1e-5f)
-        << "Order-1 (" << err1 << ") is less accurate than Order-0 (" << err0 << ")";
+    EXPECT_LE(err1, err0 + 1e-5f) << "Order-1 (" << err1 << ") is less accurate than Order-0 ("
+                                  << err0 << ")";
 
     // --- GPU Order-2 ---
     std::vector<Real> gpu2_gx, gpu2_gy, gpu2_gz;
@@ -258,6 +257,6 @@ TEST_F(CudaFixture, integration_gradient_half_octahedron_order0_and_order1) {
     EXPECT_LE(err2, k_order2_max_err) << "Order-2 gradient max error exceeds threshold";
 
     // Order-2 must be at least as accurate as Order-1.
-    EXPECT_LE(err2, err1 + 1e-5f)
-        << "Order-2 (" << err2 << ") is less accurate than Order-1 (" << err1 << ")";
+    EXPECT_LE(err2, err1 + 1e-5f) << "Order-2 (" << err2 << ") is less accurate than Order-1 ("
+                                  << err1 << ")";
 }

@@ -51,8 +51,8 @@ void gwn_release_accessor(
     gwn_geometry_accessor<Real, Index> &accessor, cudaStream_t const stream
 ) noexcept {
     gwn_release_spans(
-        stream, accessor.tri_i2, accessor.tri_i1, accessor.tri_i0,
-        accessor.vertex_z, accessor.vertex_y, accessor.vertex_x
+        stream, accessor.tri_i2, accessor.tri_i1, accessor.tri_i0, accessor.vertex_z,
+        accessor.vertex_y, accessor.vertex_x
     );
 }
 
