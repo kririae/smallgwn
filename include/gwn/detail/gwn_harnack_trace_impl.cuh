@@ -222,7 +222,9 @@ __device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_ray_impl(
 
     Real t = Real(0);
     Real t_overstep = Real(0);
-    Real R_prev = std::numeric_limits<Real>::infinity();
+    bool have_prev_eval = false;
+    Real prev_t_eval = Real(0);
+    Real prev_R = std::numeric_limits<Real>::infinity();
     int iter = 0;
     while (t < t_max) {
         // Reference semantics: max-iteration guard is checked in-loop rather
@@ -253,12 +255,35 @@ __device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_ray_impl(
         // R(x) = distance to the nearest triangle (face + edges + vertices).
         // This subsumes singular-edge distance because every singular edge is
         // geometrically a subset of at least one triangle.
+        //
+        // Safe distance-query conditioning:
+        // Let d(x) = dist(x, mesh). For any closed set, d is 1-Lipschitz:
+        //   |d(x) - d(y)| <= ||x - y||.
+        // Therefore from a previous exact sample (x_prev, d_prev), an upper
+        // bound at x is:
+        //   d(x) <= d_prev + ||x - x_prev||.
+        // We use this upper bound as the BVH culling band to accelerate
+        // distance evaluation without changing correctness.
+        Real culling_band = std::numeric_limits<Real>::infinity();
+        if (have_prev_eval) {
+            Real dt_eval = t_eval - prev_t_eval;
+            if (dt_eval < Real(0))
+                dt_eval = -dt_eval;
+            Real const delta_space = dt_eval * dir_len;
+            Real band = prev_R + delta_space;
+            Real const margin = (band + Real(1)) * Real(1e-5);
+            band += margin;
+            if (band >= Real(0) && isfinite(band))
+                culling_band = band;
+        }
         Real const R = gwn_unsigned_distance_point_bvh_impl<Width, Real, Index, StackCapacity>(
-            geometry, bvh, aabb_tree, px, py, pz, R_prev
+            geometry, bvh, aabb_tree, px, py, pz, culling_band
         );
         if (!(R >= Real(0)))
             break;
-        R_prev = R;
+        prev_t_eval = t_eval;
+        prev_R = R;
+        have_prev_eval = true;
 
         Real const c = -k_four_pi;
         Real rho =
@@ -285,7 +310,6 @@ __device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_ray_impl(
         } else {
             // Overstep was too aggressive; retry from committed t without overstep.
             t_overstep = Real(0);
-            R_prev = std::numeric_limits<Real>::infinity();
         }
         ++iter;
     }
