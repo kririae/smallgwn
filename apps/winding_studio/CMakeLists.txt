@@ -71,6 +71,14 @@ CPMAddPackage(
     DOWNLOAD_ONLY YES)
 
 # ----------------------------------------------------------
+# glm (header-only math)
+# ----------------------------------------------------------
+CPMAddPackage(
+    NAME glm
+    GITHUB_REPOSITORY g-truc/glm
+    GIT_TAG 1.0.1)
+
+# ----------------------------------------------------------
 # glfw3, OpenGL, GLEW (system packages)
 # ----------------------------------------------------------
 find_package(OpenGL REQUIRED)
@@ -100,6 +108,11 @@ target_compile_definitions(imgui_backend
 # ----------------------------------------------------------
 add_executable(winding_studio
     main.cpp
+    ws_app.cpp
+    ws_cli.cpp
+    ws_core.cpp
+    ws_render.cpp
+    ws_ui.cpp
     harnack_tracer.cu
     voxelizer.cu)
 target_include_directories(winding_studio
@@ -108,5 +121,6 @@ target_link_libraries(winding_studio
     PRIVATE
         gwn::smallgwn
         imgui_backend
+        glm::glm
         Eigen3::Eigen
         igl::core)

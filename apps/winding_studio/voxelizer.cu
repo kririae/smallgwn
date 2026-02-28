@@ -1,9 +1,5 @@
-#include <GL/glew.h>
-
 #include <cuda/std/span>
 #include <cuda_runtime_api.h>
-
-#include <cub/device/device_scan.cuh>
 
 #include <algorithm>
 #include <cstddef>
@@ -14,6 +10,9 @@
 #include <string>
 #include <string_view>
 #include <vector>
+
+#include <GL/glew.h>
+#include <cub/device/device_scan.cuh>
 
 #include <gwn/gwn.cuh>
 
@@ -41,8 +40,8 @@ struct voxel_kernel_grid {
 };
 
 [[nodiscard]] std::uint32_t grid_dim_for_count(std::uint64_t const count, int const block_size) {
-    std::uint64_t const blocks =
-        (count + static_cast<std::uint64_t>(block_size) - 1u) / static_cast<std::uint64_t>(block_size);
+    std::uint64_t const blocks = (count + static_cast<std::uint64_t>(block_size) - 1u) /
+                                 static_cast<std::uint64_t>(block_size);
     return static_cast<std::uint32_t>(
         std::min<std::uint64_t>(blocks, std::numeric_limits<std::uint32_t>::max())
     );
@@ -107,9 +106,7 @@ void throw_if_error(gwn::gwn_status const &status, std::string_view const contex
 void throw_if_cuda(cudaError_t const err, std::string_view const context) {
     if (err == cudaSuccess)
         return;
-    throw std::runtime_error(
-        std::string(context) + ": " + std::string(cudaGetErrorString(err))
-    );
+    throw std::runtime_error(std::string(context) + ": " + std::string(cudaGetErrorString(err)));
 }
 
 } // namespace
@@ -209,11 +206,7 @@ public:
             std::size_t scan_temp_bytes = 0;
             throw_if_cuda(
                 cub::DeviceScan::ExclusiveSum(
-                    nullptr,
-                    scan_temp_bytes,
-                    d_mask_.data(),
-                    d_prefix_.data(),
-                    chunk_capacity
+                    nullptr, scan_temp_bytes, d_mask_.data(), d_prefix_.data(), chunk_capacity
                 ),
                 "cub::DeviceScan::ExclusiveSum(temp_storage_bytes)"
             );
@@ -224,15 +217,8 @@ public:
 
             int constexpr k_block_size = 256;
             voxel_kernel_grid const kernel_grid{
-                grid.nx,
-                grid.ny,
-                grid.nz,
-                grid.origin_x,
-                grid.origin_y,
-                grid.origin_z,
-                grid.step_x,
-                grid.step_y,
-                grid.step_z,
+                grid.nx,       grid.ny,     grid.nz,     grid.origin_x, grid.origin_y,
+                grid.origin_z, grid.step_x, grid.step_y, grid.step_z,
             };
             Real const target_w = config.target_winding;
 
@@ -244,16 +230,11 @@ public:
                 std::uint32_t const launch_grid = grid_dim_for_count(count, k_block_size);
 
                 fill_query_chunk_kernel<<<launch_grid, k_block_size>>>(
-                    kernel_grid,
-                    begin,
-                    grid.total_voxels,
-                    d_query_x_.data(),
-                    d_query_y_.data(),
+                    kernel_grid, begin, grid.total_voxels, d_query_x_.data(), d_query_y_.data(),
                     d_query_z_.data()
                 );
                 throw_if_error(
-                    gwn::gwn_cuda_to_status(cudaGetLastError()),
-                    "fill_query_chunk_kernel launch"
+                    gwn::gwn_cuda_to_status(cudaGetLastError()), "fill_query_chunk_kernel launch"
                 );
 
                 auto const query_x = cuda::std::span<Real const>(d_query_x_.data(), count);
@@ -262,14 +243,8 @@ public:
                 auto const winding = cuda::std::span<Real>(d_winding_.data(), count);
                 throw_if_error(
                     gwn::gwn_compute_winding_number_batch_bvh_taylor<1, Real, Index>(
-                        geometry_.accessor(),
-                        bvh_.accessor(),
-                        moments_.accessor(),
-                        query_x,
-                        query_y,
-                        query_z,
-                        winding,
-                        config.accuracy_scale
+                        geometry_.accessor(), bvh_.accessor(), moments_.accessor(), query_x,
+                        query_y, query_z, winding, config.accuracy_scale
                     ),
                     "gwn_compute_winding_number_batch_bvh_taylor"
                 );
@@ -278,16 +253,12 @@ public:
                     d_winding_.data(), count, target_w, d_mask_.data()
                 );
                 throw_if_error(
-                    gwn::gwn_cuda_to_status(cudaGetLastError()),
-                    "compute_mask_kernel launch"
+                    gwn::gwn_cuda_to_status(cudaGetLastError()), "compute_mask_kernel launch"
                 );
 
                 throw_if_cuda(
                     cub::DeviceScan::ExclusiveSum(
-                        d_scan_temp_.data(),
-                        scan_temp_bytes,
-                        d_mask_.data(),
-                        d_prefix_.data(),
+                        d_scan_temp_.data(), scan_temp_bytes, d_mask_.data(), d_prefix_.data(),
                         count
                     ),
                     "cub::DeviceScan::ExclusiveSum"
@@ -297,18 +268,14 @@ public:
                 std::uint32_t tail_mask = 0u;
                 throw_if_cuda(
                     cudaMemcpy(
-                        &tail_prefix,
-                        d_prefix_.data() + (count - 1u),
-                        sizeof(std::uint32_t),
+                        &tail_prefix, d_prefix_.data() + (count - 1u), sizeof(std::uint32_t),
                         cudaMemcpyDeviceToHost
                     ),
                     "copy tail prefix"
                 );
                 throw_if_cuda(
                     cudaMemcpy(
-                        &tail_mask,
-                        d_mask_.data() + (count - 1u),
-                        sizeof(std::uint32_t),
+                        &tail_mask, d_mask_.data() + (count - 1u), sizeof(std::uint32_t),
                         cudaMemcpyDeviceToHost
                     ),
                     "copy tail mask"
@@ -320,15 +287,8 @@ public:
                     continue;
 
                 emit_instances_compact_kernel<<<launch_grid, k_block_size>>>(
-                    d_query_x_.data(),
-                    d_query_y_.data(),
-                    d_query_z_.data(),
-                    d_mask_.data(),
-                    d_prefix_.data(),
-                    count,
-                    selected_total,
-                    d_instances_.data(),
-                    instance_capacity
+                    d_query_x_.data(), d_query_y_.data(), d_query_z_.data(), d_mask_.data(),
+                    d_prefix_.data(), count, selected_total, d_instances_.data(), instance_capacity
                 );
                 throw_if_error(
                     gwn::gwn_cuda_to_status(cudaGetLastError()),
@@ -346,9 +306,7 @@ public:
             if (occupied_count > 0u) {
                 throw_if_cuda(
                     cudaMemcpy(
-                        h_instances_.data(),
-                        d_instances_.data(),
-                        occupied_count * sizeof(float4),
+                        h_instances_.data(), d_instances_.data(), occupied_count * sizeof(float4),
                         cudaMemcpyDeviceToHost
                     ),
                     "copy d_instances"
@@ -358,9 +316,7 @@ public:
             glBindBuffer(GL_ARRAY_BUFFER, gl_buffer_id);
             if (occupied_count > 0u) {
                 glBufferSubData(
-                    GL_ARRAY_BUFFER,
-                    0,
-                    static_cast<GLsizeiptr>(occupied_count * sizeof(float4)),
+                    GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(occupied_count * sizeof(float4)),
                     h_instances_.data()
                 );
             }
