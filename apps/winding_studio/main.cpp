@@ -7,6 +7,8 @@
 #include "imfilebrowser.h"
 #include "imgui.h"
 #include "mesh_loader.hpp"
+#include "voxel_grid_spec.hpp"
+#include "voxelizer.hpp"
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <algorithm>
@@ -18,6 +20,7 @@
 #include <exception>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -50,6 +53,7 @@ enum class ViewMode : int {
     k_split = 0,
     k_raster = 1,
     k_harnack = 2,
+    k_voxel = 3,
 };
 
 struct CliOptions {
@@ -62,6 +66,10 @@ struct CliOptions {
     MeshPreset mesh{MeshPreset::k_half_octa};
     ViewMode view_mode{ViewMode::k_split};
     std::string mesh_file{};
+    float voxel_dx{-1.0f};
+    float camera_distance{-1.0f};
+    float harnack_resolution_scale{-1.0f};
+    float harnack_target_w{-1.0f};
 };
 
 struct AppState {
@@ -81,6 +89,16 @@ struct AppState {
     float accuracy_scale = 2.0f;
     float target_winding = 0.5f;
     float harnack_resolution_scale = 0.75f;
+    float voxel_dx = 0.05f;
+    float voxel_target_w = 0.5f;
+    std::size_t voxel_max_voxels = 10'000'000u;
+    float voxel_actual_dx = 0.05f;
+    std::size_t voxel_grid_nx = 1u;
+    std::size_t voxel_grid_ny = 1u;
+    std::size_t voxel_grid_nz = 1u;
+    std::size_t voxel_grid_total = 0u;
+    std::size_t voxel_occupied_count = 0u;
+    float last_voxel_ms = 0.0f;
     std::size_t triangle_count = 0;
     std::size_t harnack_hit_count = 0;
     std::size_t harnack_pixel_count = 0;
@@ -90,6 +108,8 @@ struct AppState {
     std::string status_line{"Ready"};
     char mesh_file_input[1024]{};
     bool force_harnack_refresh = true;
+    bool force_voxel_refresh = true;
+    winding_studio::voxel::MeshBounds mesh_bounds{};
     ImGui::FileBrowser file_browser{
         ImGuiFileBrowserFlags_CloseOnEsc | ImGuiFileBrowserFlags_ConfirmOnEnter
     };
@@ -567,10 +587,230 @@ private:
     bool has_texture_{false};
 };
 
+[[nodiscard]] GLuint create_voxel_program() {
+    static constexpr char const *k_vs = R"GLSL(
+#version 330 core
+layout(location = 0) in vec3 a_pos;
+layout(location = 1) in vec3 a_normal;
+layout(location = 2) in vec4 a_instance;
+uniform mat4 u_vp;
+uniform float u_voxel_size;
+out vec3 v_normal;
+void main() {
+    vec3 world_pos = a_instance.xyz + a_pos * (u_voxel_size * 0.5);
+    v_normal = a_normal;
+    gl_Position = u_vp * vec4(world_pos, 1.0);
+}
+)GLSL";
+
+    static constexpr char const *k_fs = R"GLSL(
+#version 330 core
+in vec3 v_normal;
+out vec4 frag_color;
+
+void main() {
+    vec3 n = normalize(v_normal);
+
+    vec3 key_dir  = normalize(vec3( 0.5, 0.7,  0.5));
+    vec3 fill_dir = normalize(vec3(-0.6, 0.3,  0.4));
+
+    float key  = max(dot(n, key_dir), 0.0);
+    float fill = max(dot(n, fill_dir), 0.0);
+    float rim  = pow(clamp(1.0 - abs(dot(n, vec3(0.0, 0.0, 1.0))), 0.0, 1.0), 3.0);
+
+    vec3 base     = vec3(0.80, 0.82, 0.86);
+    vec3 key_col  = vec3(1.00, 0.98, 0.92);
+    vec3 fill_col = vec3(0.50, 0.60, 0.78);
+    vec3 rim_col  = vec3(0.85, 0.88, 0.95);
+
+    vec3 lit = base * 0.18
+             + base * key_col  * (key  * 0.62)
+             + base * fill_col * (fill * 0.35)
+             + rim_col * (rim * 0.22);
+
+    frag_color = vec4(clamp(lit, 0.0, 1.0), 1.0);
+}
+)GLSL";
+
+    GLuint const vs = compile_shader(GL_VERTEX_SHADER, k_vs);
+    GLuint const fs = compile_shader(GL_FRAGMENT_SHADER, k_fs);
+    GLuint const program = glCreateProgram();
+    glAttachShader(program, vs);
+    glAttachShader(program, fs);
+    glLinkProgram(program);
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+
+    GLint ok = GL_FALSE;
+    glGetProgramiv(program, GL_LINK_STATUS, &ok);
+    if (ok == GL_TRUE)
+        return program;
+
+    GLint log_len = 0;
+    glGetProgramiv(program, GL_INFO_LOG_LENGTH, &log_len);
+    std::string log(static_cast<std::size_t>(std::max(log_len, 1)), '\0');
+    glGetProgramInfoLog(program, log_len, nullptr, log.data());
+    std::ostringstream oss;
+    oss << "Voxel program link failed: " << log;
+    glDeleteProgram(program);
+    throw std::runtime_error(oss.str());
+}
+
+class VoxelRenderer final {
+public:
+    VoxelRenderer() {
+        program_ = create_voxel_program();
+        glGenVertexArrays(1, &vao_);
+        glGenBuffers(1, &vertex_vbo_);
+        glGenBuffers(1, &instance_vbo_);
+        upload_unit_cube();
+        if (!ensure_instance_capacity(1))
+            throw std::runtime_error("Failed to allocate initial voxel instance buffer.");
+    }
+
+    VoxelRenderer(VoxelRenderer const &) = delete;
+    VoxelRenderer &operator=(VoxelRenderer const &) = delete;
+
+    ~VoxelRenderer() {
+        if (instance_vbo_ != 0)
+            glDeleteBuffers(1, &instance_vbo_);
+        if (vertex_vbo_ != 0)
+            glDeleteBuffers(1, &vertex_vbo_);
+        if (vao_ != 0)
+            glDeleteVertexArrays(1, &vao_);
+        if (program_ != 0)
+            glDeleteProgram(program_);
+    }
+
+    [[nodiscard]] bool ensure_instance_capacity(std::size_t const required) {
+        if (required <= instance_capacity_)
+            return true;
+        std::size_t new_capacity = std::max<std::size_t>(required, 1024u);
+        if (new_capacity > std::numeric_limits<GLsizeiptr>::max() / sizeof(float) / 4u)
+            return false;
+
+        glBindVertexArray(vao_);
+        glBindBuffer(GL_ARRAY_BUFFER, instance_vbo_);
+        glBufferData(
+            GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(new_capacity * sizeof(float) * 4u), nullptr,
+            GL_DYNAMIC_DRAW
+        );
+        glEnableVertexAttribArray(2);
+        glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, 4 * sizeof(float), nullptr);
+        glVertexAttribDivisor(2, 1);
+        glBindVertexArray(0);
+
+        instance_capacity_ = new_capacity;
+        return true;
+    }
+
+    [[nodiscard]] unsigned int instance_buffer() const noexcept { return instance_vbo_; }
+    [[nodiscard]] std::size_t instance_capacity() const noexcept { return instance_capacity_; }
+
+    void draw(Mat4 const &vp, float const voxel_size, std::size_t const instance_count, bool wireframe)
+        const {
+        if (instance_count == 0u || voxel_size <= 0.0f)
+            return;
+
+        glEnable(GL_DEPTH_TEST);
+        glUseProgram(program_);
+        glBindVertexArray(vao_);
+        glUniformMatrix4fv(glGetUniformLocation(program_, "u_vp"), 1, GL_FALSE, vp.v.data());
+        glUniform1f(glGetUniformLocation(program_, "u_voxel_size"), voxel_size);
+
+        glPolygonMode(GL_FRONT_AND_BACK, wireframe ? GL_LINE : GL_FILL);
+        glDrawArraysInstanced(
+            GL_TRIANGLES, 0, vertex_count_,
+            static_cast<GLsizei>(std::min<std::size_t>(instance_count, std::numeric_limits<GLsizei>::max()))
+        );
+        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+
+        glBindVertexArray(0);
+        glUseProgram(0);
+    }
+
+private:
+    struct Face {
+        Vec3 normal;
+        std::array<Vec3, 4> corners;
+    };
+
+    void upload_unit_cube() {
+        std::array<Face, 6> const faces{{
+            {Vec3{1.0f, 0.0f, 0.0f},
+             {Vec3{1, -1, -1}, Vec3{1, -1, 1}, Vec3{1, 1, 1}, Vec3{1, 1, -1}}},
+            {Vec3{-1.0f, 0.0f, 0.0f},
+             {Vec3{-1, -1, 1}, Vec3{-1, -1, -1}, Vec3{-1, 1, -1}, Vec3{-1, 1, 1}}},
+            {Vec3{0.0f, 1.0f, 0.0f},
+             {Vec3{-1, 1, -1}, Vec3{1, 1, -1}, Vec3{1, 1, 1}, Vec3{-1, 1, 1}}},
+            {Vec3{0.0f, -1.0f, 0.0f},
+             {Vec3{-1, -1, 1}, Vec3{1, -1, 1}, Vec3{1, -1, -1}, Vec3{-1, -1, -1}}},
+            {Vec3{0.0f, 0.0f, 1.0f},
+             {Vec3{-1, -1, 1}, Vec3{-1, 1, 1}, Vec3{1, 1, 1}, Vec3{1, -1, 1}}},
+            {Vec3{0.0f, 0.0f, -1.0f},
+             {Vec3{1, -1, -1}, Vec3{1, 1, -1}, Vec3{-1, 1, -1}, Vec3{-1, -1, -1}}},
+        }};
+
+        std::vector<float> verts{};
+        verts.reserve(36u * 6u);
+        auto append_vertex = [&](Vec3 const &p, Vec3 const &n) {
+            verts.push_back(p.x);
+            verts.push_back(p.y);
+            verts.push_back(p.z);
+            verts.push_back(n.x);
+            verts.push_back(n.y);
+            verts.push_back(n.z);
+        };
+
+        for (Face const &face : faces) {
+            append_vertex(face.corners[0], face.normal);
+            append_vertex(face.corners[1], face.normal);
+            append_vertex(face.corners[2], face.normal);
+            append_vertex(face.corners[2], face.normal);
+            append_vertex(face.corners[3], face.normal);
+            append_vertex(face.corners[0], face.normal);
+        }
+
+        vertex_count_ = static_cast<GLsizei>(verts.size() / 6u);
+        glBindVertexArray(vao_);
+        glBindBuffer(GL_ARRAY_BUFFER, vertex_vbo_);
+        glBufferData(
+            GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(verts.size() * sizeof(float)), verts.data(),
+            GL_STATIC_DRAW
+        );
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), nullptr);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(
+            1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
+            reinterpret_cast<void const *>(3 * sizeof(float))
+        );
+        glBindVertexArray(0);
+    }
+
+    GLuint program_{0};
+    GLuint vao_{0};
+    GLuint vertex_vbo_{0};
+    GLuint instance_vbo_{0};
+    GLsizei vertex_count_{0};
+    std::size_t instance_capacity_{0};
+};
+
 [[nodiscard]] bool parse_int(std::string const &s, int &v) {
     try {
         std::size_t consumed = 0;
         int const parsed = std::stoi(s, &consumed);
+        if (consumed != s.size())
+            return false;
+        v = parsed;
+        return true;
+    } catch (...) { return false; }
+}
+
+[[nodiscard]] bool parse_float(std::string const &s, float &v) {
+    try {
+        std::size_t consumed = 0;
+        float const parsed = std::stof(s, &consumed);
         if (consumed != s.size())
             return false;
         v = parsed;
@@ -603,6 +843,10 @@ private:
         view_mode = ViewMode::k_harnack;
         return true;
     }
+    if (value == "voxel") {
+        view_mode = ViewMode::k_voxel;
+        return true;
+    }
     return false;
 }
 
@@ -614,7 +858,11 @@ void print_help(char const *argv0) {
         << "  --height <int>          Window/frame height (default: 960)\n"
         << "  --mesh <half|octa>      Initial geometry preset\n"
         << "  --mesh-file <path>      Load external mesh file (libigl formats, OBJ fallback)\n"
-        << "  --view <split|raster|harnack>  Initial view mode\n"
+        << "  --view <split|raster|harnack|voxel>  Initial view mode\n"
+        << "  --voxel-dx <float>      Initial voxel dx (voxel mode)\n"
+        << "  --camera-distance <f>   Initial camera distance\n"
+        << "  --harnack-resolution <f>  Harnack trace resolution scale [0.2,1.0]\n"
+        << "  --harnack-target-w <f>  Initial Harnack target winding\n"
         << "  --capture-png <path>    Run N frames then capture OpenGL UI to PNG and exit\n"
         << "  --frames <int>          Frame count before capture (default: 4)\n"
         << "  --help                  Show this message\n";
@@ -675,6 +923,34 @@ void print_help(char const *argv0) {
                 return false;
             continue;
         }
+        if (key == "--voxel-dx") {
+            std::string value;
+            if (!read_value(value) || !parse_float(value, opt.voxel_dx) || !(opt.voxel_dx > 0.0f))
+                return false;
+            continue;
+        }
+        if (key == "--camera-distance") {
+            std::string value;
+            if (!read_value(value) || !parse_float(value, opt.camera_distance) ||
+                !(opt.camera_distance > 0.0f))
+                return false;
+            continue;
+        }
+        if (key == "--harnack-resolution") {
+            std::string value;
+            if (!read_value(value) || !parse_float(value, opt.harnack_resolution_scale) ||
+                !(opt.harnack_resolution_scale >= 0.2f &&
+                  opt.harnack_resolution_scale <= 1.0f))
+                return false;
+            continue;
+        }
+        if (key == "--harnack-target-w") {
+            std::string value;
+            if (!read_value(value) || !parse_float(value, opt.harnack_target_w) ||
+                !(opt.harnack_target_w > 0.0f))
+                return false;
+            continue;
+        }
         return false;
     }
     return opt.width > 0 && opt.height > 0 && opt.frames > 0;
@@ -687,8 +963,10 @@ void glfw_error_callback(int error, char const *description) {
 struct UiLayoutResult {
     bool mesh_changed{false};
     bool harnack_params_changed{false};
+    bool voxel_params_changed{false};
     bool request_mesh_file_load{false};
     bool request_harnack_refresh{false};
+    bool request_voxel_refresh{false};
     ImVec2 viewport_pos{0.0f, 0.0f};
     ImVec2 viewport_size{1.0f, 1.0f};
 };
@@ -713,6 +991,7 @@ struct FramebufferRect {
     case ViewMode::k_split: return "Split";
     case ViewMode::k_raster: return "Raster";
     case ViewMode::k_harnack: return "Harnack";
+    case ViewMode::k_voxel: return "Voxel";
     }
     return "Unknown";
 }
@@ -836,12 +1115,22 @@ void property_label(char const *label) {
 void end_property_table() { ImGui::EndTable(); }
 
 [[nodiscard]] bool
-mode_button(char const *label, bool const is_active, ImVec2 const size = ImVec2(0.0f, 0.0f)) {
+mode_button(
+    char const *label, bool const is_active, ImVec2 const size = ImVec2(0.0f, 0.0f),
+    ImVec4 const *active_palette = nullptr
+) {
     if (is_active) {
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.36f, 0.55f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.24f, 0.42f, 0.62f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.28f, 0.48f, 0.70f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f, 0.90f, 1.0f, 1.0f));
+        ImVec4 const default_palette[4] = {
+            ImVec4(0.20f, 0.36f, 0.55f, 1.0f),
+            ImVec4(0.24f, 0.42f, 0.62f, 1.0f),
+            ImVec4(0.28f, 0.48f, 0.70f, 1.0f),
+            ImVec4(0.55f, 0.90f, 1.0f, 1.0f),
+        };
+        ImVec4 const *palette = (active_palette == nullptr) ? default_palette : active_palette;
+        ImGui::PushStyleColor(ImGuiCol_Button, palette[0]);
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, palette[1]);
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, palette[2]);
+        ImGui::PushStyleColor(ImGuiCol_Text, palette[3]);
     }
     bool const pressed = ImGui::Button(label, size);
     if (is_active)
@@ -916,7 +1205,7 @@ draw_editor_layout(AppState &state, float const dt, float const ui_scale = 1.0f)
         (ImGui::GetWindowContentRegionMax().x - title_reserve - spacing * 3.0f) / 4.0f,
         min_mode_button_w, max_mode_button_w
     );
-    float const buttons_w = mode_button_w * 3.0f + spacing * 2.0f;
+    float const buttons_w = mode_button_w * 4.0f + spacing * 3.0f;
     float const btn_start =
         std::max(ImGui::GetCursorPosX(), ImGui::GetWindowContentRegionMax().x - buttons_w);
     ImGui::SameLine(btn_start);
@@ -928,6 +1217,17 @@ draw_editor_layout(AppState &state, float const dt, float const ui_scale = 1.0f)
     ImGui::SameLine();
     if (mode_button("Harnack", state.view_mode == ViewMode::k_harnack, ImVec2(mode_button_w, 0.0f)))
         state.view_mode = ViewMode::k_harnack;
+    ImGui::SameLine();
+    ImVec4 const voxel_palette[4] = {
+        ImVec4(0.15f, 0.45f, 0.30f, 1.0f),
+        ImVec4(0.18f, 0.52f, 0.35f, 1.0f),
+        ImVec4(0.22f, 0.58f, 0.40f, 1.0f),
+        ImVec4(0.70f, 1.00f, 0.80f, 1.0f),
+    };
+    if (mode_button(
+            "Voxel", state.view_mode == ViewMode::k_voxel, ImVec2(mode_button_w, 0.0f), voxel_palette
+        ))
+        state.view_mode = ViewMode::k_voxel;
 
     ImGui::EndChild();
 
@@ -1152,7 +1452,10 @@ draw_editor_layout(AppState &state, float const dt, float const ui_scale = 1.0f)
         }
     }
 
-    if (begin_collapsing_section("Harnack Trace", true)) {
+    if (
+        (state.view_mode == ViewMode::k_split || state.view_mode == ViewMode::k_harnack) &&
+        begin_collapsing_section("Harnack Trace", true)
+    ) {
         if (begin_property_table("##HarnackProps", 90.0f * s)) {
             property_label("Target W");
             result.harnack_params_changed |=
@@ -1200,6 +1503,42 @@ draw_editor_layout(AppState &state, float const dt, float const ui_scale = 1.0f)
         item_tooltip("Force a single Harnack trace refresh");
     }
 
+    if (state.view_mode == ViewMode::k_voxel && begin_collapsing_section("Voxelization", true)) {
+        if (begin_property_table("##VoxelProps", 90.0f * s)) {
+            property_label("Target W");
+            ImGui::SliderFloat("##VoxelTargetW", &state.voxel_target_w, 0.1f, 0.9f, "%.2f");
+            if (ImGui::IsItemDeactivatedAfterEdit())
+                result.voxel_params_changed = true;
+            item_tooltip("Winding threshold for occupancy (inside if W >= Target W)");
+
+            property_label("Voxel dx");
+            ImGui::SliderFloat(
+                "##VoxelDx", &state.voxel_dx, 0.002f, 0.25f, "%.4f", ImGuiSliderFlags_Logarithmic
+            );
+            if (ImGui::IsItemDeactivatedAfterEdit())
+                result.voxel_params_changed = true;
+            item_tooltip("Requested voxel size. May be clamped to satisfy voxel-count budget");
+
+            property_label("Max Voxels");
+            ImGui::Text("%zu", state.voxel_max_voxels);
+
+            property_label("Actual dx");
+            ImGui::Text("%.5f", state.voxel_actual_dx);
+
+            property_label("Grid");
+            ImGui::Text(
+                "%zu x %zu x %zu", state.voxel_grid_nx, state.voxel_grid_ny, state.voxel_grid_nz
+            );
+
+            end_property_table();
+        }
+
+        ImGui::Spacing();
+        if (ImGui::Button("Refresh"))
+            result.request_voxel_refresh = true;
+        item_tooltip("Re-run voxelization with current settings");
+    }
+
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
@@ -1242,6 +1581,14 @@ draw_editor_layout(AppState &state, float const dt, float const ui_scale = 1.0f)
         ImGui::SameLine(0.0f, 16.0f);
         std::snprintf(buf, sizeof(buf), "%.2f ms", state.last_harnack_ms);
         status_segment("Trace:", buf);
+    }
+    if (state.view_mode == ViewMode::k_voxel) {
+        ImGui::SameLine(0.0f, 16.0f);
+        std::snprintf(buf, sizeof(buf), "%zu / %zu", state.voxel_occupied_count, state.voxel_grid_total);
+        status_segment("Voxels:", buf);
+        ImGui::SameLine(0.0f, 16.0f);
+        std::snprintf(buf, sizeof(buf), "%.2f ms", state.last_voxel_ms);
+        status_segment("Voxelize:", buf);
     }
 
     ImGui::EndChild();
@@ -1306,7 +1653,7 @@ make_harnack_camera_frame(AppState const &state, int const width, int const heig
 
 void render_viewport(
     AppState const &state, MeshRenderer const &renderer, TextureRenderer const &harnack_texture,
-    FramebufferRect const viewport
+    VoxelRenderer const &voxel_renderer, FramebufferRect const viewport
 ) {
     if (viewport.w <= 0 || viewport.h <= 0)
         return;
@@ -1353,6 +1700,15 @@ void render_viewport(
         else
             render_view(viewport.x, viewport.y, viewport.w, viewport.h);
         break;
+    case ViewMode::k_voxel: {
+        glViewport(viewport.x, viewport.y, viewport.w, viewport.h);
+        Mat4 const proj = mat4_perspective(
+            45.0f * (k_pi / 180.0f), static_cast<float>(viewport.w) / static_cast<float>(viewport.h),
+            0.1f, 30.0f
+        );
+        Mat4 const vp = mat4_mul(proj, view);
+        voxel_renderer.draw(vp, state.voxel_actual_dx, state.voxel_occupied_count, state.wireframe);
+    } break;
     }
 }
 
@@ -1462,6 +1818,16 @@ int run_app(CliOptions const &cli) {
     AppState state{};
     state.mesh = cli.mesh;
     state.view_mode = cli.view_mode;
+    if (cli.voxel_dx > 0.0f)
+        state.voxel_dx = cli.voxel_dx;
+    if (cli.camera_distance > 0.0f)
+        state.camera_radius = cli.camera_distance;
+    if (cli.harnack_resolution_scale > 0.0f)
+        state.harnack_resolution_scale = cli.harnack_resolution_scale;
+    if (cli.harnack_target_w > 0.0f)
+        state.target_winding = cli.harnack_target_w;
+    if (cli.capture_png)
+        state.auto_rotate = false;
     std::string const default_mesh_path = "";
     std::string const initial_mesh_file = cli.mesh_file.empty() ? default_mesh_path : cli.mesh_file;
     std::snprintf(
@@ -1470,8 +1836,11 @@ int run_app(CliOptions const &cli) {
 
     MeshRenderer renderer{};
     TextureRenderer harnack_texture_renderer{};
+    VoxelRenderer voxel_renderer{};
     winding_studio::HarnackTracer harnack_tracer{};
+    winding_studio::Voxelizer voxelizer{};
     winding_studio::HarnackTraceImages trace_images{};
+    winding_studio::VoxelizeStats voxel_stats{};
 
     MeshData external_mesh{};
 
@@ -1483,12 +1852,26 @@ int run_app(CliOptions const &cli) {
             state.status_line = "Harnack upload failed: " + tracer_error;
             return false;
         }
+        std::string voxel_error;
+        if (!voxelizer.upload_mesh(to_host_mesh_soa(mesh), voxel_error)) {
+            state.status_line = "Voxel upload failed: " + voxel_error;
+            return false;
+        }
         state.mesh = preset;
         state.active_mesh_name = name;
         state.triangle_count = triangle_count(mesh);
         state.force_harnack_refresh = true;
+        state.force_voxel_refresh = true;
         state.harnack_hit_count = 0;
         state.harnack_pixel_count = 0;
+        state.voxel_occupied_count = 0;
+        state.voxel_grid_total = 0;
+        state.voxel_grid_nx = 1;
+        state.voxel_grid_ny = 1;
+        state.voxel_grid_nz = 1;
+        state.mesh_bounds = winding_studio::voxel::compute_mesh_bounds(
+            mesh.positions.data(), mesh.positions.size() / 3u
+        );
         state.status_line = "Loaded mesh: " + name;
         return true;
     };
@@ -1525,6 +1908,8 @@ int run_app(CliOptions const &cli) {
         UiLayoutResult const ui_layout = draw_editor_layout(state, dt, dpi_scale);
         if (ui_layout.harnack_params_changed || ui_layout.request_harnack_refresh)
             state.force_harnack_refresh = true;
+        if (ui_layout.voxel_params_changed || ui_layout.request_voxel_refresh)
+            state.force_voxel_refresh = true;
 
         if (ui_layout.request_mesh_file_load) {
             std::string const mesh_path(state.mesh_file_input);
@@ -1614,11 +1999,51 @@ int run_app(CliOptions const &cli) {
             }
         }
 
+        bool const needs_voxel = state.view_mode == ViewMode::k_voxel;
+        if (needs_voxel && voxelizer.has_mesh() && state.force_voxel_refresh) {
+            winding_studio::voxel::VoxelGridSpec const grid = winding_studio::voxel::make_voxel_grid_from_dx(
+                state.mesh_bounds, state.voxel_dx, state.voxel_max_voxels
+            );
+            state.voxel_grid_nx = grid.nx;
+            state.voxel_grid_ny = grid.ny;
+            state.voxel_grid_nz = grid.nz;
+            state.voxel_grid_total = static_cast<std::size_t>(grid.total_voxels);
+            state.voxel_actual_dx = grid.actual_dx;
+
+            if (!voxel_renderer.ensure_instance_capacity(state.voxel_grid_total)) {
+                state.status_line = "Voxelize failed: cannot allocate instance buffer";
+            } else {
+                winding_studio::VoxelizeConfig const config{
+                    state.voxel_target_w,
+                    state.accuracy_scale,
+                };
+
+                auto const voxel_begin = std::chrono::steady_clock::now();
+                std::string voxel_error;
+                bool const ok = voxelizer.voxelize(
+                    grid, config, voxel_renderer.instance_buffer(), voxel_renderer.instance_capacity(),
+                    voxel_stats, voxel_error
+                );
+                auto const voxel_end = std::chrono::steady_clock::now();
+                state.last_voxel_ms =
+                    std::chrono::duration<float, std::milli>(voxel_end - voxel_begin).count();
+
+                if (ok) {
+                    state.voxel_occupied_count = voxel_stats.occupied_count;
+                    state.voxel_grid_total = voxel_stats.total_voxels;
+                } else {
+                    state.status_line = "Voxelize failed: " + voxel_error;
+                    state.voxel_occupied_count = 0;
+                }
+            }
+            state.force_voxel_refresh = false;
+        }
+
         glViewport(0, 0, fb_w, fb_h);
         glDisable(GL_SCISSOR_TEST);
         glClearColor(0.018f, 0.022f, 0.03f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        render_viewport(state, renderer, harnack_texture_renderer, viewport);
+        render_viewport(state, renderer, harnack_texture_renderer, voxel_renderer, viewport);
 
         ImGui::Render();
         glViewport(0, 0, fb_w, fb_h);

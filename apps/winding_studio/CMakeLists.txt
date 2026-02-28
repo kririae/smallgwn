@@ -100,7 +100,8 @@ target_compile_definitions(imgui_backend
 # ----------------------------------------------------------
 add_executable(winding_studio
     main.cpp
-    harnack_tracer.cu)
+    harnack_tracer.cu
+    voxelizer.cu)
 target_include_directories(winding_studio
     PRIVATE ${stb_SOURCE_DIR})
 target_link_libraries(winding_studio
