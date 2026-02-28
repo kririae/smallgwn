@@ -10,6 +10,7 @@
 #include "gwn_query_distance_impl.cuh"
 #include "gwn_query_gradient_impl.cuh"
 #include "gwn_query_vec3_impl.cuh"
+#include "gwn_query_winding_gradient_impl.cuh"
 #include "gwn_query_winding_impl.cuh"
 
 namespace gwn {
@@ -244,14 +245,8 @@ __device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_angle_ray_imp
     constexpr Real k_four_pi = Real(4) * k_pi;
     Real const target_omega = k_four_pi * target_winding;
 
-    auto eval_w = [&](Real const px, Real const py, Real const pz) -> Real {
-        return gwn_winding_number_point_bvh_taylor_impl<Order, Width, Real, Index, StackCapacity>(
-            geometry, bvh, moment_tree, px, py, pz, accuracy_scale
-        );
-    };
-
-    auto eval_grad = [&](Real const px, Real const py, Real const pz) -> gwn_query_vec3<Real> {
-        return gwn_winding_gradient_point_bvh_taylor_impl<Order, Width, Real, Index, StackCapacity>(
+    auto eval_w_and_grad = [&](Real const px, Real const py, Real const pz) {
+        return gwn_winding_and_gradient_point_bvh_taylor_impl<Order, Width, Real, Index, StackCapacity>(
             geometry, bvh, moment_tree, px, py, pz, accuracy_scale
         );
     };
@@ -295,6 +290,7 @@ __device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_angle_ray_imp
 
     Real t = Real(0);
     Real t_overstep = Real(0);
+    Real R_prev = std::numeric_limits<Real>::infinity();
     int iter = 0;
     while (t < t_max) {
         // Reference semantics: max-iteration guard is checked in-loop rather
@@ -308,8 +304,9 @@ __device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_angle_ray_imp
         Real const py = ray_oy + t_eval * ray_dy;
         Real const pz = ray_oz + t_eval * ray_dz;
 
-        Real const w = eval_w(px, py, pz);
-        gwn_query_vec3<Real> const grad_w = eval_grad(px, py, pz);
+        auto const wg = eval_w_and_grad(px, py, pz);
+        Real const w = wg.winding;
+        gwn_query_vec3<Real> const grad_w = wg.gradient;
         Real const grad_w_mag =
             sqrt(grad_w.x * grad_w.x + grad_w.y * grad_w.y + grad_w.z * grad_w.z);
         Real const omega = k_four_pi * w;
@@ -326,11 +323,11 @@ __device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_angle_ray_imp
         // geometrically a subset of at least one triangle.
         Real const R = gwn_unsigned_distance_point_bvh_impl<
             Width, Real, Index, StackCapacity>(
-            geometry, bvh, aabb_tree, px, py, pz,
-            std::numeric_limits<Real>::infinity()
+            geometry, bvh, aabb_tree, px, py, pz, R_prev
         );
         if (!(R >= Real(0)))
             break;
+        R_prev = R;
 
         Real const c = -k_four_pi;
         Real rho = gwn_harnack_constrained_two_sided_step(

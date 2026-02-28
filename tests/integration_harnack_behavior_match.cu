@@ -91,43 +91,32 @@ __device__ inline Real eval_w_exact(
 }
 
 template <int Order, EvalMode Mode>
-__device__ inline Real eval_w(
+__device__ inline gwn::detail::gwn_winding_and_gradient_result<Real> eval_w_and_grad(
     gwn::gwn_geometry_accessor<Real, Index> const &geometry,
     gwn::gwn_bvh4_topology_accessor<Real, Index> const &bvh,
     gwn::gwn_bvh4_moment_accessor<Order, Real, Index> const &moment_tree, Real const px,
     Real const py, Real const pz, Real const accuracy_scale
 ) noexcept {
+    gwn::detail::gwn_winding_and_gradient_result<Real> result;
     if constexpr (Mode == EvalMode::taylor) {
-        return gwn::detail::gwn_winding_number_point_bvh_taylor_impl<
+        return gwn::detail::gwn_winding_and_gradient_point_bvh_taylor_impl<
             Order, k_width, Real, Index, k_stack>(geometry, bvh, moment_tree, px, py, pz, accuracy_scale);
+    } else {
+        result.winding = eval_w_exact<Order>(geometry, bvh, px, py, pz);
+        // Test-only exact fallback: finite-difference gradient of exact winding.
+        Real const h = Real(1e-4);
+        Real const inv_2h = Real(0.5) / h;
+        Real const wxp = eval_w_exact<Order>(geometry, bvh, px + h, py, pz);
+        Real const wxm = eval_w_exact<Order>(geometry, bvh, px - h, py, pz);
+        Real const wyp = eval_w_exact<Order>(geometry, bvh, px, py + h, pz);
+        Real const wym = eval_w_exact<Order>(geometry, bvh, px, py - h, pz);
+        Real const wzp = eval_w_exact<Order>(geometry, bvh, px, py, pz + h);
+        Real const wzm = eval_w_exact<Order>(geometry, bvh, px, py, pz - h);
+        result.gradient = gwn::detail::gwn_query_vec3<Real>(
+            (wxp - wxm) * inv_2h, (wyp - wym) * inv_2h, (wzp - wzm) * inv_2h
+        );
     }
-    return eval_w_exact<Order>(geometry, bvh, px, py, pz);
-}
-
-template <int Order, EvalMode Mode>
-__device__ inline gwn::detail::gwn_query_vec3<Real> eval_grad_w(
-    gwn::gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn::gwn_bvh4_topology_accessor<Real, Index> const &bvh,
-    gwn::gwn_bvh4_moment_accessor<Order, Real, Index> const &moment_tree, Real const px,
-    Real const py, Real const pz, Real const accuracy_scale
-) noexcept {
-    if constexpr (Mode == EvalMode::taylor) {
-        return gwn::detail::gwn_winding_gradient_point_bvh_taylor_impl<
-            Order, k_width, Real, Index, k_stack>(geometry, bvh, moment_tree, px, py, pz, accuracy_scale);
-    }
-
-    // Test-only exact fallback: finite-difference gradient of exact winding.
-    Real const h = Real(1e-4);
-    Real const inv_2h = Real(0.5) / h;
-    Real const wxp = eval_w_exact<Order>(geometry, bvh, px + h, py, pz);
-    Real const wxm = eval_w_exact<Order>(geometry, bvh, px - h, py, pz);
-    Real const wyp = eval_w_exact<Order>(geometry, bvh, px, py + h, pz);
-    Real const wym = eval_w_exact<Order>(geometry, bvh, px, py - h, pz);
-    Real const wzp = eval_w_exact<Order>(geometry, bvh, px, py, pz + h);
-    Real const wzm = eval_w_exact<Order>(geometry, bvh, px, py, pz - h);
-    return gwn::detail::gwn_query_vec3<Real>(
-        (wxp - wxm) * inv_2h, (wyp - wym) * inv_2h, (wzp - wzm) * inv_2h
-    );
+    return result;
 }
 
 template <int Order, EvalMode Mode>
@@ -173,8 +162,9 @@ __device__ inline TraceDiagnostic trace_reference_semantics(
         Real const py = ray_oy + t_eval * ray_dy;
         Real const pz = ray_oz + t_eval * ray_dz;
 
-        Real const w =
-            eval_w<Order, Mode>(geometry, bvh, moment_tree, px, py, pz, accuracy_scale);
+        auto const wg =
+            eval_w_and_grad<Order, Mode>(geometry, bvh, moment_tree, px, py, pz, accuracy_scale);
+        Real const w = wg.winding;
         Real const omega = k_four_pi * w;
         Real const wrapped = gwn::detail::gwn_glsl_mod<Real>(omega - target_omega, k_four_pi);
         Real const lower_levelset = Real(0);
@@ -184,8 +174,7 @@ __device__ inline TraceDiagnostic trace_reference_semantics(
         Real const dist = (dist_lo < dist_hi) ? dist_lo : dist_hi;
         diag.last_dist = dist;
 
-        gwn::detail::gwn_query_vec3<Real> const grad_w =
-            eval_grad_w<Order, Mode>(geometry, bvh, moment_tree, px, py, pz, accuracy_scale);
+        gwn::detail::gwn_query_vec3<Real> const grad_w = wg.gradient;
         Real const grad_w_mag =
             diag_sqrt(grad_w.x * grad_w.x + grad_w.y * grad_w.y + grad_w.z * grad_w.z);
         Real const grad_omega_mag = k_four_pi * grad_w_mag;
