@@ -55,9 +55,7 @@ gwn::gwn_status build_facade_for_builder(
     );
 }
 
-// ---------------------------------------------------------------------------
 // Voxel grid helpers (unique to correctness tests).
-// ---------------------------------------------------------------------------
 
 struct MeshBounds {
     Real min_x{Real(0)};
@@ -96,9 +94,7 @@ struct RunningErrorStats {
     std::size_t over_threshold{0};
 };
 
-// ---------------------------------------------------------------------------
 // Helpers.
-// ---------------------------------------------------------------------------
 
 [[nodiscard]] MeshBounds compute_mesh_bounds(HostMesh const &mesh) {
     MeshBounds bounds{};
@@ -351,9 +347,7 @@ summarize_error(std::span<Real const> const lhs, std::span<Real const> const rhs
     return summary;
 }
 
-// ---------------------------------------------------------------------------
 // Integration Tests.
-// ---------------------------------------------------------------------------
 
 template <int Order> void run_voxel_rebuild_consistency_test() {
     static_assert(Order == 1 || Order == 2);

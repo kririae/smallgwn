@@ -6,16 +6,12 @@
 
 #include "test_fixtures.hpp"
 
-// ---------------------------------------------------------------------------
 // Stream binding tests for owning objects (geometry, bvh topology, bvh data).
 // Migrated from parity_scaffold and expanded.
-// ---------------------------------------------------------------------------
 
 using gwn::tests::CudaStreamFixture;
 
-// ---------------------------------------------------------------------------
 // gwn_stream_mixin basic behavior.
-// ---------------------------------------------------------------------------
 
 TEST(smallgwn_unit_stream_mixin, default_stream_is_legacy) {
     gwn::gwn_stream_mixin mixin;
@@ -24,7 +20,7 @@ TEST(smallgwn_unit_stream_mixin, default_stream_is_legacy) {
 
 TEST(smallgwn_unit_stream_mixin, set_stream_changes_value) {
     gwn::gwn_stream_mixin mixin;
-    // Use a sentinel value cast — we don't need a real stream for this test.
+    // Use a sentinel value cast, we don't need a real stream for this test.
     cudaStream_t const fake = reinterpret_cast<cudaStream_t>(uintptr_t(0xDEAD));
     mixin.set_stream(fake);
     EXPECT_EQ(mixin.stream(), fake);
@@ -42,9 +38,7 @@ TEST(smallgwn_unit_stream_mixin, swap_exchanges_streams) {
     EXPECT_EQ(b.stream(), fake_a);
 }
 
-// ---------------------------------------------------------------------------
 // gwn_geometry_object stream binding.
-// ---------------------------------------------------------------------------
 
 TEST_F(CudaStreamFixture, geometry_object_default_stream) {
     gwn::gwn_geometry_object<float, std::uint32_t> geometry;
@@ -66,9 +60,7 @@ TEST_F(CudaStreamFixture, geometry_object_clear_rebinds_stream) {
     EXPECT_EQ(geometry.stream(), stream_b_);
 }
 
-// ---------------------------------------------------------------------------
 // gwn_bvh4_topology_object stream binding.
-// ---------------------------------------------------------------------------
 
 TEST_F(CudaStreamFixture, bvh_object_default_stream) {
     gwn::gwn_bvh4_topology_object<float, std::uint32_t> bvh;
@@ -88,9 +80,7 @@ TEST_F(CudaStreamFixture, bvh_object_clear_rebinds_stream) {
     EXPECT_EQ(bvh.stream(), stream_b_);
 }
 
-// ---------------------------------------------------------------------------
 // gwn_bvh4_moment_object stream binding.
-// ---------------------------------------------------------------------------
 
 TEST_F(CudaStreamFixture, data_object_default_stream) {
     gwn::gwn_bvh4_moment_object<0, float, std::uint32_t> data;
@@ -110,9 +100,7 @@ TEST_F(CudaStreamFixture, data_object_clear_rebinds_stream) {
     EXPECT_EQ(data.stream(), stream_b_);
 }
 
-// ---------------------------------------------------------------------------
 // Move semantics for owning objects.
-// ---------------------------------------------------------------------------
 
 TEST_F(CudaStreamFixture, geometry_move_construct) {
     gwn::gwn_geometry_object<float, std::uint32_t> src;

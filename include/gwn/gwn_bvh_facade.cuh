@@ -83,7 +83,7 @@ gwn_status gwn_bvh_facade_build_topology_aabb_hploc(
 }
 
 /// \brief Build BVH topology via LBVH, refit AABB bounds, and compute Taylor
-///        moments — all in a single call.
+///        moments, all in a single call.
 ///
 /// Equivalent to calling \c gwn_bvh_facade_build_topology_aabb_lbvh followed
 /// by \c gwn_bvh_refit_moment on the same stream.
@@ -122,7 +122,7 @@ gwn_status gwn_bvh_facade_build_topology_aabb_moment_lbvh(
 }
 
 /// \brief Build BVH topology via H-PLOC, refit AABB bounds, and compute Taylor
-///        moments — all in a single call.
+///        moments, all in a single call.
 ///
 /// Equivalent to calling \c gwn_bvh_facade_build_topology_aabb_hploc followed
 /// by \c gwn_bvh_refit_moment on the same stream.

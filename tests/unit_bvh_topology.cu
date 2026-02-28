@@ -10,9 +10,7 @@
 #include "test_fixtures.hpp"
 #include "test_utils.hpp"
 
-// ---------------------------------------------------------------------------
-// BVH topology build unit tests — structure invariants, single/small meshes.
-// ---------------------------------------------------------------------------
+// BVH topology build unit tests, structure invariants, single/small meshes.
 
 using Real = gwn::tests::Real;
 using Index = gwn::tests::Index;
@@ -86,9 +84,7 @@ gwn::gwn_status build_topology(
 
 } // namespace
 
-// ---------------------------------------------------------------------------
 // Single triangle produces a leaf BVH.
-// ---------------------------------------------------------------------------
 
 TEST_F(CudaFixture, single_triangle_bvh) {
     std::vector<Real> vx{1.0f, 0.0f, 0.0f};
@@ -113,9 +109,7 @@ TEST_F(CudaFixture, single_triangle_bvh) {
     verify_bvh_structure<4>(acc, 1);
 }
 
-// ---------------------------------------------------------------------------
 // Two-triangle mesh.
-// ---------------------------------------------------------------------------
 
 TEST_F(CudaFixture, two_triangle_bvh) {
     std::vector<Real> vx{1.0f, 0.0f, 0.0f, -1.0f};
@@ -137,9 +131,7 @@ TEST_F(CudaFixture, two_triangle_bvh) {
     verify_bvh_structure<4>(bvh.accessor(), 2);
 }
 
-// ---------------------------------------------------------------------------
-// Octahedron (8 triangles) — ensures internal nodes.
-// ---------------------------------------------------------------------------
+// Octahedron (8 triangles), ensures internal nodes.
 
 TEST_F(CudaFixture, octahedron_8_triangles) {
     std::vector<Real> vx{1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 0.0f};
@@ -166,9 +158,7 @@ TEST_F(CudaFixture, octahedron_8_triangles) {
     verify_bvh_structure<4>(acc, 8);
 }
 
-// ---------------------------------------------------------------------------
 // Width=2 and Width=8 builds.
-// ---------------------------------------------------------------------------
 
 TEST_F(CudaFixture, binary_bvh_build) {
     std::vector<Real> vx{1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 0.0f};
@@ -230,9 +220,7 @@ TEST_F(CudaFixture, wide6_bvh_build) {
     verify_bvh_structure<6>(bvh6.accessor(), 8);
 }
 
-// ---------------------------------------------------------------------------
 // Degenerate: all-coplanar triangles (zero-thickness BVH).
-// ---------------------------------------------------------------------------
 
 TEST_F(CudaFixture, coplanar_triangles_build_succeeds) {
     // Two triangles in the xy-plane (z=0).
@@ -253,9 +241,7 @@ TEST_F(CudaFixture, coplanar_triangles_build_succeeds) {
     verify_bvh_structure<4>(bvh.accessor(), 2);
 }
 
-// ---------------------------------------------------------------------------
 // Degenerate: zero-area triangle (two identical vertices).
-// ---------------------------------------------------------------------------
 
 TEST_F(CudaFixture, zero_area_triangle_build_succeeds) {
     std::vector<Real> vx{0.0f, 0.0f, 1.0f};
@@ -274,9 +260,7 @@ TEST_F(CudaFixture, zero_area_triangle_build_succeeds) {
     ASSERT_TRUE(bvh.has_data());
 }
 
-// ---------------------------------------------------------------------------
 // Rebuild replaces previous BVH.
-// ---------------------------------------------------------------------------
 
 TEST_F(CudaFixture, rebuild_replaces_previous_bvh) {
     std::vector<Real> vx{1.0f, 0.0f, 0.0f};
@@ -299,9 +283,7 @@ TEST_F(CudaFixture, rebuild_replaces_previous_bvh) {
     verify_bvh_structure<4>(bvh.accessor(), 1);
 }
 
-// ---------------------------------------------------------------------------
 // Clear resets BVH.
-// ---------------------------------------------------------------------------
 
 TEST_F(CudaFixture, clear_resets_bvh) {
     std::vector<Real> vx{1.0f, 0.0f, 0.0f};

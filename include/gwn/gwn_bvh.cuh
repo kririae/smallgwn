@@ -6,7 +6,7 @@
 /// This header defines the full BVH type hierarchy used by \c smallgwn:
 /// - SoA node structs for topology, AABB bounds, and Taylor moments.
 /// - Non-owning accessor types (\c gwn_bvh_topology_tree_accessor etc.) that
-///   hold \c cuda::std::span views into device memory — safe to copy to device.
+///   hold \c cuda::std::span views into device memory, safe to copy to device.
 /// - RAII owning-object wrappers (\c gwn_bvh_topology_tree_object etc.) that
 ///   manage device allocations, implement the \c gwn_stream_mixin binding
 ///   protocol, and are non-copyable.
@@ -274,15 +274,15 @@ struct gwn_bvh_moment_tree_accessor {
     }
 };
 
-/// \brief Topology accessor alias — use when \c Width is a template parameter.
+/// \brief Topology accessor alias, use when \c Width is a template parameter.
 template <int Width, gwn_real_type Real, gwn_index_type Index = std::uint32_t>
 using gwn_bvh_topology_accessor = gwn_bvh_topology_tree_accessor<Width, Real, Index>;
 
-/// \brief AABB accessor alias — use when \c Width is a template parameter.
+/// \brief AABB accessor alias, use when \c Width is a template parameter.
 template <int Width, gwn_real_type Real, gwn_index_type Index = std::uint32_t>
 using gwn_bvh_aabb_accessor = gwn_bvh_aabb_tree_accessor<Width, Real, Index>;
 
-/// \brief Moment accessor alias — use when \c Width is a template parameter.
+/// \brief Moment accessor alias, use when \c Width is a template parameter.
 template <int Width, int Order, gwn_real_type Real, gwn_index_type Index = std::uint32_t>
 using gwn_bvh_moment_accessor = gwn_bvh_moment_tree_accessor<Width, Order, Real, Index>;
 

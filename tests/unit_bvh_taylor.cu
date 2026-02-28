@@ -11,10 +11,8 @@
 #include "test_fixtures.hpp"
 #include "test_utils.hpp"
 
-// ---------------------------------------------------------------------------
-// BVH Taylor data build unit tests — verifies Taylor moment data existence
+// BVH Taylor data build unit tests, verifies Taylor moment data existence
 // and basic validity for Order=0, Order=1, and Order=2.
-// ---------------------------------------------------------------------------
 
 using Real = gwn::tests::Real;
 using Index = gwn::tests::Index;
@@ -68,9 +66,7 @@ gwn::gwn_status build_taylor_tree(
 
 } // namespace
 
-// ---------------------------------------------------------------------------
-// Order 0 — build succeeds.
-// ---------------------------------------------------------------------------
+// Order 0, build succeeds.
 
 TEST_F(CudaFixture, taylor_order0_build_marks_accessor) {
     auto maybe_geo = upload_octahedron();
@@ -90,9 +86,7 @@ TEST_F(CudaFixture, taylor_order0_build_marks_accessor) {
     EXPECT_TRUE(data.has_data());
 }
 
-// ---------------------------------------------------------------------------
-// Order 1 — build succeeds.
-// ---------------------------------------------------------------------------
+// Order 1, build succeeds.
 
 TEST_F(CudaFixture, taylor_order1_build_marks_accessor) {
     auto maybe_geo = upload_octahedron();
@@ -112,9 +106,7 @@ TEST_F(CudaFixture, taylor_order1_build_marks_accessor) {
     EXPECT_TRUE(data.has_data());
 }
 
-// ---------------------------------------------------------------------------
-// Order 2 — build succeeds.
-// ---------------------------------------------------------------------------
+// Order 2, build succeeds.
 
 TEST_F(CudaFixture, taylor_order2_build_marks_accessor) {
     auto maybe_geo = upload_octahedron();
@@ -182,9 +174,7 @@ TEST_F(CudaFixture, taylor_order2_build_marks_accessor_hploc) {
     EXPECT_TRUE(data.has_data());
 }
 
-// ---------------------------------------------------------------------------
 // Rebuild path keeps requested order data valid.
-// ---------------------------------------------------------------------------
 
 TEST_F(CudaFixture, taylor_rebuild_order1_marks_accessor) {
     auto maybe_geo = upload_octahedron();
@@ -222,18 +212,14 @@ TEST_F(CudaFixture, taylor_rebuild_order2_marks_accessor) {
     EXPECT_TRUE(data.has_data());
 }
 
-// ---------------------------------------------------------------------------
 // Default data accessor is empty.
-// ---------------------------------------------------------------------------
 
 TEST(smallgwn_unit_bvh_taylor, default_data_is_empty) {
     gwn::gwn_bvh_moment_tree_accessor<4, 0, Real, Index> data_acc{};
     EXPECT_TRUE(data_acc.empty());
 }
 
-// ---------------------------------------------------------------------------
 // Taylor data nodes have finite values (not NaN).
-// ---------------------------------------------------------------------------
 
 TEST_F(CudaFixture, taylor_order0_nodes_are_finite) {
     auto maybe_geo = upload_octahedron();
@@ -282,9 +268,7 @@ TEST_F(CudaFixture, taylor_order0_nodes_are_finite) {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Taylor data clear resets state.
-// ---------------------------------------------------------------------------
 
 TEST_F(CudaFixture, taylor_data_clear_resets) {
     auto maybe_geo = upload_octahedron();
@@ -306,9 +290,7 @@ TEST_F(CudaFixture, taylor_data_clear_resets) {
     EXPECT_TRUE(data.accessor().empty());
 }
 
-// ---------------------------------------------------------------------------
-// Single triangle — Taylor build with trivial geometry.
-// ---------------------------------------------------------------------------
+// Single triangle, Taylor build with trivial geometry.
 
 TEST_F(CudaFixture, taylor_single_triangle) {
     std::vector<Real> vx{1.0f, 0.0f, 0.0f};

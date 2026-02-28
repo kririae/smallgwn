@@ -24,9 +24,7 @@ using gwn::tests::wrapped_angle_residual;
 
 namespace {
 
-// ---------------------------------------------------------------------------
-// GPU helper — builds BVH, uploads rays, launches Harnack trace, copies back.
-// ---------------------------------------------------------------------------
+// GPU helper, builds BVH, uploads rays, launches Harnack trace, copies back.
 
 template <int Order, class Mesh>
 bool run_harnack_trace(
@@ -209,9 +207,7 @@ bool run_harnack_trace_angle(
     return true;
 }
 
-// ---------------------------------------------------------------------------
-// GPU helper — evaluate winding number at specific points for cross-checking.
-// ---------------------------------------------------------------------------
+// GPU helper, evaluate winding number at specific points for cross-checking.
 
 template <int Order, class Mesh>
 bool run_winding_query(
@@ -383,9 +379,7 @@ inline Real cpu_edge_distance(OctahedronMesh const &mesh, Real const qx, Real co
 
 } // namespace
 
-// ---------------------------------------------------------------------------
 // Test 1: Harnack step-size formula (CPU-only math validation).
-// ---------------------------------------------------------------------------
 TEST(HarnackStepSize, known_values) {
     using namespace gwn::detail;
 
@@ -424,9 +418,7 @@ TEST(HarnackStepSize, known_values) {
     EXPECT_NEAR(rho, Real(3) * Real(1e-4), Real(1e-6));
 }
 
-// ---------------------------------------------------------------------------
 // Test 1b: Final constrained step must never exceed the safe-ball radius.
-// ---------------------------------------------------------------------------
 TEST(HarnackStepSize, constrained_step_never_exceeds_radius) {
     using namespace gwn::detail;
 
@@ -436,13 +428,11 @@ TEST(HarnackStepSize, constrained_step_never_exceeds_radius) {
     EXPECT_LE(rho, R);
 }
 
-// ---------------------------------------------------------------------------
 // Test 2: Ray parameterization should follow reference semantics.
 //
 // Reference tracer does NOT normalize ray direction; it scales the step by
 // 1/|D|. Therefore scaling ray direction should scale hit t inversely while
 // preserving the world-space hit location.
-// ---------------------------------------------------------------------------
 TEST_F(CudaFixture, harnack_ray_parameterization_nonunit_direction) {
     HalfOctahedronMesh mesh;
 
@@ -467,9 +457,7 @@ TEST_F(CudaFixture, harnack_ray_parameterization_nonunit_direction) {
     EXPECT_NEAR(t[0] / Real(2), t[1], Real(2e-2));
 }
 
-// ---------------------------------------------------------------------------
 // Test 3: Open-mesh convergence against wrapped target level set.
-// ---------------------------------------------------------------------------
 TEST_F(CudaFixture, harnack_convergence_at_mesh_surface) {
     HalfOctahedronMesh mesh;
 
@@ -517,14 +505,12 @@ TEST_F(CudaFixture, harnack_convergence_at_mesh_surface) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Test 4: Surface normal sanity — at hit points where the gradient is
+// Test 4: Surface normal sanity, at hit points where the gradient is
 //         well-defined, the returned normal should be approximately unit
 //         length and should oppose the incoming ray direction.
 //
 // Uses axis-aligned rays on the half-octahedron.  Rays through mesh
 // vertices (where the gradient may be singular) are skipped.
-// ---------------------------------------------------------------------------
 TEST_F(CudaFixture, harnack_normal_sanity) {
     HalfOctahedronMesh mesh;
 
@@ -563,9 +549,7 @@ TEST_F(CudaFixture, harnack_normal_sanity) {
     EXPECT_GE(valid_normals, 1) << "No rays produced valid normals";
 }
 
-// ---------------------------------------------------------------------------
-// Test 5: No-hit — rays pointing away from the mesh should not find a hit.
-// ---------------------------------------------------------------------------
+// Test 5: No-hit, rays pointing away from the mesh should not find a hit.
 TEST_F(CudaFixture, harnack_no_hit_rays) {
     OctahedronMesh mesh;
 
@@ -588,9 +572,7 @@ TEST_F(CudaFixture, harnack_no_hit_rays) {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Test 7: Mismatched output spans return error.
-// ---------------------------------------------------------------------------
 TEST_F(CudaFixture, harnack_mismatched_spans_returns_error) {
     gwn::gwn_geometry_accessor<Real, Index> geometry{};
     gwn::gwn_bvh4_topology_accessor<Real, Index> bvh{};
@@ -606,15 +588,13 @@ TEST_F(CudaFixture, harnack_mismatched_spans_returns_error) {
             geometry, bvh, aabb, moment,
             empty, empty, empty,  // origins (0)
             empty, empty, empty,  // dirs (0)
-            out2,                 // output_t (2) — MISMATCH
+            out2,                 // output_t (2), MISMATCH
             empty_out, empty_out, empty_out
         );
     EXPECT_EQ(s.error(), gwn::gwn_error::invalid_argument);
 }
 
-// ---------------------------------------------------------------------------
 // Test 9: Invalid non-empty accessors/spans must be rejected pre-launch.
-// ---------------------------------------------------------------------------
 TEST_F(CudaFixture, harnack_batch_rejects_invalid_accessors) {
     gwn::gwn_geometry_accessor<Real, Index> geometry{};
     gwn::gwn_bvh4_topology_accessor<Real, Index> bvh{};
@@ -736,9 +716,7 @@ TEST_F(CudaFixture, harnack_angle_half_octahedron_hits) {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Cube geometry tests
-// ---------------------------------------------------------------------------
 
 TEST_F(CudaFixture, harnack_cube_closed_hits) {
     CubeMesh mesh;

@@ -12,7 +12,7 @@
 #include "test_fixtures.hpp"
 #include "test_utils.hpp"
 
-// Winding-number gradient unit tests — validate BVH-accelerated Taylor
+// Winding-number gradient unit tests, validate BVH-accelerated Taylor
 // gradient against CPU finite differences.
 //
 // Design notes:
@@ -29,9 +29,7 @@ namespace {
 // The gradient is considered non-trivial if its magnitude exceeds this.
 constexpr Real k_min_nontrivial_mag = 1e-3f;
 
-// ---------------------------------------------------------------------------
 // CPU finite-difference gradient helper.
-// ---------------------------------------------------------------------------
 template <class Real_, class Index_>
 void reference_winding_gradient_fd(
     std::span<Real_ const> vx, std::span<Real_ const> vy, std::span<Real_ const> vz,
@@ -49,12 +47,10 @@ void reference_winding_gradient_fd(
     gz = (w(qx, qy, qz + h) - w(qx, qy, qz - h)) / (Real_(2) * h);
 }
 
-// ---------------------------------------------------------------------------
 // Octahedron mesh (8 triangles, closed, circumradius = 1).
 // NOTE: perfectly symmetric → monopole moment = 0 → far-field Taylor gradient
 //       is trivially 0 for symmetric queries.  Do not use for Taylor accuracy
 //       testing.  Use for near-surface (leaf/brute-force) testing only.
-// ---------------------------------------------------------------------------
 struct OctahedronMesh {
     static constexpr int k_nv = 6;
     static constexpr int k_nt = 8;
@@ -73,11 +69,9 @@ struct OctahedronMesh {
     std::span<Index const> si2() const { return {i2.data(), i2.size()}; }
 };
 
-// ---------------------------------------------------------------------------
 // Half-octahedron mesh (4 upper triangles, ASYMMETRIC, non-zero monopole).
 // The area-weighted normal sum points in +z, giving non-trivial far-field
 // gradient.  Use this for testing the Taylor approximation path.
-// ---------------------------------------------------------------------------
 struct HalfOctahedronMesh {
     // Top 4 faces of the octahedron: they share the +z vertex (index 4).
     static constexpr int k_nv = 5;
@@ -97,10 +91,8 @@ struct HalfOctahedronMesh {
     std::span<Index const> si2() const { return {i2.data(), i2.size()}; }
 };
 
-// ---------------------------------------------------------------------------
 // Helper: upload geometry, build BVH, query gradient, copy back.
 // Returns true on success; skips if CUDA unavailable.
-// ---------------------------------------------------------------------------
 template <int Order, std::size_t Nv, std::size_t Nt>
 bool run_gradient_query(
     std::array<Real, Nv> const &vx, std::array<Real, Nv> const &vy,
@@ -181,15 +173,13 @@ bool run_gradient_query(
 
 } // namespace
 
-// ---------------------------------------------------------------------------
-// Test 1: Near-surface half-octahedron — exercises BVH leaf (brute-force) path.
+// Test 1: Near-surface half-octahedron, exercises BVH leaf (brute-force) path.
 //
 // The half-octahedron is an OPEN mesh (4 upper triangles only).  Its winding
 // number is not constant anywhere, so ∇w is non-trivially large near the mesh
 // surface.  Queries above the mesh faces at small height (z=0.2 above the
 // faces at z≈0) have large gradients.  accuracy_scale=1000 forces the BVH
 // traversal to use brute-force leaf evaluation on every node.
-// ---------------------------------------------------------------------------
 TEST_F(CudaFixture, gradient_near_surface_half_octahedron_brute_force) {
     constexpr Real k_tol = 5e-3f;
     constexpr Real k_fd_h = 1e-3f;
@@ -219,7 +209,7 @@ TEST_F(CudaFixture, gradient_near_surface_half_octahedron_brute_force) {
             ++nontrivial;
     }
     ASSERT_GE(nontrivial, static_cast<int>(n / 2))
-        << "reference gradient is trivially small at most query points — test design issue";
+        << "reference gradient is trivially small at most query points, test design issue";
 
     // GPU gradient with large accuracy_scale to force brute-force leaves.
     std::vector<Real> gpu_gx, gpu_gy, gpu_gz;
@@ -239,15 +229,13 @@ TEST_F(CudaFixture, gradient_near_surface_half_octahedron_brute_force) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Test 2: Single-triangle gradient — isolated Biot-Savart formula test.
+// Test 2: Single-triangle gradient, isolated Biot-Savart formula test.
 //
 // Triangle in xy-plane: (0,0,0),(1,0,0),(0,1,0), normal = +z.
 // Query is above the triangle interior.  The gradient is large and direction-
 // ally predictable (should point mostly toward the centroid in the xy-plane).
 // This test is a direct unit test of gwn_gradient_solid_angle_triangle_impl
 // via the public batch API with a single-triangle mesh.
-// ---------------------------------------------------------------------------
 TEST_F(CudaFixture, gradient_single_triangle_brute_force) {
     constexpr Real k_tol = 2e-3f;
     constexpr Real k_fd_h = 1e-3f;
@@ -308,8 +296,7 @@ TEST_F(CudaFixture, gradient_single_triangle_brute_force) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Test 3: Far-field half-octahedron — exercises the Taylor approximation path.
+// Test 3: Far-field half-octahedron, exercises the Taylor approximation path.
 //
 // The half-octahedron is asymmetric: its area-weighted normal sum N ≠ 0
 // (points in +z direction), so the Order-0 Taylor expansion gives a non-zero
@@ -317,7 +304,6 @@ TEST_F(CudaFixture, gradient_single_triangle_brute_force) {
 // criterion (r > accuracy_scale * max_cluster_radius ≈ 2 × 1), so the Taylor
 // expansion is actually used instead of brute-force.  This is the primary
 // test that the Taylor gradient coefficients are correct.
-// ---------------------------------------------------------------------------
 TEST_F(CudaFixture, gradient_order0_half_octahedron_far_field_taylor) {
     constexpr Real k_tol = 3e-3f;
     constexpr Real k_fd_h = 1e-3f;
@@ -345,7 +331,7 @@ TEST_F(CudaFixture, gradient_order0_half_octahedron_far_field_taylor) {
     }
     // At least some far-field queries must have non-trivial gradients.
     ASSERT_GE(nontrivial, 2)
-        << "half-octahedron far-field reference gradients are trivially small — "
+        << "half-octahedron far-field reference gradients are trivially small, "
            "mesh symmetry cancelled the monopole? Test design issue.";
 
     std::vector<Real> gpu_gx, gpu_gy, gpu_gz;
@@ -389,7 +375,7 @@ TEST_F(CudaFixture, gradient_order1_half_octahedron_far_field_taylor) {
             ++nontrivial;
     }
     ASSERT_GE(nontrivial, 2)
-        << "reference gradients are trivially small — test design issue";
+        << "reference gradients are trivially small, test design issue";
 
     std::vector<Real> gpu_gx, gpu_gy, gpu_gz;
     if (!run_gradient_query<1>(
@@ -408,9 +394,7 @@ TEST_F(CudaFixture, gradient_order1_half_octahedron_far_field_taylor) {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Test 4: Order-1 more accurate than Order-0 for half-octahedron far field.
-// ---------------------------------------------------------------------------
 TEST_F(CudaFixture, gradient_order1_more_accurate_than_order0_half_octahedron) {
     constexpr Real k_fd_h = 1e-4f;
 
@@ -457,10 +441,8 @@ TEST_F(CudaFixture, gradient_order1_more_accurate_than_order0_half_octahedron) {
         << " (err0=" << max_err0 << " err1=" << max_err1 << ")";
 }
 
-// ---------------------------------------------------------------------------
-// Test 5: Order-2 half-octahedron far-field Taylor — tests the Order-2
+// Test 5: Order-2 half-octahedron far-field Taylor, tests the Order-2
 //         gradient formula (4th derivative of K contracted with N_{ijk}).
-// ---------------------------------------------------------------------------
 TEST_F(CudaFixture, gradient_order2_half_octahedron_far_field_taylor) {
     constexpr Real k_tol = 5e-4f;
     constexpr Real k_fd_h = 1e-3f;
@@ -485,7 +467,7 @@ TEST_F(CudaFixture, gradient_order2_half_octahedron_far_field_taylor) {
             ++nontrivial;
     }
     ASSERT_GE(nontrivial, 2)
-        << "reference gradients are trivially small — test design issue";
+        << "reference gradients are trivially small, test design issue";
 
     std::vector<Real> gpu_gx, gpu_gy, gpu_gz;
     if (!run_gradient_query<2>(
@@ -504,9 +486,7 @@ TEST_F(CudaFixture, gradient_order2_half_octahedron_far_field_taylor) {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Test 6: Order-2 more accurate than Order-1 for half-octahedron far field.
-// ---------------------------------------------------------------------------
 TEST_F(CudaFixture, gradient_order2_more_accurate_than_order1_half_octahedron) {
     constexpr Real k_fd_h = 1e-4f;
 
@@ -553,12 +533,10 @@ TEST_F(CudaFixture, gradient_order2_more_accurate_than_order1_half_octahedron) {
         << " (err1=" << max_err1 << " err2=" << max_err2 << ")";
 }
 
-// ---------------------------------------------------------------------------
 // Test 7: Closed-mesh interior points should have near-zero gradient.
 //
 // For a consistently oriented closed mesh, winding number is constant (=1)
 // at interior points. The exact interior gradient is therefore zero.
-// ---------------------------------------------------------------------------
 TEST_F(CudaFixture, gradient_closed_octahedron_interior_near_zero) {
     OctahedronMesh mesh;
 
@@ -580,9 +558,7 @@ TEST_F(CudaFixture, gradient_closed_octahedron_interior_near_zero) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Test 8: Error-handling — mismatched output spans.
-// ---------------------------------------------------------------------------
+// Test 8: Error-handling, mismatched output spans.
 TEST_F(CudaFixture, gradient_mismatched_output_returns_error) {
     gwn::gwn_geometry_accessor<Real, Index> accessor{};
     gwn::gwn_bvh4_topology_accessor<Real, Index> bvh{};

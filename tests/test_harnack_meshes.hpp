@@ -11,9 +11,7 @@ namespace gwn::tests {
 using Real = gwn::tests::Real;
 using Index = gwn::tests::Index;
 
-// ---------------------------------------------------------------------------
 // Mesh definitions shared across unit / integration / behavior-match tests.
-// ---------------------------------------------------------------------------
 
 struct OctahedronMesh {
     static constexpr std::size_t Nv = 6;
@@ -69,9 +67,7 @@ struct OpenCubeMesh {
     std::array<Index, 10> i2{1,2, 7,3, 6,5, 5,4, 6,2};
 };
 
-// ---------------------------------------------------------------------------
 // Shared utilities
-// ---------------------------------------------------------------------------
 
 inline Real half_octahedron_face_z(Real const x, Real const y) {
     return Real(1) - std::abs(x) - std::abs(y);

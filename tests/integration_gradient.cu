@@ -35,11 +35,9 @@ using Real = gwn::tests::Real;
 using Index = gwn::tests::Index;
 using gwn::tests::CudaFixture;
 
-// ---------------------------------------------------------------------------
-// Half-octahedron mesh — 5 vertices, 4 triangles, upper faces only.
+// Half-octahedron mesh, 5 vertices, 4 triangles, upper faces only.
 // ASYMMETRIC: area-weighted normal sum N ≠ 0 (points in +z), so both
 // Order-0 and Order-1 Taylor produce non-trivial gradients everywhere.
-// ---------------------------------------------------------------------------
 struct HalfOctaMesh {
     static constexpr std::size_t k_nv = 5;
     static constexpr std::size_t k_nt = 4;
@@ -51,9 +49,7 @@ struct HalfOctaMesh {
     std::array<Index, k_nt> i2{4, 4, 4, 4};
 };
 
-// ---------------------------------------------------------------------------
 // CPU finite-difference gradient of the winding number (6-point stencil).
-// ---------------------------------------------------------------------------
 void fd_gradient(
     std::span<Real const> vx, std::span<Real const> vy, std::span<Real const> vz,
     std::span<Index const> i0, std::span<Index const> i1, std::span<Index const> i2, Real const qx,
@@ -69,10 +65,8 @@ void fd_gradient(
     gz = (w(qx, qy, qz + h) - w(qx, qy, qz - h)) / (Real(2) * h);
 }
 
-// ---------------------------------------------------------------------------
 // Build BVH and run GPU gradient query for a given Order.
 // Returns false if CUDA is unavailable.
-// ---------------------------------------------------------------------------
 template <int Order, class Mesh>
 bool run_gpu_gradient(
     Mesh const &mesh, std::vector<Real> const &qx, std::vector<Real> const &qy,
@@ -142,9 +136,7 @@ bool run_gpu_gradient(
     return true;
 }
 
-// ---------------------------------------------------------------------------
 // Compute per-component max error.
-// ---------------------------------------------------------------------------
 Real max_error_3d(
     std::vector<Real> const &ax, std::vector<Real> const &ay, std::vector<Real> const &az,
     std::vector<Real> const &bx, std::vector<Real> const &by, std::vector<Real> const &bz
@@ -160,9 +152,7 @@ Real max_error_3d(
 
 } // namespace
 
-// ---------------------------------------------------------------------------
 // Main integration test: 5×5×5 lattice grid around the half-octahedron.
-// ---------------------------------------------------------------------------
 TEST_F(CudaFixture, integration_gradient_half_octahedron_order0_and_order1) {
     constexpr Real k_fd_h = 1e-3f; // FD step (float: avoid cancellation)
     constexpr Real k_accuracy_scale = Real(2);
@@ -222,9 +212,9 @@ TEST_F(CudaFixture, integration_gradient_half_octahedron_order0_and_order1) {
     double const nontrivial_frac = static_cast<double>(nontrivial_count) / static_cast<double>(n);
     ASSERT_GE(nontrivial_frac, static_cast<double>(k_nontrivial_frac))
         << "Only " << nontrivial_count << "/" << n << " query points have |FD gradient| > "
-        << k_nontrivial_mag << " — test may be a false positive due to geometric symmetry";
+        << k_nontrivial_mag << ", test may be a false positive due to geometric symmetry";
 
-    // --- GPU Order-0 ---
+    // GPU Order-0
     std::vector<Real> gpu0_gx, gpu0_gy, gpu0_gz;
     if (!run_gpu_gradient<0>(mesh, qx, qy, qz, gpu0_gx, gpu0_gy, gpu0_gz, k_accuracy_scale))
         GTEST_SKIP() << "CUDA unavailable";
@@ -233,7 +223,7 @@ TEST_F(CudaFixture, integration_gradient_half_octahedron_order0_and_order1) {
     std::cout << "[gradient integration] Order-0 max component error: " << err0 << "\n";
     EXPECT_LE(err0, k_order0_max_err) << "Order-0 gradient max error exceeds threshold";
 
-    // --- GPU Order-1 ---
+    // GPU Order-1
     std::vector<Real> gpu1_gx, gpu1_gy, gpu1_gz;
     if (!run_gpu_gradient<1>(mesh, qx, qy, qz, gpu1_gx, gpu1_gy, gpu1_gz, k_accuracy_scale))
         GTEST_SKIP() << "CUDA unavailable";
@@ -246,7 +236,7 @@ TEST_F(CudaFixture, integration_gradient_half_octahedron_order0_and_order1) {
     EXPECT_LE(err1, err0 + 1e-5f) << "Order-1 (" << err1 << ") is less accurate than Order-0 ("
                                   << err0 << ")";
 
-    // --- GPU Order-2 ---
+    // GPU Order-2
     std::vector<Real> gpu2_gx, gpu2_gy, gpu2_gz;
     if (!run_gpu_gradient<2>(mesh, qx, qy, qz, gpu2_gx, gpu2_gy, gpu2_gz, k_accuracy_scale))
         GTEST_SKIP() << "CUDA unavailable";

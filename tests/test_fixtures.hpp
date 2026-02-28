@@ -8,10 +8,8 @@
 
 namespace gwn::tests {
 
-// ---------------------------------------------------------------------------
-// CudaStreamFixture — provides two non-blocking streams and auto-cleanup.
+// CudaStreamFixture, provides two non-blocking streams and auto-cleanup.
 // Skips tests automatically when CUDA is unavailable.
-// ---------------------------------------------------------------------------
 
 class CudaStreamFixture : public ::testing::Test {
 protected:
@@ -42,9 +40,7 @@ protected:
     }
 };
 
-// ---------------------------------------------------------------------------
-// CudaFixture — provides a single default stream + CUDA skip guard.
-// ---------------------------------------------------------------------------
+// CudaFixture, provides a single default stream + CUDA skip guard.
 
 class CudaFixture : public ::testing::Test {
 protected:

@@ -63,9 +63,7 @@ gwn::gwn_status build_facade_for_builder(
     );
 }
 
-// ---------------------------------------------------------------------------
 // Query generation helpers.
-// ---------------------------------------------------------------------------
 
 std::array<std::vector<Real>, 3> make_query_soa(HostMesh const &mesh) {
     Real min_x = std::numeric_limits<Real>::max();
@@ -180,10 +178,8 @@ std::array<std::vector<Real>, 3> make_integration_query_soa(HostMesh const &mesh
     return soa;
 }
 
-// ---------------------------------------------------------------------------
-// BVH structure verification (copied from original — kept local since
+// BVH structure verification (copied from original, kept local since
 // integration tests are the primary user).
-// ---------------------------------------------------------------------------
 
 template <int Width>
 void assert_bvh_structure_wide(
@@ -287,9 +283,7 @@ void assert_bvh_structure(
     assert_bvh_structure_wide<4>(topology4_accessor, primitive_count);
 }
 
-// ---------------------------------------------------------------------------
 // Integration Tests.
-// ---------------------------------------------------------------------------
 
 #if 0
 TEST(smallgwn_integration_model, bvh_exact_batch_matches_cpu_on_common_models) {
@@ -873,7 +867,7 @@ TEST(smallgwn_integration_model, integration_taylor_matches_hdk_cpu_order0_order
     ASSERT_GT(tested_model_count, 0u) << "No valid OBJ models were exercised.";
 }
 
-#if 0  // Exact batch API removed — Taylor-only public surface.
+#if 0  // Exact batch API removed, Taylor-only public surface.
 TEST(smallgwn_integration_model, integration_hploc_exact_and_taylor_consistency_sampled_models) {
     std::vector<std::filesystem::path> const model_paths = gwn::tests::collect_model_paths();
     ASSERT_FALSE(model_paths.empty())

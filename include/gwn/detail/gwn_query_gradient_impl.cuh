@@ -37,13 +37,11 @@ __device__ inline gwn_query_vec3<Real> gwn_winding_gradient_point_exact_impl(
     );
 }
 
-// ---------------------------------------------------------------------------
 // BVH-accelerated Taylor gradient of the winding number.
 //
 // Mirrors gwn_winding_number_point_bvh_taylor_impl but accumulates a vec3.
-// Uses the SAME precomputed moments — only the kernel derivatives increase
+// Uses the SAME precomputed moments, only the kernel derivatives increase
 // by one order.
-// ---------------------------------------------------------------------------
 
 template <int Order, int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity>
 __device__ inline gwn_query_vec3<Real> gwn_winding_gradient_point_bvh_taylor_impl(
@@ -58,9 +56,7 @@ __device__ inline gwn_query_vec3<Real> gwn_winding_gradient_point_bvh_taylor_imp
         .gradient;
 }
 
-// ---------------------------------------------------------------------------
 // Batch functor
-// ---------------------------------------------------------------------------
 
 template <int Order, int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity>
 struct gwn_winding_gradient_batch_bvh_taylor_functor {

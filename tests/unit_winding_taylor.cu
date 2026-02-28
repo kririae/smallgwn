@@ -12,7 +12,7 @@
 #include "test_fixtures.hpp"
 #include "test_utils.hpp"
 
-// Taylor winding number unit tests — far-field accuracy, order comparison,
+// Taylor winding number unit tests, far-field accuracy, order comparison,
 // accuracy_scale behavior.
 
 using Real = gwn::tests::Real;
@@ -86,7 +86,7 @@ void run_taylor_order0_far_field_matches_exact_test(taylor_topology_builder cons
     if (!ctx.ready)
         GTEST_SKIP() << "CUDA unavailable";
 
-    // Far queries — away from the mesh.
+    // Far queries, away from the mesh.
     std::array<Real, 4> const qx{3.5f, -3.0f, 0.0f, 0.0f};
     std::array<Real, 4> const qy{0.0f, 0.0f, 3.5f, -3.0f};
     std::array<Real, 4> const qz{0.0f, 0.0f, 0.0f, 0.0f};
@@ -513,7 +513,7 @@ TEST_F(CudaFixture, taylor_batch_mismatched_query_output) {
     Real dummy[2] = {};
     cuda::std::span<Real> output(dummy, 2);
 
-    // query size=0 but output size=2 — mismatch.
+    // query size=0 but output size=2, mismatch.
     gwn::gwn_status const status = gwn::gwn_compute_winding_number_batch_bvh_taylor<0, Real, Index>(
         accessor, bvh, data, empty, empty, empty, output
     );
@@ -527,7 +527,7 @@ TEST_F(CudaFixture, taylor_empty_query_returns_ok) {
     cuda::std::span<Real const> empty{};
     cuda::std::span<Real> output{};
 
-    // Zero queries, zero output — should succeed (early return).
+    // Zero queries, zero output, should succeed (early return).
     // Note: geometry validator fires first.
     gwn::gwn_status const status = gwn::gwn_compute_winding_number_batch_bvh_taylor<0, Real, Index>(
         accessor, bvh, data, empty, empty, empty, output

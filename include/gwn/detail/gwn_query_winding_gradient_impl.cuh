@@ -12,9 +12,7 @@
 namespace gwn {
 namespace detail {
 
-// ---------------------------------------------------------------------------
 // Per-triangle gradient of solid angle (Biot-Savart formula).
-// ---------------------------------------------------------------------------
 
 template <gwn_real_type Real>
 __host__ __device__ inline gwn_query_vec3<Real> gwn_gradient_solid_angle_triangle_impl(
@@ -200,7 +198,7 @@ gwn_winding_and_gradient_point_bvh_taylor_impl(
                 Real const qny = qry * qlength_m1;
                 Real const qnz = qrz * qlength_m1;
 
-                // --- Shared moment loads ---
+                // Shared moment loads
                 Real const Nx = taylor.child_n_x[child_slot];
                 Real const Ny = taylor.child_n_y[child_slot];
                 Real const Nz = taylor.child_n_z[child_slot];

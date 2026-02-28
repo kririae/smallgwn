@@ -5,9 +5,7 @@
 
 #include <gwn/gwn_utils.cuh>
 
-// ---------------------------------------------------------------------------
-// gwn_status unit tests — error code paths, factory methods, noexcept guarantees.
-// ---------------------------------------------------------------------------
+// gwn_status unit tests, error code paths, factory methods, noexcept guarantees.
 
 TEST(smallgwn_unit_status, default_constructed_is_ok) {
     gwn::gwn_status const status;
@@ -83,9 +81,7 @@ TEST(smallgwn_unit_status, throw_if_error_throws_on_failure) {
     EXPECT_THROW(gwn::gwn_throw_if_error(status), std::runtime_error);
 }
 
-// ---------------------------------------------------------------------------
 // gwn_status noexcept guarantees.
-// ---------------------------------------------------------------------------
 
 TEST(smallgwn_unit_status, factories_are_noexcept) {
     static_assert(noexcept(gwn::gwn_status::ok()));
@@ -109,9 +105,7 @@ TEST(smallgwn_unit_status, factories_are_noexcept) {
     });
 }
 
-// ---------------------------------------------------------------------------
 // gwn_scope_exit.
-// ---------------------------------------------------------------------------
 
 TEST(smallgwn_unit_status, scope_exit_fires_on_destruction) {
     int counter = 0;
@@ -141,9 +135,7 @@ TEST(smallgwn_unit_status, scope_exit_fires_once_on_move) {
     EXPECT_EQ(counter, 1);
 }
 
-// ---------------------------------------------------------------------------
 // GWN_RETURN_ON_ERROR macro.
-// ---------------------------------------------------------------------------
 
 namespace {
 

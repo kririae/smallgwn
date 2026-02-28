@@ -8,9 +8,7 @@
 
 #include "test_fixtures.hpp"
 
-// ---------------------------------------------------------------------------
-// gwn_device_array unit tests — RAII, stream binding, resize semantics.
-// ---------------------------------------------------------------------------
+// gwn_device_array unit tests, RAII, stream binding, resize semantics.
 
 using gwn::tests::CudaStreamFixture;
 
@@ -192,9 +190,7 @@ TEST_F(CudaStreamFixture, swap_exchanges_state) {
     EXPECT_EQ(b.size(), 16u);
 }
 
-// ---------------------------------------------------------------------------
 // noexcept guarantees.
-// ---------------------------------------------------------------------------
 
 TEST(smallgwn_unit_device_array_noexcept, methods_are_noexcept) {
     gwn::gwn_device_array<float> buffer;
@@ -205,9 +201,7 @@ TEST(smallgwn_unit_device_array_noexcept, methods_are_noexcept) {
     static_assert(noexcept(std::as_const(buffer).copy_to_host(cuda::std::span<float>{})));
 }
 
-// ---------------------------------------------------------------------------
 // Null-storage argument validation.
-// ---------------------------------------------------------------------------
 
 TEST(smallgwn_unit_device_array_null_storage, cuda_malloc_null_output_pointer) {
     gwn::gwn_status const status = gwn::gwn_cuda_malloc(nullptr, sizeof(float));

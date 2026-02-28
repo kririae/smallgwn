@@ -16,9 +16,7 @@
 namespace gwn {
 namespace detail {
 
-// ---------------------------------------------------------------------------
-// Harnack trace result — returned per ray.
-// ---------------------------------------------------------------------------
+// Harnack trace result, returned per ray.
 
 template <gwn_real_type Real> struct gwn_harnack_trace_result {
     Real t{Real(-1)};       ///< Ray parameter at hit (negative ⟹ no hit).
@@ -31,7 +29,6 @@ template <gwn_real_type Real> struct gwn_harnack_trace_result {
     __host__ __device__ constexpr bool hit() const noexcept { return t >= Real(0); }
 };
 
-// ---------------------------------------------------------------------------
 // Harnack step size (pure math).
 //
 // Given current function value f_t, target f_star, lower bound c (such that
@@ -41,7 +38,6 @@ template <gwn_real_type Real> struct gwn_harnack_trace_result {
 // Formula (harmonic.tex §3.1.2):
 //   a = (f_t − c) / (f* − c)
 //   ρ = (R/2) |a + 2 − √(a² + 8a)|
-// ---------------------------------------------------------------------------
 
 template <gwn_real_type Real>
 __host__ __device__ inline Real
@@ -143,7 +139,6 @@ __host__ __device__ inline Real gwn_harnack_constrained_two_sided_step(
     return rho;
 }
 
-// ---------------------------------------------------------------------------
 // Per-ray Harnack trace (angle-valued, Algorithm 2).
 //
 // Uses:
@@ -151,7 +146,6 @@ __host__ __device__ inline Real gwn_harnack_constrained_two_sided_step(
 //   • safe-ball radius R = distance to nearest triangle
 //   • two-sided Harnack step bound against fixed wrapped bounds {0, 4π}
 //   • overstepping with backoff (paper §3.1.4 / reference implementation)
-// ---------------------------------------------------------------------------
 
 template <int Order, int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity>
 __device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_ray_impl(
@@ -299,9 +293,7 @@ __device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_ray_impl(
     return result;
 }
 
-// ---------------------------------------------------------------------------
 // Batch functor for Harnack tracing.
-// ---------------------------------------------------------------------------
 
 template <int Order, int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity>
 struct gwn_harnack_trace_batch_functor {

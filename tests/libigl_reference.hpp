@@ -2,8 +2,8 @@
 /// \brief libigl-based reference computations for SDF parity tests.
 ///
 /// These declarations are implemented in libigl_reference.cpp (compiled
-/// by the host C++ compiler) so that libigl headers — which use SIMD
-/// intrinsics incompatible with nvcc — are kept out of CUDA translation
+/// by the host C++ compiler) so that libigl headers, which use SIMD
+/// intrinsics incompatible with nvcc, are kept out of CUDA translation
 /// units.
 
 #pragma once

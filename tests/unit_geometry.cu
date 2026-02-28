@@ -7,18 +7,14 @@
 #include "test_fixtures.hpp"
 #include "test_utils.hpp"
 
-// ---------------------------------------------------------------------------
 // gwn_geometry_object / gwn_geometry_accessor unit tests.
 // Covers upload validation, error paths, empty geometry, SoA mismatch.
-// ---------------------------------------------------------------------------
 
 using Real = gwn::tests::Real;
 using Index = gwn::tests::Index;
 using gwn::tests::CudaFixture;
 
-// ---------------------------------------------------------------------------
-// Accessor — host-side validation.
-// ---------------------------------------------------------------------------
+// Accessor, host-side validation.
 
 TEST(smallgwn_unit_geometry, default_accessor_is_empty_and_valid) {
     gwn::gwn_geometry_accessor<Real, Index> accessor{};
@@ -27,9 +23,7 @@ TEST(smallgwn_unit_geometry, default_accessor_is_empty_and_valid) {
     EXPECT_EQ(accessor.triangle_count(), 0u);
 }
 
-// ---------------------------------------------------------------------------
-// Upload — success path.
-// ---------------------------------------------------------------------------
+// Upload, success path.
 
 TEST_F(CudaFixture, upload_valid_single_triangle) {
     std::array<Real, 3> const vx{1.0f, 0.0f, 0.0f};
@@ -54,9 +48,7 @@ TEST_F(CudaFixture, upload_valid_single_triangle) {
     EXPECT_TRUE(geometry.accessor().is_valid());
 }
 
-// ---------------------------------------------------------------------------
-// Upload — error paths: SoA length mismatch.
-// ---------------------------------------------------------------------------
+// Upload, error paths: SoA length mismatch.
 
 TEST_F(CudaFixture, upload_vertex_soa_length_mismatch) {
     std::array<Real, 3> const vx{1.0f, 0.0f, 0.0f};
@@ -100,9 +92,7 @@ TEST_F(CudaFixture, upload_triangle_soa_length_mismatch) {
     EXPECT_EQ(status.error(), gwn::gwn_error::invalid_argument);
 }
 
-// ---------------------------------------------------------------------------
-// Upload — empty geometry is valid (zero triangles).
-// ---------------------------------------------------------------------------
+// Upload, empty geometry is valid (zero triangles).
 
 TEST_F(CudaFixture, upload_empty_geometry) {
     gwn::gwn_geometry_object<Real, Index> geometry;
@@ -118,9 +108,7 @@ TEST_F(CudaFixture, upload_empty_geometry) {
     EXPECT_EQ(geometry.triangle_count(), 0u);
 }
 
-// ---------------------------------------------------------------------------
 // Clear releases geometry.
-// ---------------------------------------------------------------------------
 
 TEST_F(CudaFixture, clear_releases_geometry) {
     std::array<Real, 3> const vx{1.0f, 0.0f, 0.0f};
@@ -145,9 +133,7 @@ TEST_F(CudaFixture, clear_releases_geometry) {
     EXPECT_EQ(geometry.triangle_count(), 0u);
 }
 
-// ---------------------------------------------------------------------------
 // Re-upload overwrites previous data.
-// ---------------------------------------------------------------------------
 
 TEST_F(CudaFixture, re_upload_overwrites_previous) {
     std::array<Real, 3> const vx{1.0f, 0.0f, 0.0f};
@@ -187,9 +173,7 @@ TEST_F(CudaFixture, re_upload_overwrites_previous) {
     EXPECT_EQ(geometry.vertex_count(), 4u);
 }
 
-// ---------------------------------------------------------------------------
 // Move semantics preserve accessor validity.
-// ---------------------------------------------------------------------------
 
 TEST_F(CudaFixture, move_preserves_accessor) {
     std::array<Real, 3> const vx{1.0f, 0.0f, 0.0f};

@@ -121,10 +121,8 @@ TraceResults<Order> run_trace(
 
 } // namespace
 
-// ---------------------------------------------------------------------------
 // Integration test: trace 6×12 = 72 rays from a sphere of radius 5
 // through a closed octahedron.
-// ---------------------------------------------------------------------------
 TEST_F(CudaFixture, integration_harnack_octahedron_sphere_rays) {
     OctahedronMesh mesh;
 
@@ -170,7 +168,7 @@ TEST_F(CudaFixture, integration_harnack_octahedron_sphere_rays) {
     EXPECT_EQ(hits0, hits1) << "single-path tracer should be consistent across orders";
     EXPECT_EQ(hits1, hits2) << "single-path tracer should be consistent across orders";
 
-    // --- Check: hit points are near the octahedron scale ---
+    // Check: hit points are near the octahedron scale.
     // For a unit octahedron, geometric face radius is 1/sqrt(3) ≈ 0.577.
     // We use a coarse but stable acceptance band.
     for (std::size_t i = 0; i < n; ++i) {
@@ -186,7 +184,7 @@ TEST_F(CudaFixture, integration_harnack_octahedron_sphere_rays) {
             << "ray " << i << ": hit too far from origin (r=" << hr << ")";
     }
 
-    // --- Check: normals are unit length and oppose ray direction ---
+    // Check: normals are unit length and oppose ray direction.
     int bad_normals = 0;
     for (std::size_t i = 0; i < n; ++i) {
         if (res1.t[i] < Real(0))
@@ -206,7 +204,7 @@ TEST_F(CudaFixture, integration_harnack_octahedron_sphere_rays) {
     EXPECT_LE(bad_normals, static_cast<int>(n * 0.1))
         << bad_normals << " rays have bad normals (non-unit magnitude)";
 
-    // --- Check: hit distance consistency across orders ---
+    // Check: hit distance consistency across orders.
     // For rays that hit in all 3 orders, the hit distances should be similar.
     Real max_t_diff_01 = 0, max_t_diff_12 = 0;
     int compared = 0;
@@ -277,9 +275,7 @@ TEST_F(CudaFixture, integration_harnack_angle_half_octahedron_forward_rays) {
     EXPECT_GE(sane_normals, 12) << "angle-mode hits should usually return finite normals";
 }
 
-// ---------------------------------------------------------------------------
 // Integration test: trace sphere rays through a closed cube.
-// ---------------------------------------------------------------------------
 TEST_F(CudaFixture, integration_harnack_cube_sphere_rays) {
     CubeMesh mesh;
 

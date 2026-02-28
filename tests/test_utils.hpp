@@ -18,16 +18,12 @@
 
 namespace gwn::tests {
 
-// ---------------------------------------------------------------------------
 // Common type aliases for tests.
-// ---------------------------------------------------------------------------
 
 using Real = float;
 using Index = std::uint32_t;
 
-// ---------------------------------------------------------------------------
 // SoA host mesh.
-// ---------------------------------------------------------------------------
 
 struct HostMesh {
     std::vector<Real> vertex_x;
@@ -38,9 +34,7 @@ struct HostMesh {
     std::vector<Index> tri_i2;
 };
 
-// ---------------------------------------------------------------------------
 // CUDA runtime availability checks.
-// ---------------------------------------------------------------------------
 
 [[nodiscard]] inline bool is_cuda_runtime_unavailable(cudaError_t const result) noexcept {
     return result == cudaErrorNoDevice || result == cudaErrorInsufficientDriver ||
@@ -58,9 +52,7 @@ is_cuda_runtime_unavailable_message(std::string_view const message) noexcept {
            message.find("cudaErrorNotSupported") != std::string_view::npos;
 }
 
-// ---------------------------------------------------------------------------
 // gwn_status debug formatting.
-// ---------------------------------------------------------------------------
 
 [[nodiscard]] inline std::string status_to_debug_string(gwn::gwn_status const &status) {
     std::ostringstream out;
@@ -72,9 +64,7 @@ is_cuda_runtime_unavailable_message(std::string_view const message) noexcept {
     return out.str();
 }
 
-// ---------------------------------------------------------------------------
 // Environment helpers.
-// ---------------------------------------------------------------------------
 
 [[nodiscard]] inline int get_env_positive_int(char const *name, int const default_value) {
     char const *value = std::getenv(name);
@@ -101,9 +91,7 @@ get_env_positive_size_t(char const *name, std::size_t default_value) {
     return parsed;
 }
 
-// ---------------------------------------------------------------------------
 // OBJ loading.
-// ---------------------------------------------------------------------------
 
 [[nodiscard]] inline std::string_view trim_left(std::string_view const line) noexcept {
     std::size_t start = 0;
@@ -199,9 +187,7 @@ parse_obj_index(std::string_view const token, std::size_t const vertex_count) {
     return mesh;
 }
 
-// ---------------------------------------------------------------------------
 // Model directory and path collection.
-// ---------------------------------------------------------------------------
 
 [[nodiscard]] inline std::optional<std::filesystem::path> find_model_data_dir() {
     if (char const *env = std::getenv("SMALLGWN_MODEL_DATA_DIR"); env != nullptr && *env != '\0') {
@@ -262,9 +248,7 @@ collect_obj_model_paths(std::filesystem::path const &model_dir) {
     return model_paths;
 }
 
-// ---------------------------------------------------------------------------
 // CUDA skip macros for GTest.
-// ---------------------------------------------------------------------------
 
 #define SMALLGWN_SKIP_IF_NO_CUDA()                                                                 \
     do {                                                                                           \

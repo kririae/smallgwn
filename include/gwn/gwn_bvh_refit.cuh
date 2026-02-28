@@ -54,7 +54,7 @@ gwn_status gwn_bvh_refit_aabb(
 /// winding-number query path.  The AABB tree is required to derive the
 /// \c max_p_dist2 far-field radius for each node.
 ///
-/// Each call performs a **full replace** of the moment data — only the
+/// Each call performs a **full replace** of the moment data, only the
 /// requested \p Order slot is populated.  To maintain multiple orders
 /// simultaneously, use separate \c gwn_bvh_moment_tree_object instances.
 ///
