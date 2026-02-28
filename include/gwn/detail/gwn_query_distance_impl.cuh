@@ -534,57 +534,6 @@ __device__ inline Real gwn_unsigned_edge_distance_point_bvh_impl(
     return sqrt(best_dist2);
 }
 
-/// \brief Unsigned distance from a point to the mesh singular edge set.
-///
-/// The singular edge set is derived at upload time by canceling opposite edge
-/// orientations across adjacent triangles; only non-canceling edges remain.
-/// For consistently oriented closed meshes this set is empty.
-template <gwn_real_type Real, gwn_index_type Index>
-__device__ inline Real gwn_unsigned_singular_edge_distance_point_impl(
-    gwn_geometry_accessor<Real, Index> const &geometry, Real const qx, Real const qy,
-    Real const qz, Real const culling_band
-) noexcept {
-    if (!geometry.is_valid())
-        return Real(0);
-
-    Real band = culling_band;
-    if (!(band >= Real(0)))
-        band = Real(0);
-
-    Real best_dist2 = band * band;
-    if (!isfinite(best_dist2))
-        best_dist2 = std::numeric_limits<Real>::infinity();
-
-    if (geometry.singular_edge_count() == 0)
-        return sqrt(best_dist2);
-
-    gwn_query_vec3<Real> const query(qx, qy, qz);
-    for (std::size_t edge_id = 0; edge_id < geometry.singular_edge_count(); ++edge_id) {
-        Index const ia = geometry.singular_edge_i0[edge_id];
-        Index const ib = geometry.singular_edge_i1[edge_id];
-        if (!gwn_index_in_bounds(ia, geometry.vertex_count()) ||
-            !gwn_index_in_bounds(ib, geometry.vertex_count())) {
-            continue;
-        }
-
-        std::size_t const a_index = static_cast<std::size_t>(ia);
-        std::size_t const b_index = static_cast<std::size_t>(ib);
-        gwn_query_vec3<Real> const a(
-            geometry.vertex_x[a_index], geometry.vertex_y[a_index], geometry.vertex_z[a_index]
-        );
-        gwn_query_vec3<Real> const b(
-            geometry.vertex_x[b_index], geometry.vertex_y[b_index], geometry.vertex_z[b_index]
-        );
-        Real const d2 = gwn_point_segment_distance_squared_impl(query, a, b);
-        if (d2 < best_dist2) {
-            best_dist2 = d2;
-            if (!(best_dist2 > Real(0)))
-                return Real(0);
-        }
-    }
-    return sqrt(best_dist2);
-}
-
 template <int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity>
 struct gwn_unsigned_edge_distance_batch_bvh_functor {
     gwn_geometry_accessor<Real, Index> geometry{};

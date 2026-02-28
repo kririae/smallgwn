@@ -246,7 +246,7 @@ TEST_F(CudaFixture, integration_harnack_octahedron_sphere_rays) {
               << " Order-1=" << hits1 << " Order-2=" << hits2
               << " / " << n << "\n";
 
-    // With correct R(x) = min(singular_edge_dist, face_dist), the tracer
+    // With correct R(x) = face_dist (distance to nearest triangle), the tracer
     // reliably hits the closed-mesh surface for all inward-pointing rays.
     EXPECT_GE(hits0, static_cast<int>(n * 0.90))
         << "Order-0: too few closed-mesh shell hits (" << hits0 << "/" << n << ")";

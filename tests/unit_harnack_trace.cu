@@ -765,46 +765,6 @@ TEST_F(CudaFixture, harnack_angle_half_octahedron_hits) {
 // Cube geometry tests
 // ---------------------------------------------------------------------------
 
-TEST_F(CudaFixture, harnack_cube_closed_no_singular_edges) {
-    CubeMesh mesh;
-
-    gwn::gwn_geometry_object<Real, Index> geometry;
-    gwn::gwn_status s = geometry.upload(
-        cuda::std::span<Real const>(mesh.vx.data(), mesh.vx.size()),
-        cuda::std::span<Real const>(mesh.vy.data(), mesh.vy.size()),
-        cuda::std::span<Real const>(mesh.vz.data(), mesh.vz.size()),
-        cuda::std::span<Index const>(mesh.i0.data(), mesh.i0.size()),
-        cuda::std::span<Index const>(mesh.i1.data(), mesh.i1.size()),
-        cuda::std::span<Index const>(mesh.i2.data(), mesh.i2.size())
-    );
-    if (s.error() == gwn::gwn_error::cuda_runtime_error)
-        GTEST_SKIP() << "CUDA unavailable";
-    ASSERT_TRUE(s.is_ok());
-
-    EXPECT_EQ(geometry.singular_edge_count(), 0u)
-        << "closed cube should have zero singular edges";
-}
-
-TEST_F(CudaFixture, harnack_open_cube_has_singular_edges) {
-    OpenCubeMesh mesh;
-
-    gwn::gwn_geometry_object<Real, Index> geometry;
-    gwn::gwn_status s = geometry.upload(
-        cuda::std::span<Real const>(mesh.vx.data(), mesh.vx.size()),
-        cuda::std::span<Real const>(mesh.vy.data(), mesh.vy.size()),
-        cuda::std::span<Real const>(mesh.vz.data(), mesh.vz.size()),
-        cuda::std::span<Index const>(mesh.i0.data(), mesh.i0.size()),
-        cuda::std::span<Index const>(mesh.i1.data(), mesh.i1.size()),
-        cuda::std::span<Index const>(mesh.i2.data(), mesh.i2.size())
-    );
-    if (s.error() == gwn::gwn_error::cuda_runtime_error)
-        GTEST_SKIP() << "CUDA unavailable";
-    ASSERT_TRUE(s.is_ok());
-
-    EXPECT_EQ(geometry.singular_edge_count(), 4u)
-        << "open cube (missing z=+1 face) should have 4 singular edges";
-}
-
 TEST_F(CudaFixture, harnack_cube_closed_hits) {
     CubeMesh mesh;
 

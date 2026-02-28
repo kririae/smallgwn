@@ -191,15 +191,11 @@ __device__ inline TraceDiagnostic trace_reference_semantics(
         Real const grad_omega_mag = k_four_pi * grad_w_mag;
         diag.last_grad_omega_mag = grad_omega_mag;
 
-        Real R_singular = gwn::detail::gwn_unsigned_singular_edge_distance_point_impl<
-            Real, Index>(
-            geometry, px, py, pz, std::numeric_limits<Real>::infinity()
-        );
-        Real const R_face = gwn::detail::gwn_unsigned_distance_point_bvh_impl<
+        Real const R = gwn::detail::gwn_unsigned_distance_point_bvh_impl<
             k_width, Real, Index, k_stack>(
-            geometry, bvh, aabb_tree, px, py, pz, R_singular
+            geometry, bvh, aabb_tree, px, py, pz,
+            std::numeric_limits<Real>::infinity()
         );
-        Real const R = (R_face < R_singular) ? R_face : R_singular;
         diag.last_R = R;
         if (!(R >= Real(0))) {
             diag.terminal_reason = static_cast<int>(TraceTerminalReason::invalid_radius);

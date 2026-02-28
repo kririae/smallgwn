@@ -205,7 +205,7 @@ __device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_ray_impl(
 //
 // Uses:
 //   • wrapped angle representative in [0, 4π) around target phase
-//   • safe-ball radius R = min(singular-edge distance, face distance)
+//   • safe-ball radius R = distance to nearest triangle
 //   • two-sided Harnack step bound against fixed wrapped bounds {0, 4π}
 //   • overstepping with backoff (paper §3.1.4 / reference implementation)
 // ---------------------------------------------------------------------------
@@ -321,18 +321,14 @@ __device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_angle_ray_imp
         Real const dist = (dist_lo < dist_hi) ? dist_lo : dist_hi;
         Real const grad_omega_mag = k_four_pi * grad_w_mag;
 
-        // R(x) = distance to the nearest singularity of the harmonic function.
-        // For open meshes this is the singular (boundary) edges; for closed
-        // meshes the singular edge set is empty but the winding number is
-        // discontinuous across triangle faces, so we also need face distance.
-        Real R_singular = gwn_unsigned_singular_edge_distance_point_impl<Real, Index>(
-            geometry, px, py, pz, std::numeric_limits<Real>::infinity()
-        );
-        Real const R_face = gwn_unsigned_distance_point_bvh_impl<
+        // R(x) = distance to the nearest triangle (face + edges + vertices).
+        // This subsumes singular-edge distance because every singular edge is
+        // geometrically a subset of at least one triangle.
+        Real const R = gwn_unsigned_distance_point_bvh_impl<
             Width, Real, Index, StackCapacity>(
-            geometry, bvh, aabb_tree, px, py, pz, R_singular
+            geometry, bvh, aabb_tree, px, py, pz,
+            std::numeric_limits<Real>::infinity()
         );
-        Real const R = (R_face < R_singular) ? R_face : R_singular;
         if (!(R >= Real(0)))
             break;
 
