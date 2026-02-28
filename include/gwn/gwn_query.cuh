@@ -1,15 +1,11 @@
 #pragma once
 
 /// \file gwn_query.cuh
-/// \brief Public spatial query APIs for triangle meshes on the GPU.
+/// \brief Public query APIs for winding, gradients, distances, and Harnack tracing.
 ///
-/// Public query surface:
-/// - Batch winding-number query:
-///   `gwn_compute_winding_number_batch_bvh_taylor`.
-/// - Single-point distance queries (`__device__`):
-///   `gwn_unsigned_distance_point_bvh` and `gwn_signed_distance_point_bvh`.
-///
-/// Query implementation details live in `include/gwn/detail/gwn_query_*_impl.cuh`.
+/// This header exposes device point queries plus host batch-query launchers
+/// over uploaded geometry and BVH data.
+/// Implementation details live in `include/gwn/detail/gwn_query_*_impl.cuh`.
 
 #include <cuda_runtime.h>
 
@@ -298,10 +294,6 @@ gwn_status gwn_compute_winding_gradient_batch_bvh_taylor(
     );
 }
 
-// ---------------------------------------------------------------------------
-// Harnack tracing API
-// ---------------------------------------------------------------------------
-
 /// \brief Harnack trace result type.
 template <gwn_real_type Real>
 using gwn_harnack_trace_result = detail::gwn_harnack_trace_result<Real>;
@@ -432,78 +424,6 @@ gwn_status gwn_compute_harnack_trace_batch_bvh_taylor(
     Real const accuracy_scale = Real(2), cudaStream_t const stream = gwn_default_stream()
 ) noexcept {
     return gwn_compute_harnack_trace_batch_bvh_taylor<Order, 4, Real, Index, StackCapacity>(
-        geometry, bvh, aabb_tree, moment_tree, ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x,
-        ray_dir_y, ray_dir_z, output_t, output_normal_x, output_normal_y, output_normal_z,
-        target_winding, epsilon, max_iterations, t_max, accuracy_scale, stream
-    );
-}
-
-/// \brief Trace a single ray using the angle-valued (mod 4π) Harnack tracer
-///        with edge-distance safe balls (\c __device__ only).
-template <
-    int Order, int Width, gwn_real_type Real, gwn_index_type Index,
-    int StackCapacity = k_gwn_default_traversal_stack_capacity>
-__device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_angle_ray_bvh_taylor(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
-    gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree,
-    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &moment_tree, Real const ray_ox,
-    Real const ray_oy, Real const ray_oz, Real const ray_dx, Real const ray_dy, Real const ray_dz,
-    Real const target_winding = Real(0.5), Real const epsilon = Real(1e-4),
-    int const max_iterations = 512, Real const t_max = Real(1e6),
-    Real const accuracy_scale = Real(2)
-) noexcept {
-    return gwn_harnack_trace_ray_bvh_taylor<Order, Width, Real, Index, StackCapacity>(
-        geometry, bvh, aabb_tree, moment_tree, ray_ox, ray_oy, ray_oz, ray_dx, ray_dy, ray_dz,
-        target_winding, epsilon, max_iterations, t_max, accuracy_scale
-    );
-}
-
-/// \brief Batch angle-valued Harnack trace:
-///        traces rays against the mod-4π winding field using edge distance.
-template <
-    int Order, int Width, gwn_real_type Real, gwn_index_type Index = std::uint32_t,
-    int StackCapacity = k_gwn_default_traversal_stack_capacity>
-gwn_status gwn_compute_harnack_trace_angle_batch_bvh_taylor(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
-    gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree,
-    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &moment_tree,
-    cuda::std::span<Real const> const ray_origin_x, cuda::std::span<Real const> const ray_origin_y,
-    cuda::std::span<Real const> const ray_origin_z, cuda::std::span<Real const> const ray_dir_x,
-    cuda::std::span<Real const> const ray_dir_y, cuda::std::span<Real const> const ray_dir_z,
-    cuda::std::span<Real> const output_t, cuda::std::span<Real> const output_normal_x,
-    cuda::std::span<Real> const output_normal_y, cuda::std::span<Real> const output_normal_z,
-    Real const target_winding = Real(0.5), Real const epsilon = Real(1e-4),
-    int const max_iterations = 512, Real const t_max = Real(1e6),
-    Real const accuracy_scale = Real(2), cudaStream_t const stream = gwn_default_stream()
-) noexcept {
-    return gwn_compute_harnack_trace_batch_bvh_taylor<Order, Width, Real, Index, StackCapacity>(
-        geometry, bvh, aabb_tree, moment_tree, ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x,
-        ray_dir_y, ray_dir_z, output_t, output_normal_x, output_normal_y, output_normal_z,
-        target_winding, epsilon, max_iterations, t_max, accuracy_scale, stream
-    );
-}
-
-/// \brief Width-4 convenience wrapper for batch angle-valued Harnack trace.
-template <
-    int Order, gwn_real_type Real, gwn_index_type Index = std::uint32_t,
-    int StackCapacity = k_gwn_default_traversal_stack_capacity>
-gwn_status gwn_compute_harnack_trace_angle_batch_bvh_taylor(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh4_topology_accessor<Real, Index> const &bvh,
-    gwn_bvh4_aabb_accessor<Real, Index> const &aabb_tree,
-    gwn_bvh4_moment_accessor<Order, Real, Index> const &moment_tree,
-    cuda::std::span<Real const> const ray_origin_x, cuda::std::span<Real const> const ray_origin_y,
-    cuda::std::span<Real const> const ray_origin_z, cuda::std::span<Real const> const ray_dir_x,
-    cuda::std::span<Real const> const ray_dir_y, cuda::std::span<Real const> const ray_dir_z,
-    cuda::std::span<Real> const output_t, cuda::std::span<Real> const output_normal_x,
-    cuda::std::span<Real> const output_normal_y, cuda::std::span<Real> const output_normal_z,
-    Real const target_winding = Real(0.5), Real const epsilon = Real(1e-4),
-    int const max_iterations = 512, Real const t_max = Real(1e6),
-    Real const accuracy_scale = Real(2), cudaStream_t const stream = gwn_default_stream()
-) noexcept {
-    return gwn_compute_harnack_trace_angle_batch_bvh_taylor<Order, 4, Real, Index, StackCapacity>(
         geometry, bvh, aabb_tree, moment_tree, ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x,
         ray_dir_y, ray_dir_z, output_t, output_normal_x, output_normal_y, output_normal_z,
         target_winding, epsilon, max_iterations, t_max, accuracy_scale, stream

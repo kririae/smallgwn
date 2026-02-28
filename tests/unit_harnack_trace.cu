@@ -180,7 +180,7 @@ bool run_harnack_trace_angle(
         return false;
     }
 
-    s = gwn::gwn_compute_harnack_trace_angle_batch_bvh_taylor<Order, Real, Index>(
+    s = gwn::gwn_compute_harnack_trace_batch_bvh_taylor<Order, Real, Index>(
         geometry.accessor(), bvh.accessor(), aabb.accessor(), data.accessor(),
         d_ox.span(), d_oy.span(), d_oz.span(),
         d_dx.span(), d_dy.span(), d_dz.span(),
@@ -188,7 +188,7 @@ bool run_harnack_trace_angle(
         target_winding, epsilon, max_iterations, t_max, accuracy_scale
     );
     if (!s.is_ok()) {
-        ADD_FAILURE() << "harnack angle trace: " << gwn::tests::status_to_debug_string(s);
+        ADD_FAILURE() << "harnack trace: " << gwn::tests::status_to_debug_string(s);
         return false;
     }
     EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
@@ -636,31 +636,6 @@ TEST_F(CudaFixture, harnack_batch_rejects_invalid_accessors) {
         d_dx.span(), d_dy.span(), d_dz.span(),
         d_t.span(), d_nx.span(), d_ny.span(), d_nz.span()
     );
-    EXPECT_EQ(s.error(), gwn::gwn_error::invalid_argument);
-}
-
-TEST_F(CudaFixture, harnack_angle_batch_rejects_invalid_accessors) {
-    gwn::gwn_geometry_accessor<Real, Index> geometry{};
-    gwn::gwn_bvh4_topology_accessor<Real, Index> bvh{};
-    gwn::gwn_bvh4_aabb_accessor<Real, Index> aabb{};
-    gwn::gwn_bvh4_moment_accessor<0, Real, Index> moment{};
-
-    gwn::gwn_device_array<Real> d_ox, d_oy, d_oz, d_dx, d_dy, d_dz;
-    gwn::gwn_device_array<Real> d_t, d_nx, d_ny, d_nz;
-    bool ok = d_ox.resize(1).is_ok() && d_oy.resize(1).is_ok() && d_oz.resize(1).is_ok() &&
-              d_dx.resize(1).is_ok() && d_dy.resize(1).is_ok() && d_dz.resize(1).is_ok() &&
-              d_t.resize(1).is_ok() && d_nx.resize(1).is_ok() &&
-              d_ny.resize(1).is_ok() && d_nz.resize(1).is_ok();
-    if (!ok)
-        GTEST_SKIP() << "CUDA unavailable";
-
-    gwn::gwn_status const s =
-        gwn::gwn_compute_harnack_trace_angle_batch_bvh_taylor<0, Real, Index>(
-            geometry, bvh, aabb, moment,
-            d_ox.span(), d_oy.span(), d_oz.span(),
-            d_dx.span(), d_dy.span(), d_dz.span(),
-            d_t.span(), d_nx.span(), d_ny.span(), d_nz.span()
-        );
     EXPECT_EQ(s.error(), gwn::gwn_error::invalid_argument);
 }
 

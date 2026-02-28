@@ -119,93 +119,6 @@ TraceResults<Order> run_trace(
     return res;
 }
 
-template <int Order, class Mesh>
-TraceResults<Order> run_trace_angle(
-    Mesh const &mesh,
-    std::vector<Real> const &ox, std::vector<Real> const &oy, std::vector<Real> const &oz,
-    std::vector<Real> const &dx, std::vector<Real> const &dy, std::vector<Real> const &dz,
-    Real const epsilon = Real(1e-3),
-    int const max_iter = 2048,
-    Real const t_max = Real(100)
-) {
-    TraceResults<Order> res;
-
-    gwn::gwn_geometry_object<Real, Index> geometry;
-    gwn::gwn_status s = geometry.upload(
-        cuda::std::span<Real const>(mesh.vx.data(), mesh.vx.size()),
-        cuda::std::span<Real const>(mesh.vy.data(), mesh.vy.size()),
-        cuda::std::span<Real const>(mesh.vz.data(), mesh.vz.size()),
-        cuda::std::span<Index const>(mesh.i0.data(), mesh.i0.size()),
-        cuda::std::span<Index const>(mesh.i1.data(), mesh.i1.size()),
-        cuda::std::span<Index const>(mesh.i2.data(), mesh.i2.size())
-    );
-    if (s.error() == gwn::gwn_error::cuda_runtime_error)
-        return res;
-    if (!s.is_ok()) {
-        ADD_FAILURE() << "geometry upload: " << gwn::tests::status_to_debug_string(s);
-        return res;
-    }
-
-    gwn::gwn_bvh4_topology_object<Real, Index> bvh;
-    gwn::gwn_bvh4_aabb_object<Real, Index> aabb;
-    gwn::gwn_bvh4_moment_object<Order, Real, Index> data;
-    s = gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<Order, 4, Real, Index>(
-        geometry, bvh, aabb, data
-    );
-    if (!s.is_ok()) {
-        ADD_FAILURE() << "BVH build: " << gwn::tests::status_to_debug_string(s);
-        return res;
-    }
-
-    std::size_t const n = ox.size();
-    gwn::gwn_device_array<Real> d_ox, d_oy, d_oz, d_dx, d_dy, d_dz;
-    gwn::gwn_device_array<Real> d_t, d_nx, d_ny, d_nz;
-    bool ok = d_ox.resize(n).is_ok() && d_oy.resize(n).is_ok() && d_oz.resize(n).is_ok() &&
-              d_dx.resize(n).is_ok() && d_dy.resize(n).is_ok() && d_dz.resize(n).is_ok() &&
-              d_t.resize(n).is_ok() && d_nx.resize(n).is_ok() &&
-              d_ny.resize(n).is_ok() && d_nz.resize(n).is_ok();
-    ok = ok &&
-         d_ox.copy_from_host(cuda::std::span<Real const>(ox.data(), n)).is_ok() &&
-         d_oy.copy_from_host(cuda::std::span<Real const>(oy.data(), n)).is_ok() &&
-         d_oz.copy_from_host(cuda::std::span<Real const>(oz.data(), n)).is_ok() &&
-         d_dx.copy_from_host(cuda::std::span<Real const>(dx.data(), n)).is_ok() &&
-         d_dy.copy_from_host(cuda::std::span<Real const>(dy.data(), n)).is_ok() &&
-         d_dz.copy_from_host(cuda::std::span<Real const>(dz.data(), n)).is_ok();
-    if (!ok) {
-        ADD_FAILURE() << "device allocation failed";
-        return res;
-    }
-
-    s = gwn::gwn_compute_harnack_trace_angle_batch_bvh_taylor<Order, Real, Index>(
-        geometry.accessor(), bvh.accessor(), aabb.accessor(), data.accessor(),
-        d_ox.span(), d_oy.span(), d_oz.span(),
-        d_dx.span(), d_dy.span(), d_dz.span(),
-        d_t.span(), d_nx.span(), d_ny.span(), d_nz.span(),
-        Real(0.5), epsilon, max_iter, t_max, Real(2)
-    );
-    if (!s.is_ok()) {
-        ADD_FAILURE() << "harnack angle trace: " << gwn::tests::status_to_debug_string(s);
-        return res;
-    }
-    cudaDeviceSynchronize();
-
-    res.t.resize(n);
-    res.nx.resize(n);
-    res.ny.resize(n);
-    res.nz.resize(n);
-    ok = d_t.copy_to_host(cuda::std::span<Real>(res.t.data(), n)).is_ok() &&
-         d_nx.copy_to_host(cuda::std::span<Real>(res.nx.data(), n)).is_ok() &&
-         d_ny.copy_to_host(cuda::std::span<Real>(res.ny.data(), n)).is_ok() &&
-         d_nz.copy_to_host(cuda::std::span<Real>(res.nz.data(), n)).is_ok();
-    if (!ok) {
-        ADD_FAILURE() << "device-to-host copy failed";
-        return res;
-    }
-    cudaDeviceSynchronize();
-    res.ok = true;
-    return res;
-}
-
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -330,7 +243,7 @@ TEST_F(CudaFixture, integration_harnack_angle_half_octahedron_forward_rays) {
         }
     }
 
-    auto res = run_trace_angle<1>(mesh, ox, oy, oz, dx, dy, dz);
+    auto res = run_trace<1>(mesh, ox, oy, oz, dx, dy, dz);
     if (!res.ok)
         GTEST_SKIP() << "CUDA unavailable";
 

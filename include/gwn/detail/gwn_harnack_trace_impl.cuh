@@ -143,21 +143,14 @@ __host__ __device__ inline Real gwn_harnack_constrained_two_sided_step(
     return rho;
 }
 
-template <int Order, int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity>
-__device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_angle_ray_impl(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
-    gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree,
-    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &moment_tree, Real ray_ox,
-    Real ray_oy, Real ray_oz, Real ray_dx, Real ray_dy, Real ray_dz, Real const target_winding,
-    Real const epsilon, int const max_iterations, Real const t_max, Real const accuracy_scale
-) noexcept;
-
 // ---------------------------------------------------------------------------
-// Unified per-ray Harnack trace entry point.
+// Per-ray Harnack trace (angle-valued, Algorithm 2).
 //
-// Single execution path:
-//   • angle-valued + edge-distance mode (Algorithm 2)
+// Uses:
+//   • wrapped angle representative in [0, 4π) around target phase
+//   • safe-ball radius R = distance to nearest triangle
+//   • two-sided Harnack step bound against fixed wrapped bounds {0, 4π}
+//   • overstepping with backoff (paper §3.1.4 / reference implementation)
 // ---------------------------------------------------------------------------
 
 template <int Order, int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity>
@@ -172,35 +165,6 @@ __device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_ray_impl(
     static_assert(
         Order == 0 || Order == 1 || Order == 2,
         "gwn_harnack_trace_ray currently supports Order 0, 1, and 2."
-    );
-    return gwn_harnack_trace_angle_ray_impl<Order, Width, Real, Index, StackCapacity>(
-        geometry, bvh, aabb_tree, moment_tree, ray_ox, ray_oy, ray_oz, ray_dx, ray_dy, ray_dz,
-        target_winding, epsilon, max_iterations, t_max, accuracy_scale
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Per-ray Harnack trace (angle-valued, Algorithm 2).
-//
-// Uses:
-//   • wrapped angle representative in [0, 4π) around target phase
-//   • safe-ball radius R = distance to nearest triangle
-//   • two-sided Harnack step bound against fixed wrapped bounds {0, 4π}
-//   • overstepping with backoff (paper §3.1.4 / reference implementation)
-// ---------------------------------------------------------------------------
-
-template <int Order, int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity>
-__device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_angle_ray_impl(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
-    gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree,
-    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &moment_tree, Real ray_ox,
-    Real ray_oy, Real ray_oz, Real ray_dx, Real ray_dy, Real ray_dz, Real const target_winding,
-    Real const epsilon, int const max_iterations, Real const t_max, Real const accuracy_scale
-) noexcept {
-    static_assert(
-        Order == 0 || Order == 1 || Order == 2,
-        "gwn_harnack_trace_angle_ray currently supports Order 0, 1, and 2."
     );
 
     gwn_harnack_trace_result<Real> result;
@@ -376,10 +340,6 @@ struct gwn_harnack_trace_batch_functor {
         output_normal_z[ray_id] = res.normal_z;
     }
 };
-
-template <int Order, int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity>
-using gwn_harnack_trace_angle_batch_functor =
-    gwn_harnack_trace_batch_functor<Order, Width, Real, Index, StackCapacity>;
 
 } // namespace detail
 } // namespace gwn
