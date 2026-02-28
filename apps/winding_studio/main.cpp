@@ -1022,19 +1022,25 @@ draw_editor_layout(AppState &state, float const dt, float const ui_scale = 1.0f)
     float const corner_r = ImGui::GetStyle().ChildRounding;
     draw_list->AddRect(p0, p1, IM_COL32(50, 65, 85, 120), corner_r, 0, 0.6f);
 
-    // Split divider line (semi-transparent, drawn via draw list).
+    // Split divider line + per-side labels.
     if (state.view_mode == ViewMode::k_split) {
         float const mid_x = p0.x + result.viewport_size.x * 0.5f;
         draw_list->AddLine(
             ImVec2(mid_x, p0.y), ImVec2(mid_x, p1.y), IM_COL32(180, 190, 210, 60), 1.0f
         );
+        ImU32 const label_col = IM_COL32(140, 170, 200, 140);
+        draw_list->AddText(ImVec2(p0.x + 6.0f * s, p0.y + 4.0f * s), label_col, "Raster");
+        ImVec2 const h_size = ImGui::CalcTextSize("Harnack");
+        draw_list->AddText(
+            ImVec2(p1.x - h_size.x - 6.0f * s, p0.y + 4.0f * s), label_col, "Harnack"
+        );
+    } else {
+        // Mode label in top-left corner of viewport.
+        draw_list->AddText(
+            ImVec2(p0.x + 6.0f * s, p0.y + 4.0f * s), IM_COL32(140, 170, 200, 140),
+            view_mode_name(state.view_mode)
+        );
     }
-
-    // Mode label in top-left corner of viewport
-    draw_list->AddText(
-        ImVec2(p0.x + 6.0f * s, p0.y + 4.0f * s), IM_COL32(140, 170, 200, 140),
-        view_mode_name(state.view_mode)
-    );
 
     // Subtle interaction hint at bottom when hovered
     if (viewport_hovered && !viewport_active) {
