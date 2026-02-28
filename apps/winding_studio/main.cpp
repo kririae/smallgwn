@@ -10,7 +10,6 @@
 #include "voxel_grid_spec.hpp"
 #include "voxelizer.hpp"
 
-#define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -25,8 +24,6 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
-
-#include "stb_image_write.h"
 
 namespace {
 
@@ -43,11 +40,8 @@ struct Mat4 {
     std::array<float, 16> v{};
 };
 
-enum class MeshPreset : int {
-    k_half_octa = 0,
-    k_closed_octa = 1,
-    k_external = 2,
-};
+// No preset enum — the app always starts with a default mesh and the user can
+// load any file to replace it.
 
 enum class ViewMode : int {
     k_split = 0,
@@ -60,10 +54,6 @@ struct CliOptions {
     bool show_help{false};
     int width{1600};
     int height{960};
-    int frames{4};
-    bool capture_png{false};
-    std::string capture_path{"artifacts/opengl-headless/winding_studio_720p.png"};
-    MeshPreset mesh{MeshPreset::k_half_octa};
     ViewMode view_mode{ViewMode::k_split};
     std::string mesh_file{};
     float voxel_dx{-1.0f};
@@ -72,9 +62,19 @@ struct CliOptions {
     float harnack_target_w{-1.0f};
 };
 
+struct MeshData {
+    std::vector<float> positions;
+    std::vector<std::uint32_t> indices;
+};
+
+struct MeshLibraryEntry {
+    std::string name{};
+    MeshData mesh{};
+    std::size_t triangle_count{0};
+    bool is_builtin{false};
+};
+
 struct AppState {
-    MeshPreset mesh = MeshPreset::k_half_octa;
-    bool external_mesh_available = false;
     bool harnack_live_update = true;
     ViewMode view_mode = ViewMode::k_split;
     bool auto_rotate = true;
@@ -103,10 +103,11 @@ struct AppState {
     std::size_t harnack_hit_count = 0;
     std::size_t harnack_pixel_count = 0;
     float last_harnack_ms = 0.0f;
-    std::string active_mesh_name{"Open Half Octa"};
-    std::string external_mesh_name{};
+    std::vector<MeshLibraryEntry> mesh_library{};
+    int active_mesh_index = -1;
+    int selected_mesh_index = -1;
+    std::string active_mesh_name{"None"};
     std::string status_line{"Ready"};
-    char mesh_file_input[1024]{};
     bool force_harnack_refresh = true;
     bool force_voxel_refresh = true;
     winding_studio::voxel::MeshBounds mesh_bounds{};
@@ -114,11 +115,6 @@ struct AppState {
         ImGuiFileBrowserFlags_CloseOnEsc | ImGuiFileBrowserFlags_ConfirmOnEnter
     };
     bool file_browser_initialized = false;
-};
-
-struct MeshData {
-    std::vector<float> positions;
-    std::vector<std::uint32_t> indices;
 };
 
 [[nodiscard]] winding_studio::HostMeshSoA to_host_mesh_soa(MeshData const &mesh) {
@@ -256,25 +252,25 @@ struct MeshData {
     return m;
 }
 
-[[nodiscard]] MeshData build_mesh(MeshPreset const preset) {
-    if (preset == MeshPreset::k_closed_octa) {
-        MeshData mesh{};
-        mesh.positions = {
-            1.0f, 0.0f,  0.0f, -1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f,
-            0.0f, -1.0f, 0.0f, 0.0f,  0.0f, 1.0f, 0.0f, 0.0f, -1.0f,
-        };
-        mesh.indices = {
-            0, 2, 4, 2, 1, 4, 1, 3, 4, 3, 0, 4, 2, 0, 5, 1, 2, 5, 3, 1, 5, 0, 3, 5,
-        };
-        return mesh;
-    }
-
+[[nodiscard]] MeshData build_default_mesh() {
     MeshData mesh{};
     mesh.positions = {
         1.0f, 0.0f, 0.0f, -1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, -1.0f, 0.0f, 0.0f, 0.0f, 1.0f,
     };
     mesh.indices = {
         0, 2, 4, 2, 1, 4, 1, 3, 4, 3, 0, 4,
+    };
+    return mesh;
+}
+
+[[nodiscard]] MeshData build_closed_octa_mesh() {
+    MeshData mesh{};
+    mesh.positions = {
+        1.0f, 0.0f,  0.0f, -1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f,
+        0.0f, -1.0f, 0.0f, 0.0f,  0.0f, 1.0f, 0.0f, 0.0f, -1.0f,
+    };
+    mesh.indices = {
+        0, 2, 4, 2, 1, 4, 1, 3, 4, 3, 0, 4, 2, 0, 5, 1, 2, 5, 3, 1, 5, 0, 3, 5,
     };
     return mesh;
 }
@@ -818,18 +814,6 @@ private:
     } catch (...) { return false; }
 }
 
-[[nodiscard]] bool parse_mesh(std::string const &value, MeshPreset &mesh) {
-    if (value == "half") {
-        mesh = MeshPreset::k_half_octa;
-        return true;
-    }
-    if (value == "octa") {
-        mesh = MeshPreset::k_closed_octa;
-        return true;
-    }
-    return false;
-}
-
 [[nodiscard]] bool parse_view(std::string const &value, ViewMode &view_mode) {
     if (value == "split") {
         view_mode = ViewMode::k_split;
@@ -856,15 +840,12 @@ void print_help(char const *argv0) {
         << "Options:\n"
         << "  --width <int>           Window/frame width (default: 1600)\n"
         << "  --height <int>          Window/frame height (default: 960)\n"
-        << "  --mesh <half|octa>      Initial geometry preset\n"
-        << "  --mesh-file <path>      Load external mesh file (libigl formats, OBJ fallback)\n"
+        << "  --mesh-file <path>      Load mesh file (libigl formats, OBJ fallback)\n"
         << "  --view <split|raster|harnack|voxel>  Initial view mode\n"
         << "  --voxel-dx <float>      Initial voxel dx (voxel mode)\n"
         << "  --camera-distance <f>   Initial camera distance\n"
         << "  --harnack-resolution <f>  Harnack trace resolution scale [0.2,1.0]\n"
         << "  --harnack-target-w <f>  Initial Harnack target winding\n"
-        << "  --capture-png <path>    Run N frames then capture OpenGL UI to PNG and exit\n"
-        << "  --frames <int>          Frame count before capture (default: 4)\n"
         << "  --help                  Show this message\n";
 }
 
@@ -891,24 +872,6 @@ void print_help(char const *argv0) {
         if (key == "--height") {
             std::string value;
             if (!read_value(value) || !parse_int(value, opt.height))
-                return false;
-            continue;
-        }
-        if (key == "--frames") {
-            std::string value;
-            if (!read_value(value) || !parse_int(value, opt.frames))
-                return false;
-            continue;
-        }
-        if (key == "--capture-png") {
-            if (!read_value(opt.capture_path))
-                return false;
-            opt.capture_png = true;
-            continue;
-        }
-        if (key == "--mesh") {
-            std::string value;
-            if (!read_value(value) || !parse_mesh(value, opt.mesh))
                 return false;
             continue;
         }
@@ -953,7 +916,7 @@ void print_help(char const *argv0) {
         }
         return false;
     }
-    return opt.width > 0 && opt.height > 0 && opt.frames > 0;
+    return opt.width > 0 && opt.height > 0;
 }
 
 void glfw_error_callback(int error, char const *description) {
@@ -961,10 +924,11 @@ void glfw_error_callback(int error, char const *description) {
 }
 
 struct UiLayoutResult {
-    bool mesh_changed{false};
     bool harnack_params_changed{false};
     bool voxel_params_changed{false};
-    bool request_mesh_file_load{false};
+    int activate_mesh_index{-1};
+    int remove_mesh_index{-1};
+    std::string mesh_file_to_add{};
     bool request_harnack_refresh{false};
     bool request_voxel_refresh{false};
     ImVec2 viewport_pos{0.0f, 0.0f};
@@ -978,14 +942,6 @@ struct FramebufferRect {
     int h{0};
 };
 
-[[nodiscard]] char const *mesh_name(MeshPreset const mesh) {
-    if (mesh == MeshPreset::k_half_octa)
-        return "Open Half Octa";
-    if (mesh == MeshPreset::k_closed_octa)
-        return "Closed Octa";
-    return "External Mesh";
-}
-
 [[nodiscard]] char const *view_mode_name(ViewMode const view_mode) {
     switch (view_mode) {
     case ViewMode::k_split: return "Split";
@@ -994,6 +950,24 @@ struct FramebufferRect {
     case ViewMode::k_voxel: return "Voxel";
     }
     return "Unknown";
+}
+
+[[nodiscard]] bool has_valid_mesh_index(AppState const &state, int const index) {
+    return index >= 0 && static_cast<std::size_t>(index) < state.mesh_library.size();
+}
+
+[[nodiscard]] bool has_active_mesh(AppState const &state) {
+    return has_valid_mesh_index(state, state.active_mesh_index);
+}
+
+[[nodiscard]] std::string mesh_list_label(MeshLibraryEntry const &entry, bool const is_active) {
+    std::ostringstream oss;
+    if (is_active)
+        oss << "> ";
+    oss << entry.name << " (" << entry.triangle_count << " tris)";
+    if (entry.is_builtin)
+        oss << "  [Built-in]";
+    return oss.str();
 }
 
 void apply_engine_style(float const dpi_scale = 1.0f) {
@@ -1349,34 +1323,45 @@ draw_editor_layout(AppState &state, float const dt, float const ui_scale = 1.0f)
             "LMB: orbit | Shift: pan | Scroll: zoom"
         );
     }
+    if (!has_active_mesh(state)) {
+        char const *msg = "No active mesh";
+        ImVec2 const text_size = ImGui::CalcTextSize(msg);
+        ImVec2 const text_pos{
+            p0.x + 0.5f * (result.viewport_size.x - text_size.x),
+            p0.y + 0.5f * (result.viewport_size.y - text_size.y),
+        };
+        draw_list->AddText(text_pos, IM_COL32(150, 165, 190, 160), msg);
+    }
     ImGui::EndChild();
 
     ImGui::SameLine();
     ImGui::BeginChild("InspectorPanel", ImVec2(0.0f, panel_h), true);
 
     if (begin_collapsing_section("Geometry", true)) {
-        constexpr char const *k_mesh_items[] = {"Open Half Octa", "Closed Octa"};
-        int mesh_index = (state.mesh == MeshPreset::k_closed_octa) ? 1 : 0;
-        ImGui::SetNextItemWidth(-1.0f);
-        if (ImGui::Combo("##Geometry", &mesh_index, k_mesh_items, IM_ARRAYSIZE(k_mesh_items))) {
-            state.mesh = static_cast<MeshPreset>(mesh_index);
-            result.mesh_changed = true;
-        }
-        item_tooltip("Select the built-in geometry preset");
+        ImGui::TextUnformatted("Mesh Library");
+        ImGui::Spacing();
 
-        if (state.external_mesh_available) {
-            bool use_external = (state.mesh == MeshPreset::k_external);
-            if (ImGui::Checkbox("Use loaded mesh", &use_external)) {
-                state.mesh = use_external ? MeshPreset::k_external : MeshPreset::k_half_octa;
-                result.mesh_changed = true;
+        float const list_h = std::clamp(7.0f * ImGui::GetTextLineHeightWithSpacing(), 96.0f * s, 180.0f * s);
+        if (ImGui::BeginListBox("##GeometryLibrary", ImVec2(-FLT_MIN, list_h))) {
+            for (int i = 0; i < static_cast<int>(state.mesh_library.size()); ++i) {
+                MeshLibraryEntry const &entry = state.mesh_library[static_cast<std::size_t>(i)];
+                bool const selected = (state.selected_mesh_index == i);
+                std::string const label = mesh_list_label(entry, i == state.active_mesh_index);
+                ImGui::PushID(i);
+                if (ImGui::Selectable(label.c_str(), selected)) {
+                    state.selected_mesh_index = i;
+                    result.activate_mesh_index = i;
+                }
+                if (selected)
+                    ImGui::SetItemDefaultFocus();
+                ImGui::PopID();
             }
-            item_tooltip("Switch to the externally loaded mesh file");
+            ImGui::EndListBox();
         }
-
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
-        ImGui::TextDisabled("Load external mesh");
+        if (state.mesh_library.empty())
+            ImGui::TextDisabled("No meshes loaded.");
+        else
+            ImGui::TextDisabled("Click a row to show it in the viewport.");
 
         if (!state.file_browser_initialized) {
             state.file_browser.SetTitle("Open Mesh File");
@@ -1384,21 +1369,21 @@ draw_editor_layout(AppState &state, float const dt, float const ui_scale = 1.0f)
             state.file_browser_initialized = true;
         }
 
-        float const fp = ImGui::GetStyle().FramePadding.x;
-        float const browse_w = ImGui::CalcTextSize("Browse").x + fp * 2.0f;
-        float const load_w = ImGui::CalcTextSize("Load").x + fp * 2.0f;
-        float const btns_w = browse_w + spacing + load_w + spacing;
-        ImGui::SetNextItemWidth(-btns_w);
-        ImGui::InputText("##MeshFile", state.mesh_file_input, sizeof(state.mesh_file_input));
-        item_tooltip("Path to an OBJ or other mesh file");
-        ImGui::SameLine();
-        if (ImGui::Button("Browse"))
+        ImGui::Spacing();
+        if (ImGui::Button("Add Mesh..."))
             state.file_browser.Open();
-        item_tooltip("Open a file browser to select a mesh");
+        item_tooltip("Add a mesh file to this session (.obj, .ply, .stl, .off).");
         ImGui::SameLine();
-        if (ImGui::Button("Load"))
-            result.request_mesh_file_load = true;
-        item_tooltip("Load the mesh file from the path above");
+        bool const can_remove_selected =
+            has_valid_mesh_index(state, state.selected_mesh_index) &&
+            !state.mesh_library[static_cast<std::size_t>(state.selected_mesh_index)].is_builtin;
+        if (!can_remove_selected)
+            ImGui::BeginDisabled();
+        if (ImGui::Button("Remove"))
+            result.remove_mesh_index = state.selected_mesh_index;
+        if (!can_remove_selected)
+            ImGui::EndDisabled();
+        item_tooltip("Remove selected imported mesh from this session.");
     }
 
     if (begin_collapsing_section("Camera", true)) {
@@ -1456,87 +1441,95 @@ draw_editor_layout(AppState &state, float const dt, float const ui_scale = 1.0f)
         (state.view_mode == ViewMode::k_split || state.view_mode == ViewMode::k_harnack) &&
         begin_collapsing_section("Harnack Trace", true)
     ) {
-        if (begin_property_table("##HarnackProps", 90.0f * s)) {
-            property_label("Target W");
-            result.harnack_params_changed |=
-                ImGui::SliderFloat("##TargetW", &state.target_winding, 0.1f, 0.9f, "%.2f");
-            item_tooltip(
-                "Target winding number iso-value for surface extraction (0.5 = standard surface)"
-            );
+        if (!has_active_mesh(state)) {
+            ImGui::TextDisabled("No active mesh. Select one in Geometry.");
+        } else {
+            if (begin_property_table("##HarnackProps", 90.0f * s)) {
+                property_label("Target W");
+                result.harnack_params_changed |=
+                    ImGui::SliderFloat("##TargetW", &state.target_winding, 0.1f, 0.9f, "%.2f");
+                item_tooltip(
+                    "Target winding number iso-value for surface extraction (0.5 = standard surface)"
+                );
 
-            property_label("Epsilon");
-            result.harnack_params_changed |= ImGui::SliderFloat(
-                "##Epsilon", &state.epsilon, 1e-5f, 1e-2f, "%.5f", ImGuiSliderFlags_Logarithmic
-            );
-            item_tooltip("Convergence threshold. Smaller = more precise but slower");
+                property_label("Epsilon");
+                result.harnack_params_changed |= ImGui::SliderFloat(
+                    "##Epsilon", &state.epsilon, 1e-5f, 1e-2f, "%.5f", ImGuiSliderFlags_Logarithmic
+                );
+                item_tooltip("Convergence threshold. Smaller = more precise but slower");
 
-            property_label("Max Iters");
-            result.harnack_params_changed |=
-                ImGui::SliderInt("##MaxIters", &state.max_iterations, 16, 4096);
-            item_tooltip("Maximum Harnack iterations per ray");
+                property_label("Max Iters");
+                result.harnack_params_changed |=
+                    ImGui::SliderInt("##MaxIters", &state.max_iterations, 16, 4096);
+                item_tooltip("Maximum Harnack iterations per ray");
 
-            property_label("Accuracy");
-            result.harnack_params_changed |=
-                ImGui::SliderFloat("##Accuracy", &state.accuracy_scale, 0.8f, 6.0f, "%.2f");
-            item_tooltip("BVH traversal accuracy multiplier. Higher = more precise but slower");
+                property_label("Accuracy");
+                result.harnack_params_changed |=
+                    ImGui::SliderFloat("##Accuracy", &state.accuracy_scale, 0.8f, 6.0f, "%.2f");
+                item_tooltip("BVH traversal accuracy multiplier. Higher = more precise but slower");
 
-            property_label("Trace t_max");
-            result.harnack_params_changed |=
-                ImGui::SliderFloat("##TraceT", &state.t_max, 5.0f, 500.0f, "%.1f");
-            item_tooltip("Maximum ray distance. Increase for large scenes");
+                property_label("Trace t_max");
+                result.harnack_params_changed |=
+                    ImGui::SliderFloat("##TraceT", &state.t_max, 5.0f, 500.0f, "%.1f");
+                item_tooltip("Maximum ray distance. Increase for large scenes");
 
-            property_label("Resolution");
-            result.harnack_params_changed |= ImGui::SliderFloat(
-                "##Resolution", &state.harnack_resolution_scale, 0.2f, 1.0f, "%.2f"
-            );
-            item_tooltip("Trace resolution relative to viewport. Lower = faster preview");
+                property_label("Resolution");
+                result.harnack_params_changed |= ImGui::SliderFloat(
+                    "##Resolution", &state.harnack_resolution_scale, 0.2f, 1.0f, "%.2f"
+                );
+                item_tooltip("Trace resolution relative to viewport. Lower = faster preview");
 
-            end_property_table();
+                end_property_table();
+            }
+
+            ImGui::Spacing();
+            result.harnack_params_changed |= ImGui::Checkbox("Live Update", &state.harnack_live_update);
+            item_tooltip("Continuously re-trace when parameters change. Disable for manual control");
+            ImGui::SameLine();
+            if (ImGui::Button("Refresh"))
+                result.request_harnack_refresh = true;
+            item_tooltip("Force a single Harnack trace refresh");
         }
-
-        ImGui::Spacing();
-        result.harnack_params_changed |= ImGui::Checkbox("Live Update", &state.harnack_live_update);
-        item_tooltip("Continuously re-trace when parameters change. Disable for manual control");
-        ImGui::SameLine();
-        if (ImGui::Button("Refresh"))
-            result.request_harnack_refresh = true;
-        item_tooltip("Force a single Harnack trace refresh");
     }
 
     if (state.view_mode == ViewMode::k_voxel && begin_collapsing_section("Voxelization", true)) {
-        if (begin_property_table("##VoxelProps", 90.0f * s)) {
-            property_label("Target W");
-            ImGui::SliderFloat("##VoxelTargetW", &state.voxel_target_w, 0.1f, 0.9f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit())
-                result.voxel_params_changed = true;
-            item_tooltip("Winding threshold for occupancy (inside if W >= Target W)");
+        if (!has_active_mesh(state)) {
+            ImGui::TextDisabled("No active mesh. Select one in Geometry.");
+        } else {
+            if (begin_property_table("##VoxelProps", 90.0f * s)) {
+                property_label("Target W");
+                ImGui::SliderFloat("##VoxelTargetW", &state.voxel_target_w, 0.1f, 0.9f, "%.2f");
+                if (ImGui::IsItemDeactivatedAfterEdit())
+                    result.voxel_params_changed = true;
+                item_tooltip("Winding threshold for occupancy (inside if W >= Target W)");
 
-            property_label("Voxel dx");
-            ImGui::SliderFloat(
-                "##VoxelDx", &state.voxel_dx, 0.002f, 0.25f, "%.4f", ImGuiSliderFlags_Logarithmic
-            );
-            if (ImGui::IsItemDeactivatedAfterEdit())
-                result.voxel_params_changed = true;
-            item_tooltip("Requested voxel size. May be clamped to satisfy voxel-count budget");
+                property_label("Voxel dx");
+                ImGui::SliderFloat(
+                    "##VoxelDx", &state.voxel_dx, 0.002f, 0.25f, "%.4f", ImGuiSliderFlags_Logarithmic
+                );
+                if (ImGui::IsItemDeactivatedAfterEdit())
+                    result.voxel_params_changed = true;
+                item_tooltip("Requested voxel size. May be clamped to satisfy voxel-count budget");
 
-            property_label("Max Voxels");
-            ImGui::Text("%zu", state.voxel_max_voxels);
+                property_label("Max Voxels");
+                ImGui::Text("%zu", state.voxel_max_voxels);
 
-            property_label("Actual dx");
-            ImGui::Text("%.5f", state.voxel_actual_dx);
+                property_label("Actual dx");
+                ImGui::Text("%.5f", state.voxel_actual_dx);
 
-            property_label("Grid");
-            ImGui::Text(
-                "%zu x %zu x %zu", state.voxel_grid_nx, state.voxel_grid_ny, state.voxel_grid_nz
-            );
+                property_label("Grid");
+                ImGui::Text(
+                    "%zu x %zu x %zu", state.voxel_grid_nx, state.voxel_grid_ny, state.voxel_grid_nz
+                );
 
-            end_property_table();
+                end_property_table();
+            }
+
+            ImGui::Spacing();
+            if (ImGui::Button("Recompute"))
+                result.request_voxel_refresh = true;
+            item_tooltip("Re-run voxelization with current settings");
         }
-
-        ImGui::Spacing();
-        if (ImGui::Button("Refresh"))
-            result.request_voxel_refresh = true;
-        item_tooltip("Re-run voxelization with current settings");
     }
 
     ImGui::Spacing();
@@ -1597,10 +1590,8 @@ draw_editor_layout(AppState &state, float const dt, float const ui_scale = 1.0f)
 
     state.file_browser.Display();
     if (state.file_browser.HasSelected()) {
-        std::string const path = state.file_browser.GetSelected().string();
-        std::snprintf(state.mesh_file_input, sizeof(state.mesh_file_input), "%s", path.c_str());
+        result.mesh_file_to_add = state.file_browser.GetSelected().string();
         state.file_browser.ClearSelected();
-        result.request_mesh_file_load = true;
     }
 
     return result;
@@ -1664,6 +1655,8 @@ void render_viewport(
     glClearColor(0.082f, 0.088f, 0.105f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glDisable(GL_SCISSOR_TEST);
+    if (!has_active_mesh(state))
+        return;
 
     CameraBasis const camera = build_camera_basis(state);
     Mat4 const view = mat4_look_at(camera.eye, camera.target, camera.up);
@@ -1712,41 +1705,6 @@ void render_viewport(
     }
 }
 
-[[nodiscard]] std::vector<std::uint8_t> read_backbuffer_rgba(int const width, int const height) {
-    std::vector<std::uint8_t> pixels(
-        static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4u
-    );
-    glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
-    return pixels;
-}
-
-[[nodiscard]] std::vector<std::uint8_t>
-flip_vertical_rgba(std::vector<std::uint8_t> const &src, int const width, int const height) {
-    std::vector<std::uint8_t> dst(src.size());
-    std::size_t const row_size = static_cast<std::size_t>(width) * 4u;
-    for (int y = 0; y < height; ++y) {
-        std::size_t const src_offset = static_cast<std::size_t>(height - 1 - y) * row_size;
-        std::size_t const dst_offset = static_cast<std::size_t>(y) * row_size;
-        std::copy_n(src.data() + src_offset, row_size, dst.data() + dst_offset);
-    }
-    return dst;
-}
-
-void ensure_parent_directory(std::string const &path) {
-    std::filesystem::path p(path);
-    std::filesystem::path const parent = p.parent_path();
-    if (!parent.empty())
-        std::filesystem::create_directories(parent);
-}
-
-[[nodiscard]] bool write_png_rgba(
-    std::string const &path, int const width, int const height,
-    std::vector<std::uint8_t> const &rgba
-) {
-    return stbi_write_png(path.c_str(), width, height, 4, rgba.data(), width * 4) != 0;
-}
-
 int run_app(CliOptions const &cli) {
     glfwSetErrorCallback(glfw_error_callback);
     if (glfwInit() == GLFW_FALSE)
@@ -1758,8 +1716,6 @@ int run_app(CliOptions const &cli) {
 #if defined(__APPLE__)
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
 #endif
-    if (cli.capture_png)
-        glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
 
     GLFWwindow *window =
         glfwCreateWindow(cli.width, cli.height, "Winding Studio (Stage 1)", nullptr, nullptr);
@@ -1767,7 +1723,7 @@ int run_app(CliOptions const &cli) {
         throw std::runtime_error("glfwCreateWindow failed");
 
     glfwMakeContextCurrent(window);
-    glfwSwapInterval(cli.capture_png ? 0 : 1);
+    glfwSwapInterval(1);
 
     glewExperimental = GL_TRUE;
     if (glewInit() != GLEW_OK)
@@ -1816,7 +1772,6 @@ int run_app(CliOptions const &cli) {
         throw std::runtime_error("ImGui_ImplOpenGL3_Init failed");
 
     AppState state{};
-    state.mesh = cli.mesh;
     state.view_mode = cli.view_mode;
     if (cli.voxel_dx > 0.0f)
         state.voxel_dx = cli.voxel_dx;
@@ -1826,13 +1781,6 @@ int run_app(CliOptions const &cli) {
         state.harnack_resolution_scale = cli.harnack_resolution_scale;
     if (cli.harnack_target_w > 0.0f)
         state.target_winding = cli.harnack_target_w;
-    if (cli.capture_png)
-        state.auto_rotate = false;
-    std::string const default_mesh_path = "";
-    std::string const initial_mesh_file = cli.mesh_file.empty() ? default_mesh_path : cli.mesh_file;
-    std::snprintf(
-        state.mesh_file_input, sizeof(state.mesh_file_input), "%s", initial_mesh_file.c_str()
-    );
 
     MeshRenderer renderer{};
     TextureRenderer harnack_texture_renderer{};
@@ -1842,24 +1790,78 @@ int run_app(CliOptions const &cli) {
     winding_studio::HarnackTraceImages trace_images{};
     winding_studio::VoxelizeStats voxel_stats{};
 
-    MeshData external_mesh{};
+    auto clear_active_mesh = [&]() {
+        state.active_mesh_index = -1;
+        state.active_mesh_name = "None";
+        state.triangle_count = 0;
+        state.force_harnack_refresh = false;
+        state.force_voxel_refresh = false;
+        state.harnack_hit_count = 0;
+        state.harnack_pixel_count = 0;
+        state.last_harnack_ms = 0.0f;
+        state.voxel_occupied_count = 0;
+        state.voxel_grid_total = 0;
+        state.voxel_grid_nx = 1;
+        state.voxel_grid_ny = 1;
+        state.voxel_grid_nz = 1;
+        state.last_voxel_ms = 0.0f;
+        state.mesh_bounds = winding_studio::voxel::MeshBounds{};
+    };
 
-    auto apply_active_mesh = [&](MeshData const &mesh, MeshPreset const preset,
-                                 std::string const &name) {
-        renderer.upload_mesh(mesh);
+    auto make_unique_mesh_name = [&](std::string name) {
+        if (name.empty())
+            name = "Imported Mesh";
+        auto name_exists = [&](std::string const &candidate) {
+            for (MeshLibraryEntry const &entry : state.mesh_library) {
+                if (entry.name == candidate)
+                    return true;
+            }
+            return false;
+        };
+        if (!name_exists(name))
+            return name;
+        std::string const base = name;
+        int suffix = 2;
+        while (true) {
+            std::ostringstream oss;
+            oss << base << " (" << suffix << ")";
+            std::string const candidate = oss.str();
+            if (!name_exists(candidate))
+                return candidate;
+            ++suffix;
+        }
+    };
+
+    auto add_mesh_to_library = [&](MeshData mesh, std::string name, bool const is_builtin) {
+        MeshLibraryEntry entry{};
+        entry.name = make_unique_mesh_name(std::move(name));
+        entry.triangle_count = triangle_count(mesh);
+        entry.mesh = std::move(mesh);
+        entry.is_builtin = is_builtin;
+        state.mesh_library.push_back(std::move(entry));
+        return static_cast<int>(state.mesh_library.size() - 1u);
+    };
+
+    auto activate_mesh_by_index = [&](int const index, std::string const &status_prefix) {
+        if (!has_valid_mesh_index(state, index))
+            return false;
+        MeshLibraryEntry const &entry = state.mesh_library[static_cast<std::size_t>(index)];
+        renderer.upload_mesh(entry.mesh);
+        winding_studio::HostMeshSoA const host_mesh = to_host_mesh_soa(entry.mesh);
         std::string tracer_error;
-        if (!harnack_tracer.upload_mesh(to_host_mesh_soa(mesh), tracer_error)) {
+        if (!harnack_tracer.upload_mesh(host_mesh, tracer_error)) {
             state.status_line = "Harnack upload failed: " + tracer_error;
             return false;
         }
         std::string voxel_error;
-        if (!voxelizer.upload_mesh(to_host_mesh_soa(mesh), voxel_error)) {
+        if (!voxelizer.upload_mesh(host_mesh, voxel_error)) {
             state.status_line = "Voxel upload failed: " + voxel_error;
             return false;
         }
-        state.mesh = preset;
-        state.active_mesh_name = name;
-        state.triangle_count = triangle_count(mesh);
+        state.active_mesh_index = index;
+        state.selected_mesh_index = index;
+        state.active_mesh_name = entry.name;
+        state.triangle_count = entry.triangle_count;
         state.force_harnack_refresh = true;
         state.force_voxel_refresh = true;
         state.harnack_hit_count = 0;
@@ -1870,28 +1872,68 @@ int run_app(CliOptions const &cli) {
         state.voxel_grid_ny = 1;
         state.voxel_grid_nz = 1;
         state.mesh_bounds = winding_studio::voxel::compute_mesh_bounds(
-            mesh.positions.data(), mesh.positions.size() / 3u
+            entry.mesh.positions.data(), entry.mesh.positions.size() / 3u
         );
-        state.status_line = "Loaded mesh: " + name;
+        if (!status_prefix.empty())
+            state.status_line = status_prefix + entry.name;
         return true;
     };
 
-    if (!apply_active_mesh(build_mesh(state.mesh), state.mesh, std::string(mesh_name(state.mesh))))
-        throw std::runtime_error("Failed to initialize built-in mesh for Harnack tracer.");
+    auto remove_mesh_from_library = [&](int const index) {
+        if (!has_valid_mesh_index(state, index))
+            return;
+        MeshLibraryEntry removed = std::move(state.mesh_library[static_cast<std::size_t>(index)]);
+        bool const removed_active = (index == state.active_mesh_index);
+        state.mesh_library.erase(state.mesh_library.begin() + index);
+
+        auto adjust_index_after_erase = [&](int &value) {
+            if (value > index)
+                --value;
+            else if (value == index)
+                value = -1;
+        };
+        adjust_index_after_erase(state.selected_mesh_index);
+        adjust_index_after_erase(state.active_mesh_index);
+
+        if (state.mesh_library.empty()) {
+            clear_active_mesh();
+            state.selected_mesh_index = -1;
+            state.status_line = "Removed mesh: " + removed.name + ". Library is empty.";
+            return;
+        }
+        if (removed_active) {
+            clear_active_mesh();
+            state.selected_mesh_index =
+                std::clamp(index, 0, static_cast<int>(state.mesh_library.size()) - 1);
+            state.status_line = "Removed mesh: " + removed.name + ". No active mesh.";
+            return;
+        }
+        if (!has_valid_mesh_index(state, state.selected_mesh_index)) {
+            state.selected_mesh_index =
+                std::clamp(index, 0, static_cast<int>(state.mesh_library.size()) - 1);
+        }
+        state.status_line = "Removed mesh: " + removed.name;
+    };
+
+    int const half_octa_index = add_mesh_to_library(build_default_mesh(), "Half Octahedron", true);
+    add_mesh_to_library(build_closed_octa_mesh(), "Closed Octahedron", true);
+    state.selected_mesh_index = half_octa_index;
+    if (!activate_mesh_by_index(half_octa_index, ""))
+        throw std::runtime_error("Failed to initialize default mesh for Harnack tracer.");
+    state.status_line = "Ready";
+
     if (!cli.mesh_file.empty()) {
         winding_studio::LoadedMesh loaded{};
         std::string load_error;
         if (!winding_studio::load_mesh_from_file(cli.mesh_file, loaded, load_error))
             throw std::runtime_error("Failed to load --mesh-file: " + load_error);
-        external_mesh = to_mesh_data(loaded);
-        state.external_mesh_available = true;
-        state.external_mesh_name = std::filesystem::path(cli.mesh_file).filename().string();
-        if (!apply_active_mesh(external_mesh, MeshPreset::k_external, state.external_mesh_name))
-            throw std::runtime_error("Failed to upload external mesh for Harnack tracer.");
+        std::string const name = std::filesystem::path(cli.mesh_file).filename().string();
+        int const imported_index = add_mesh_to_library(to_mesh_data(loaded), name, false);
+        if (!activate_mesh_by_index(imported_index, "Loaded mesh: "))
+            throw std::runtime_error("Failed to upload --mesh-file into tracer/voxelizer.");
     }
 
     float last_time = static_cast<float>(glfwGetTime());
-    int frame_counter = 0;
 
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
@@ -1911,42 +1953,28 @@ int run_app(CliOptions const &cli) {
         if (ui_layout.voxel_params_changed || ui_layout.request_voxel_refresh)
             state.force_voxel_refresh = true;
 
-        if (ui_layout.request_mesh_file_load) {
-            std::string const mesh_path(state.mesh_file_input);
-            if (mesh_path.empty()) {
-                state.status_line = "Mesh load failed: empty path.";
-            } else {
-                winding_studio::LoadedMesh loaded{};
-                std::string load_error;
-                if (winding_studio::load_mesh_from_file(mesh_path, loaded, load_error)) {
-                    external_mesh = to_mesh_data(loaded);
-                    state.external_mesh_available = true;
-                    state.external_mesh_name = std::filesystem::path(mesh_path).filename().string();
-                    if (!apply_active_mesh(
-                            external_mesh, MeshPreset::k_external, state.external_mesh_name
-                        )) {
-                        state.status_line = "Mesh load succeeded but tracer upload failed: " +
-                                            state.external_mesh_name;
-                    }
-                } else {
-                    state.status_line = "Mesh load failed: " + load_error;
-                }
+        if (ui_layout.remove_mesh_index >= 0)
+            remove_mesh_from_library(ui_layout.remove_mesh_index);
+
+        if (ui_layout.activate_mesh_index >= 0 && ui_layout.activate_mesh_index != state.active_mesh_index) {
+            if (!activate_mesh_by_index(ui_layout.activate_mesh_index, "Active mesh: ")) {
+                state.status_line = "Activate failed.";
             }
         }
 
-        if (ui_layout.mesh_changed) {
-            if (state.mesh == MeshPreset::k_half_octa) {
-                (void)apply_active_mesh(
-                    build_mesh(MeshPreset::k_half_octa), MeshPreset::k_half_octa, "Open Half Octa"
-                );
-            } else if (state.mesh == MeshPreset::k_closed_octa) {
-                (void)apply_active_mesh(
-                    build_mesh(MeshPreset::k_closed_octa), MeshPreset::k_closed_octa, "Closed Octa"
-                );
-            } else if (state.mesh == MeshPreset::k_external && state.external_mesh_available) {
-                (void)apply_active_mesh(
-                    external_mesh, MeshPreset::k_external, state.external_mesh_name
-                );
+        if (!ui_layout.mesh_file_to_add.empty()) {
+            std::string const &mesh_path = ui_layout.mesh_file_to_add;
+            winding_studio::LoadedMesh loaded{};
+            std::string load_error;
+            if (winding_studio::load_mesh_from_file(mesh_path, loaded, load_error)) {
+                std::string const name = std::filesystem::path(mesh_path).filename().string();
+                int const imported_index = add_mesh_to_library(to_mesh_data(loaded), name, false);
+                if (!activate_mesh_by_index(imported_index, "Loaded mesh: ")) {
+                    remove_mesh_from_library(imported_index);
+                    state.status_line = "Upload failed: " + name;
+                }
+            } else {
+                state.status_line = "Load failed: " + load_error;
             }
         }
 
@@ -1958,7 +1986,10 @@ int run_app(CliOptions const &cli) {
 
         bool const needs_harnack =
             state.view_mode == ViewMode::k_split || state.view_mode == ViewMode::k_harnack;
-        if (needs_harnack && harnack_tracer.has_mesh() && viewport.w > 0 && viewport.h > 0) {
+        if (
+            needs_harnack && has_active_mesh(state) && harnack_tracer.has_mesh() && viewport.w > 0 &&
+            viewport.h > 0
+        ) {
             bool const should_trace = state.force_harnack_refresh || state.harnack_live_update;
             if (should_trace) {
                 int const base_w =
@@ -2000,7 +2031,7 @@ int run_app(CliOptions const &cli) {
         }
 
         bool const needs_voxel = state.view_mode == ViewMode::k_voxel;
-        if (needs_voxel && voxelizer.has_mesh() && state.force_voxel_refresh) {
+        if (needs_voxel && has_active_mesh(state) && voxelizer.has_mesh() && state.force_voxel_refresh) {
             winding_studio::voxel::VoxelGridSpec const grid = winding_studio::voxel::make_voxel_grid_from_dx(
                 state.mesh_bounds, state.voxel_dx, state.voxel_max_voxels
             );
@@ -2049,18 +2080,6 @@ int run_app(CliOptions const &cli) {
         glViewport(0, 0, fb_w, fb_h);
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         glfwSwapBuffers(window);
-
-        ++frame_counter;
-        if (cli.capture_png && frame_counter >= cli.frames) {
-            std::vector<std::uint8_t> const rgba = read_backbuffer_rgba(fb_w, fb_h);
-            std::vector<std::uint8_t> const flipped = flip_vertical_rgba(rgba, fb_w, fb_h);
-            ensure_parent_directory(cli.capture_path);
-            if (!write_png_rgba(cli.capture_path, fb_w, fb_h, flipped))
-                throw std::runtime_error("failed to write PNG: " + cli.capture_path);
-            std::cout << "Captured OpenGL UI frame: " << cli.capture_path << "\n";
-            std::cout << "Resolution: " << fb_w << "x" << fb_h << "\n";
-            break;
-        }
     }
 
     ImGui_ImplOpenGL3_Shutdown();
