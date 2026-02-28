@@ -6,80 +6,106 @@ endif()
 
 project(winding_studio LANGUAGES CXX CUDA)
 
-set(CMAKE_COLOR_DIAGNOSTICS ON)
-set(CMAKE_CUDA_STANDARD 20)
-set(CMAKE_CUDA_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_CUDA_STANDARD 20)
+set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+set(CMAKE_COLOR_DIAGNOSTICS ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-find_package(CUDAToolkit REQUIRED)
+# ----------------------------------------------------------
+# Dependencies
+# ----------------------------------------------------------
+include(GetCPM.cmake)
+
+# ----------------------------------------------------------
+# smallgwn (header-only CUDA winding number library)
+# ----------------------------------------------------------
+CPMAddPackage(
+    NAME smallgwn
+    GITHUB_REPOSITORY kririae/smallgwn
+    GIT_TAG main
+    OPTIONS
+        "SMALLGWN_BUILD_BENCHMARKS OFF"
+        "SMALLGWN_BUILD_APPS OFF"
+        "SMALLGWN_BUILD_TESTS OFF"
+        "SMALLGWN_BUILD_EIGEN_BRIDGE_TARGET OFF")
+
+# ----------------------------------------------------------
+# Eigen3
+# ----------------------------------------------------------
+CPMAddPackage(
+    NAME Eigen3
+    URL https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.zip
+    OPTIONS "BUILD_TESTING OFF")
+
+# ----------------------------------------------------------
+# libigl (mesh I/O)
+# ----------------------------------------------------------
+CPMAddPackage(
+    NAME libigl
+    GITHUB_REPOSITORY libigl/libigl
+    GIT_TAG v2.5.0
+    OPTIONS
+        "LIBIGL_BUILD_TESTS OFF"
+        "LIBIGL_BUILD_TUTORIALS OFF"
+        "LIBIGL_INSTALL OFF")
+
+# ----------------------------------------------------------
+# ImGui (no CMakeLists.txt, build manually)
+# ----------------------------------------------------------
+CPMAddPackage(
+    NAME imgui
+    GITHUB_REPOSITORY ocornut/imgui
+    GIT_TAG v1.91.8
+    DOWNLOAD_ONLY YES)
+
+# ----------------------------------------------------------
+# stb (header-only image writing)
+# ----------------------------------------------------------
+CPMAddPackage(
+    NAME stb
+    GITHUB_REPOSITORY nothings/stb
+    GIT_TAG master
+    DOWNLOAD_ONLY YES)
+
+# ----------------------------------------------------------
+# glfw3, OpenGL, GLEW (system packages)
+# ----------------------------------------------------------
 find_package(OpenGL REQUIRED)
 find_package(glfw3 3.3 REQUIRED)
 find_package(GLEW REQUIRED)
-find_package(Eigen3 REQUIRED)
-find_package(libigl REQUIRED HINTS /usr/lib/cmake/igl)
 
-# gwn (header-only, parent project)
-if(NOT TARGET gwn::smallgwn)
-    find_path(GWN_INCLUDE_DIR gwn/gwn.cuh
-        HINTS "${CMAKE_CURRENT_SOURCE_DIR}/../../include"
-    )
-    if(NOT GWN_INCLUDE_DIR)
-        message(FATAL_ERROR "Cannot find gwn headers. Set GWN_INCLUDE_DIR or build from the parent project.")
-    endif()
-    add_library(smallgwn INTERFACE)
-    add_library(gwn::smallgwn ALIAS smallgwn)
-    target_include_directories(smallgwn INTERFACE "${GWN_INCLUDE_DIR}")
-    target_compile_features(smallgwn INTERFACE cxx_std_20)
-    target_link_libraries(smallgwn INTERFACE CUDA::cudart)
-    target_compile_options(smallgwn INTERFACE "$<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>")
-endif()
-
-# ImGui (fetched)
-include(FetchContent)
-FetchContent_Declare(
-    imgui
-    GIT_REPOSITORY https://github.com/ocornut/imgui.git
-    GIT_TAG v1.91.8
-    GIT_SHALLOW TRUE
-)
-FetchContent_MakeAvailable(imgui)
-
-add_library(winding_studio_imgui STATIC
+# ----------------------------------------------------------
+# ImGui static library
+# ----------------------------------------------------------
+add_library(imgui_backend STATIC
     ${imgui_SOURCE_DIR}/imgui.cpp
     ${imgui_SOURCE_DIR}/imgui_draw.cpp
     ${imgui_SOURCE_DIR}/imgui_widgets.cpp
     ${imgui_SOURCE_DIR}/imgui_tables.cpp
     ${imgui_SOURCE_DIR}/imgui_demo.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
-    ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
-)
-target_include_directories(winding_studio_imgui PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends)
-target_link_libraries(winding_studio_imgui PUBLIC glfw OpenGL::GL GLEW::GLEW)
-target_compile_definitions(winding_studio_imgui PUBLIC IMGUI_IMPL_OPENGL_LOADER_GLEW)
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp)
+target_include_directories(imgui_backend
+    PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends)
+target_link_libraries(imgui_backend
+    PUBLIC glfw OpenGL::GL GLEW::GLEW)
+target_compile_definitions(imgui_backend
+    PUBLIC IMGUI_IMPL_OPENGL_LOADER_GLEW)
 
-# stb (header-only, from parent repo third_party/)
-add_library(winding_studio_stb INTERFACE)
-target_include_directories(winding_studio_stb
-    INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/stb"
-)
-
-# App target
+# ----------------------------------------------------------
+# Winding Studio
+# ----------------------------------------------------------
 add_executable(winding_studio
     main.cpp
-    harnack_tracer.cu
-)
-set_target_properties(winding_studio PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+    harnack_tracer.cu)
+target_include_directories(winding_studio
+    PRIVATE ${stb_SOURCE_DIR})
 target_link_libraries(winding_studio
     PRIVATE
-        winding_studio_imgui
-        winding_studio_stb
         gwn::smallgwn
-        glfw
-        OpenGL::GL
-        GLEW::GLEW
+        imgui_backend
         Eigen3::Eigen
-        igl::igl_core
-)
+        igl::core)

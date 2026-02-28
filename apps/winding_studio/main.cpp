@@ -1462,7 +1462,7 @@ int run_app(CliOptions const &cli) {
     AppState state{};
     state.mesh = cli.mesh;
     state.view_mode = cli.view_mode;
-    std::string const default_mesh_path = "/tmp/common-3d-test-models/data/suzanne.obj";
+    std::string const default_mesh_path = "";
     std::string const initial_mesh_file = cli.mesh_file.empty() ? default_mesh_path : cli.mesh_file;
     std::snprintf(
         state.mesh_file_input, sizeof(state.mesh_file_input), "%s", initial_mesh_file.c_str()
