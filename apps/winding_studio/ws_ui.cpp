@@ -296,10 +296,7 @@ draw_editor_layout(AppState &state, float const dt, float const ui_scale) {
         );
         ImU32 const label_col = IM_COL32(140, 170, 200, 140);
         draw_list->AddText(ImVec2(p0.x + 6.0f * s, p0.y + 4.0f * s), label_col, "Raster");
-        ImVec2 const h_size = ImGui::CalcTextSize("Harnack");
-        draw_list->AddText(
-            ImVec2(p1.x - h_size.x - 6.0f * s, p0.y + 4.0f * s), label_col, "Harnack"
-        );
+        draw_list->AddText(ImVec2(mid_x + 6.0f * s, p0.y + 4.0f * s), label_col, "Harnack");
     } else {
         draw_list->AddText(
             ImVec2(p0.x + 6.0f * s, p0.y + 4.0f * s), IM_COL32(140, 170, 200, 140),
@@ -469,7 +466,9 @@ draw_editor_layout(AppState &state, float const dt, float const ui_scale) {
             item_tooltip("Camera distance to target");
 
             property_label("Target");
-            if (ImGui::DragFloat3("##CameraTarget", &state.camera_target.x, 0.01f, -100.0f, 100.0f)) {
+            if (ImGui::DragFloat3(
+                    "##CameraTarget", &state.camera_target.x, 0.01f, -100.0f, 100.0f
+                )) {
                 state.auto_rotate = false;
                 result.harnack_params_changed = true;
             }

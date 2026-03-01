@@ -8,7 +8,7 @@
 #include "../gwn_geometry.cuh"
 #include "gwn_query_geometry_impl.cuh"
 #include "gwn_query_vec3_impl.cuh"
-#include "gwn_query_winding_gradient_impl.cuh"
+#include "gwn_query_winding_impl.cuh"
 
 namespace gwn {
 namespace detail {
