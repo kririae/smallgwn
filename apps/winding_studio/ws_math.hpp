@@ -57,16 +57,24 @@ namespace winding_studio::app {
 
 [[nodiscard]] inline CameraBasis build_camera_basis(AppState const &state) {
     CameraBasis basis{};
+    float const cp = std::cos(state.pitch);
+    float const sp = std::sin(state.pitch);
+    float const cy = std::cos(state.yaw);
+    float const sy = std::sin(state.yaw);
     basis.eye = Vec3{
-        state.camera_target.x + std::sin(state.yaw) * state.camera_radius,
-        state.camera_target.y + std::sin(state.pitch) * state.camera_radius + 0.3f,
-        state.camera_target.z + std::cos(state.yaw) * state.camera_radius,
+        state.camera_target.x + sy * cp * state.camera_radius,
+        state.camera_target.y + sp * state.camera_radius,
+        state.camera_target.z + cy * cp * state.camera_radius,
     };
     basis.target = state.camera_target;
     basis.up = Vec3{0.0f, 1.0f, 0.0f};
     basis.forward = vec3_normalize(vec3_sub(basis.target, basis.eye));
-    basis.right = vec3_normalize(vec3_cross(basis.forward, basis.up));
-    basis.ortho_up = vec3_cross(basis.right, basis.forward);
+    Vec3 right = vec3_cross(basis.forward, basis.up);
+    if (vec3_dot(right, right) < 1e-10f)
+        right = vec3_cross(basis.forward, Vec3{0.0f, 0.0f, 1.0f});
+    basis.right = vec3_normalize(right);
+    basis.ortho_up = vec3_normalize(vec3_cross(basis.right, basis.forward));
+    basis.up = basis.ortho_up;
     return basis;
 }
 

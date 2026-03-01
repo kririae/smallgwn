@@ -54,10 +54,10 @@ struct MeshLibraryEntry {
 struct AppState {
     bool harnack_live_update = true;
     ViewMode view_mode = ViewMode::k_split;
-    bool auto_rotate = true;
+    bool auto_rotate = false;
     bool wireframe = false;
     float yaw = 0.0f;
-    float pitch = -0.35f;
+    float pitch = 0.35f;
     float camera_radius = 2.7f;
     Vec3 camera_target{0.0f, 0.0f, 0.0f};
     float epsilon = 1e-3f;

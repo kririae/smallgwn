@@ -253,29 +253,15 @@ draw_editor_layout(AppState &state, float const dt, float const ui_scale) {
             result.harnack_params_changed = true;
         }
 
-        if (ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f)) {
+        bool const mmb_drag = ImGui::IsMouseDragging(ImGuiMouseButton_Middle, 2.0f);
+        bool const alt_lmb_drag =
+            interact_io.KeyAlt && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f);
+        if (mmb_drag || alt_lmb_drag) {
             ImVec2 const delta = interact_io.MouseDelta;
-            if (interact_io.KeyShift) {
-                CameraBasis const cam = build_camera_basis(state);
-                float const pan_speed = 0.003f * state.camera_radius;
-                state.camera_target.x -=
-                    (cam.right.x * delta.x + cam.ortho_up.x * delta.y) * pan_speed;
-                state.camera_target.y -=
-                    (cam.right.y * delta.x + cam.ortho_up.y * delta.y) * pan_speed;
-                state.camera_target.z -=
-                    (cam.right.z * delta.x + cam.ortho_up.z * delta.y) * pan_speed;
-            } else {
-                state.yaw -= delta.x * 0.005f;
-                state.pitch -= delta.y * 0.005f;
-                state.pitch = std::clamp(state.pitch, -1.4f, 1.4f);
-            }
-            state.auto_rotate = false;
-            result.harnack_params_changed = true;
-        }
-
-        if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle, 2.0f)) {
-            ImVec2 const delta = interact_io.MouseDelta;
-            if (interact_io.KeyShift) {
+            if (interact_io.KeyCtrl) {
+                state.camera_radius *= (1.0f + delta.y * 0.01f);
+                state.camera_radius = std::clamp(state.camera_radius, 0.5f, 12.0f);
+            } else if (interact_io.KeyShift) {
                 CameraBasis const cam = build_camera_basis(state);
                 float const pan_speed = 0.003f * state.camera_radius;
                 state.camera_target.x -=
@@ -324,7 +310,7 @@ draw_editor_layout(AppState &state, float const dt, float const ui_scale) {
     if (viewport_hovered && !viewport_active) {
         draw_list->AddText(
             ImVec2(p0.x + 6.0f * s, p1.y - 18.0f * s), IM_COL32(130, 150, 170, 90),
-            "LMB: orbit | Shift: pan | Scroll: zoom"
+            "MMB: orbit | Shift+MMB: pan | Ctrl+MMB/Scroll: zoom | Alt+LMB: orbit"
         );
     }
     if (!has_active_mesh(state)) {
@@ -394,38 +380,108 @@ draw_editor_layout(AppState &state, float const dt, float const ui_scale) {
     }
 
     if (begin_collapsing_section("Camera", true)) {
-        if (begin_property_table("##CameraProps", 90.0f * s)) {
-            property_label("Yaw");
-            result.harnack_params_changed |=
-                ImGui::SliderFloat("##CameraYaw", &state.yaw, -k_pi, k_pi, "%.3f rad");
-            item_tooltip("Horizontal camera rotation angle (radians)");
+        auto reset_camera = [&]() {
+            state.yaw = 0.0f;
+            state.pitch = 0.35f;
+            state.camera_radius = 2.7f;
+            state.camera_target = Vec3{0.0f, 0.0f, 0.0f};
+            state.auto_rotate = false;
+            result.harnack_params_changed = true;
+        };
+        auto set_camera_preset = [&](float const yaw, float const pitch) {
+            state.yaw = yaw;
+            state.pitch = std::clamp(pitch, -1.45f, 1.45f);
+            state.auto_rotate = false;
+            result.harnack_params_changed = true;
+        };
+        auto frame_camera_to_mesh = [&]() {
+            if (!has_active_mesh(state))
+                return;
+            float const cx = 0.5f * (state.mesh_bounds.min_x + state.mesh_bounds.max_x);
+            float const cy = 0.5f * (state.mesh_bounds.min_y + state.mesh_bounds.max_y);
+            float const cz = 0.5f * (state.mesh_bounds.min_z + state.mesh_bounds.max_z);
+            float const dx = state.mesh_bounds.max_x - state.mesh_bounds.min_x;
+            float const dy = state.mesh_bounds.max_y - state.mesh_bounds.min_y;
+            float const dz = state.mesh_bounds.max_z - state.mesh_bounds.min_z;
+            float const diag = std::sqrt(dx * dx + dy * dy + dz * dz);
+            float const fit_distance = std::max(1.35f * diag, 0.8f);
+            state.camera_target = Vec3{cx, cy, cz};
+            state.camera_radius = std::clamp(fit_distance, 0.5f, 12.0f);
+            state.auto_rotate = false;
+            result.harnack_params_changed = true;
+        };
 
-            property_label("Pitch");
-            result.harnack_params_changed |=
-                ImGui::SliderFloat("##CameraPitch", &state.pitch, -1.4f, 1.4f, "%.3f rad");
-            item_tooltip("Vertical camera tilt angle (radians)");
+        if (ImGui::Button("Reset Camera", ImVec2(-FLT_MIN, 0.0f)))
+            reset_camera();
+        item_tooltip("Reset camera orbit, distance and target");
+
+        float const preset_gap = ImGui::GetStyle().ItemSpacing.x;
+        float const preset_w =
+            std::max(62.0f * s, (ImGui::GetContentRegionAvail().x - preset_gap * 2.0f) / 3.0f);
+        if (ImGui::Button("Front", ImVec2(preset_w, 0.0f)))
+            set_camera_preset(0.0f, 0.0f);
+        ImGui::SameLine();
+        if (ImGui::Button("Back", ImVec2(preset_w, 0.0f)))
+            set_camera_preset(k_pi, 0.0f);
+        ImGui::SameLine();
+        if (ImGui::Button("Top", ImVec2(preset_w, 0.0f)))
+            set_camera_preset(state.yaw, 1.45f);
+
+        if (ImGui::Button("Left", ImVec2(preset_w, 0.0f)))
+            set_camera_preset(-0.5f * k_pi, 0.0f);
+        ImGui::SameLine();
+        if (ImGui::Button("Right", ImVec2(preset_w, 0.0f)))
+            set_camera_preset(0.5f * k_pi, 0.0f);
+        ImGui::SameLine();
+        if (ImGui::Button("Bottom", ImVec2(preset_w, 0.0f)))
+            set_camera_preset(state.yaw, -1.45f);
+        item_tooltip("Blender-style quick views");
+
+        bool const can_frame_mesh = has_active_mesh(state);
+        if (!can_frame_mesh)
+            ImGui::BeginDisabled();
+        if (ImGui::Button("Frame Mesh", ImVec2(-FLT_MIN, 0.0f)))
+            frame_camera_to_mesh();
+        if (!can_frame_mesh)
+            ImGui::EndDisabled();
+        item_tooltip("Center target on active mesh bounds and adjust distance to fit");
+
+        if (begin_property_table("##CameraProps", 90.0f * s)) {
+            property_label("Orbit Yaw");
+            if (ImGui::SliderFloat("##CameraYaw", &state.yaw, -k_pi, k_pi, "%.3f rad")) {
+                state.auto_rotate = false;
+                result.harnack_params_changed = true;
+            }
+            item_tooltip("Orbit angle around world-up axis");
+
+            property_label("Orbit Pitch");
+            if (ImGui::SliderFloat("##CameraPitch", &state.pitch, -1.45f, 1.45f, "%.3f rad")) {
+                state.auto_rotate = false;
+                result.harnack_params_changed = true;
+            }
+            item_tooltip("Orbit elevation angle");
 
             property_label("Distance");
-            result.harnack_params_changed |=
-                ImGui::SliderFloat("##CameraDist", &state.camera_radius, 0.5f, 12.0f, "%.3f");
-            item_tooltip("Camera distance from the focus target");
+            if (ImGui::SliderFloat("##CameraDist", &state.camera_radius, 0.5f, 12.0f, "%.3f")) {
+                state.auto_rotate = false;
+                result.harnack_params_changed = true;
+            }
+            item_tooltip("Camera distance to target");
+
+            property_label("Target");
+            if (ImGui::DragFloat3("##CameraTarget", &state.camera_target.x, 0.01f, -100.0f, 100.0f)) {
+                state.auto_rotate = false;
+                result.harnack_params_changed = true;
+            }
+            item_tooltip("Focus target point in world coordinates");
 
             end_property_table();
         }
 
         ImGui::Spacing();
-        ImGui::Checkbox("Wireframe", &state.wireframe);
-        item_tooltip("Toggle wireframe overlay on raster view");
-        ImGui::SameLine();
-        if (ImGui::Button("Reset Camera")) {
-            state.yaw = 0.0f;
-            state.pitch = -0.35f;
-            state.camera_radius = 2.7f;
-            state.camera_target = Vec3{0.0f, 0.0f, 0.0f};
-            state.auto_rotate = true;
-            result.harnack_params_changed = true;
-        }
-        item_tooltip("Reset camera to default position and re-enable auto-rotate");
+        bool const rotate_changed = ImGui::Checkbox("Auto Rotate", &state.auto_rotate);
+        result.harnack_params_changed |= rotate_changed;
+        item_tooltip("Continuously orbit camera around target");
 
         CameraBasis const camera = build_camera_basis(state);
         ImGui::Spacing();
@@ -442,6 +498,12 @@ draw_editor_layout(AppState &state, float const dt, float const ui_scale) {
             ImGui::TextUnformatted(state.auto_rotate ? "Auto" : "Manual");
             end_property_table();
         }
+    }
+
+    if (begin_collapsing_section("Viewport", true)) {
+        ImGui::Checkbox("Wireframe", &state.wireframe);
+        item_tooltip("Show wireframe for raster and voxel rendering");
+        ImGui::TextDisabled("Harnack view is image-based and ignores wireframe.");
     }
 
     if ((state.view_mode == ViewMode::k_split || state.view_mode == ViewMode::k_harnack) &&
