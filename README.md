@@ -1,7 +1,6 @@
 # smallgwn
 
-A header-only CUDA library implementing [*Fast Winding Numbers for Soups and Clouds*](https://www.dgp.toronto.edu/projects/fast-winding-numbers/) (Barill et al., 2018) for GPU-accelerated winding number and signed distance queries on triangle meshes.
-Taylor-series multipole approximations (orders 0–2) with wide BVH acceleration (LBVH or H-PLOC).
+A header-only CUDA library implementing generalized winding-number (GWN)-related algorithms on triangle meshes, including [Fast Winding Numbers (FGWN)](https://doi.org/10.1145/3197517.3201337) and [Harnack tracking](https://doi.org/10.1145/3658201), accelerated with wide BVHs via [LBVH](https://research.nvidia.com/publication/2009-03_fast-bvh-construction-gpus) and [H-PLOC](https://doi.org/10.1145/3675377), plus Taylor multipole expansions.
 
 ## Requirements
 
