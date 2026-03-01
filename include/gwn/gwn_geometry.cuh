@@ -56,6 +56,29 @@ void gwn_release_accessor(
     );
 }
 
+template <gwn_index_type Index>
+gwn_status gwn_validate_triangle_indices(
+    cuda::std::span<Index const> const i0, cuda::std::span<Index const> const i1,
+    cuda::std::span<Index const> const i2, std::size_t const vertex_count
+) noexcept {
+    std::size_t const triangle_count = i0.size();
+    if (triangle_count == 0)
+        return gwn_status::ok();
+
+    if (vertex_count == 0)
+        return gwn_status::invalid_argument("Triangle indices require non-empty vertex arrays.");
+
+    for (std::size_t triangle_id = 0; triangle_id < triangle_count; ++triangle_id) {
+        if (!gwn_index_in_bounds(i0[triangle_id], vertex_count) ||
+            !gwn_index_in_bounds(i1[triangle_id], vertex_count) ||
+            !gwn_index_in_bounds(i2[triangle_id], vertex_count)) {
+            return gwn_status::invalid_argument("Triangle indices must be in [0, vertex_count).");
+        }
+    }
+
+    return gwn_status::ok();
+}
+
 template <gwn_real_type Real, gwn_index_type Index>
 gwn_status gwn_upload_accessor(
     gwn_geometry_accessor<Real, Index> &accessor, cuda::std::span<Real const> x,
@@ -66,6 +89,13 @@ gwn_status gwn_upload_accessor(
         return gwn_status::invalid_argument("Vertex SoA spans must have identical lengths.");
     if (i0.size() != i1.size() || i0.size() != i2.size())
         return gwn_status::invalid_argument("Triangle SoA spans must have identical lengths.");
+    if (!gwn_span_has_storage(x) || !gwn_span_has_storage(y) || !gwn_span_has_storage(z) ||
+        !gwn_span_has_storage(i0) || !gwn_span_has_storage(i1) || !gwn_span_has_storage(i2)) {
+        return gwn_status::invalid_argument(
+            "Geometry spans must use non-null storage when non-empty."
+        );
+    }
+    GWN_RETURN_ON_ERROR(gwn_validate_triangle_indices<Index>(i0, i1, i2, x.size()));
 
     gwn_geometry_accessor<Real, Index> staging{};
     auto cleanup_staging =

@@ -23,6 +23,25 @@ TEST(smallgwn_unit_geometry, default_accessor_is_empty_and_valid) {
     EXPECT_EQ(accessor.triangle_count(), 0u);
 }
 
+TEST(smallgwn_unit_geometry, upload_rejects_non_empty_null_storage_spans) {
+    std::array<Real, 1> const vx{1.0f};
+    std::array<Real, 1> const vy{0.0f};
+    std::array<Real, 1> const vz{0.0f};
+    auto const *null_index = static_cast<Index const *>(nullptr);
+
+    gwn::gwn_geometry_object<Real, Index> geometry;
+    gwn::gwn_status const status = geometry.upload(
+        cuda::std::span<Real const>(vx.data(), vx.size()),
+        cuda::std::span<Real const>(vy.data(), vy.size()),
+        cuda::std::span<Real const>(vz.data(), vz.size()),
+        cuda::std::span<Index const>(null_index, 1), cuda::std::span<Index const>(null_index, 1),
+        cuda::std::span<Index const>(null_index, 1)
+    );
+
+    EXPECT_FALSE(status.is_ok());
+    EXPECT_EQ(status.error(), gwn::gwn_error::invalid_argument);
+}
+
 // Upload, success path.
 
 TEST_F(CudaFixture, upload_valid_single_triangle) {
@@ -83,6 +102,45 @@ TEST_F(CudaFixture, upload_triangle_soa_length_mismatch) {
         cuda::std::span<Real const>(vx.data(), vx.size()),
         cuda::std::span<Real const>(vy.data(), vy.size()),
         cuda::std::span<Real const>(vz.data(), vz.size()),
+        cuda::std::span<Index const>(i0.data(), i0.size()),
+        cuda::std::span<Index const>(i1.data(), i1.size()),
+        cuda::std::span<Index const>(i2.data(), i2.size())
+    );
+    SMALLGWN_SKIP_IF_STATUS_CUDA_UNAVAILABLE(status);
+    EXPECT_FALSE(status.is_ok());
+    EXPECT_EQ(status.error(), gwn::gwn_error::invalid_argument);
+}
+
+TEST_F(CudaFixture, upload_triangle_index_out_of_range_rejected) {
+    std::array<Real, 3> const vx{1.0f, 0.0f, 0.0f};
+    std::array<Real, 3> const vy{0.0f, 1.0f, 0.0f};
+    std::array<Real, 3> const vz{0.0f, 0.0f, 1.0f};
+    std::array<Index, 1> const i0{0};
+    std::array<Index, 1> const i1{1};
+    std::array<Index, 1> const i2{3}; // vertex_count == 3, so this is out of range.
+
+    gwn::gwn_geometry_object<Real, Index> geometry;
+    gwn::gwn_status const status = geometry.upload(
+        cuda::std::span<Real const>(vx.data(), vx.size()),
+        cuda::std::span<Real const>(vy.data(), vy.size()),
+        cuda::std::span<Real const>(vz.data(), vz.size()),
+        cuda::std::span<Index const>(i0.data(), i0.size()),
+        cuda::std::span<Index const>(i1.data(), i1.size()),
+        cuda::std::span<Index const>(i2.data(), i2.size())
+    );
+    SMALLGWN_SKIP_IF_STATUS_CUDA_UNAVAILABLE(status);
+    EXPECT_FALSE(status.is_ok());
+    EXPECT_EQ(status.error(), gwn::gwn_error::invalid_argument);
+}
+
+TEST_F(CudaFixture, upload_triangles_without_vertices_rejected) {
+    std::array<Index, 1> const i0{0};
+    std::array<Index, 1> const i1{0};
+    std::array<Index, 1> const i2{0};
+
+    gwn::gwn_geometry_object<Real, Index> geometry;
+    gwn::gwn_status const status = geometry.upload(
+        cuda::std::span<Real const>{}, cuda::std::span<Real const>{}, cuda::std::span<Real const>{},
         cuda::std::span<Index const>(i0.data(), i0.size()),
         cuda::std::span<Index const>(i1.data(), i1.size()),
         cuda::std::span<Index const>(i2.data(), i2.size())
@@ -199,4 +257,3 @@ TEST_F(CudaFixture, move_preserves_accessor) {
     EXPECT_TRUE(dst.accessor().is_valid());
     EXPECT_EQ(src.triangle_count(), 0u);
 }
-
