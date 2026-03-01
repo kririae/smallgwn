@@ -79,6 +79,17 @@ CPMAddPackage(
     GIT_TAG 1.0.1)
 
 # ----------------------------------------------------------
+# oneTBB
+# ----------------------------------------------------------
+CPMAddPackage(
+    NAME oneTBB
+    GITHUB_REPOSITORY oneapi-src/oneTBB
+    GIT_TAG v2022.3.0
+    OPTIONS
+        "TBB_TEST OFF"
+        "TBB_STRICT OFF")
+
+# ----------------------------------------------------------
 # glfw3, OpenGL, GLEW (system packages)
 # ----------------------------------------------------------
 find_package(OpenGL REQUIRED)
@@ -122,5 +133,6 @@ target_link_libraries(winding_studio
         gwn::smallgwn
         imgui_backend
         glm::glm
+        TBB::tbb
         Eigen3::Eigen
         igl::core)

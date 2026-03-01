@@ -8,6 +8,7 @@
 #include <stdexcept>
 
 #include <glm/gtc/type_ptr.hpp>
+#include <tbb/parallel_for.h>
 
 #include "ws_core.hpp"
 #include "ws_math.hpp"
@@ -121,21 +122,26 @@ MeshRenderer::~MeshRenderer() {
 
 void MeshRenderer::upload_mesh(MeshData const &mesh) {
     std::size_t const tri_count = mesh.indices.size() / 3u;
-    std::vector<float> verts;
-    verts.reserve(tri_count * 3u * 6u);
+    std::vector<float> verts(tri_count * 3u * 6u);
+    float const *positions = mesh.positions.data();
+    std::uint32_t const *indices = mesh.indices.data();
 
-    for (std::size_t t = 0; t < tri_count; ++t) {
+    tbb::parallel_for(std::size_t{0}, tri_count, [&](std::size_t const t) {
         std::uint32_t const idx[3] = {
-            mesh.indices[t * 3 + 0],
-            mesh.indices[t * 3 + 1],
-            mesh.indices[t * 3 + 2],
+            indices[t * 3u + 0u],
+            indices[t * 3u + 1u],
+            indices[t * 3u + 2u],
         };
-        float const *a = &mesh.positions[idx[0] * 3];
-        float const *b = &mesh.positions[idx[1] * 3];
-        float const *c = &mesh.positions[idx[2] * 3];
+        float const *a = &positions[idx[0] * 3u];
+        float const *b = &positions[idx[1] * 3u];
+        float const *c = &positions[idx[2] * 3u];
 
-        float const ex = b[0] - a[0], ey = b[1] - a[1], ez = b[2] - a[2];
-        float const fx = c[0] - a[0], fy = c[1] - a[1], fz = c[2] - a[2];
+        float const ex = b[0] - a[0];
+        float const ey = b[1] - a[1];
+        float const ez = b[2] - a[2];
+        float const fx = c[0] - a[0];
+        float const fy = c[1] - a[1];
+        float const fz = c[2] - a[2];
         float nx = ey * fz - ez * fy;
         float ny = ez * fx - ex * fz;
         float nz = ex * fy - ey * fx;
@@ -146,11 +152,18 @@ void MeshRenderer::upload_mesh(MeshData const &mesh) {
             nz /= len;
         }
 
+        std::size_t const base = t * 18u;
         for (int v = 0; v < 3; ++v) {
-            float const *p = &mesh.positions[idx[v] * 3];
-            verts.insert(verts.end(), {p[0], p[1], p[2], nx, ny, nz});
+            float const *p = &positions[idx[v] * 3u];
+            std::size_t const out = base + static_cast<std::size_t>(v) * 6u;
+            verts[out + 0u] = p[0];
+            verts[out + 1u] = p[1];
+            verts[out + 2u] = p[2];
+            verts[out + 3u] = nx;
+            verts[out + 4u] = ny;
+            verts[out + 5u] = nz;
         }
-    }
+    });
 
     vertex_count_ = static_cast<GLsizei>(tri_count * 3u);
     glBindVertexArray(vao_);

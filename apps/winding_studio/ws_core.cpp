@@ -4,6 +4,8 @@
 #include <cmath>
 #include <sstream>
 
+#include <tbb/parallel_for.h>
+
 #include "ws_math.hpp"
 
 namespace winding_studio::app {
@@ -19,16 +21,16 @@ namespace winding_studio::app {
     out.i1.resize(tri_count);
     out.i2.resize(tri_count);
 
-    for (std::size_t i = 0; i < vertex_count; ++i) {
+    tbb::parallel_for(std::size_t{0}, vertex_count, [&](std::size_t const i) {
         out.vx[i] = mesh.positions[i * 3u + 0u];
         out.vy[i] = mesh.positions[i * 3u + 1u];
         out.vz[i] = mesh.positions[i * 3u + 2u];
-    }
-    for (std::size_t i = 0; i < tri_count; ++i) {
+    });
+    tbb::parallel_for(std::size_t{0}, tri_count, [&](std::size_t const i) {
         out.i0[i] = mesh.indices[i * 3u + 0u];
         out.i1[i] = mesh.indices[i * 3u + 1u];
         out.i2[i] = mesh.indices[i * 3u + 2u];
-    }
+    });
     return out;
 }
 
