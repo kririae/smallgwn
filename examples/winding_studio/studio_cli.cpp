@@ -1,4 +1,4 @@
-#include "ws_cli.hpp"
+#include "studio_cli.hpp"
 
 #include <iostream>
 #include <string>

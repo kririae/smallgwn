@@ -324,6 +324,8 @@ public:
 
             out.total_voxels = static_cast<std::size_t>(grid.total_voxels);
             out.occupied_count = occupied_count;
+            out.requested_selected_count = static_cast<std::size_t>(selected_total);
+            out.truncated = out.occupied_count < out.requested_selected_count;
             return true;
         } catch (std::exception const &e) {
             error = e.what();

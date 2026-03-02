@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ws_types.hpp"
+#include "studio_state.hpp"
 
 #include <GL/glew.h>
 
@@ -35,6 +35,10 @@ public:
     TextureRenderer &operator=(TextureRenderer const &) = delete;
     ~TextureRenderer();
 
+    /**
+     * @brief Invalidate current texture content and stop drawing it.
+     */
+    void clear() noexcept;
     void upload_rgba(int width, int height, std::vector<std::uint8_t> const &rgba);
     [[nodiscard]] bool has_texture() const noexcept;
     void draw(int x, int y, int w, int h) const;

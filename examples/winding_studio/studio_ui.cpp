@@ -1,4 +1,4 @@
-#include "ws_ui.hpp"
+#include "studio_ui.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -6,8 +6,9 @@
 #include <cstdlib>
 
 #include "imgui.h"
-#include "ws_core.hpp"
-#include "ws_math.hpp"
+#include "studio_math.hpp"
+#include "studio_mesh_library.hpp"
+#include "third_party/imfilebrowser.h"
 
 namespace winding_studio::app {
 
@@ -87,6 +88,21 @@ static void status_segment(char const *label, char const *value) {
     ImGui::TextUnformatted(value);
 }
 
+[[nodiscard]] static ImGui::FileBrowser &mesh_file_browser() {
+    static ImGui::FileBrowser browser{
+        ImGuiFileBrowserFlags_CloseOnEsc | ImGuiFileBrowserFlags_ConfirmOnEnter
+    };
+    static bool initialized = false;
+    if (!initialized) {
+        browser.SetTitle("Open Mesh File");
+        browser.SetTypeFilters({".obj", ".ply", ".stl", ".off", ".*"});
+        if (char const *home = std::getenv("HOME"); home != nullptr && home[0] != '\0')
+            (void)browser.SetPwd(home);
+        initialized = true;
+    }
+    return browser;
+}
+
 void apply_engine_style(float const dpi_scale) {
     ImGuiStyle &style = ImGui::GetStyle();
     style.WindowRounding = 4.0f;
@@ -147,6 +163,7 @@ void apply_engine_style(float const dpi_scale) {
 draw_editor_layout(AppState &state, float const dt, float const ui_scale) {
     UiLayoutResult result{};
     (void)dt;
+    ImGui::FileBrowser &file_browser = mesh_file_browser();
 
     ImGuiViewport const *main_viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(main_viewport->Pos);
@@ -195,13 +212,22 @@ draw_editor_layout(AppState &state, float const dt, float const ui_scale) {
     float const btn_start =
         std::max(ImGui::GetCursorPosX(), ImGui::GetWindowContentRegionMax().x - buttons_w);
     ImGui::SameLine(btn_start);
-    if (mode_button("Split", state.view_mode == ViewMode::k_split, ImVec2(mode_button_w, 0.0f)))
+    if (mode_button(
+            "Split##ws_mode_split", state.view_mode == ViewMode::k_split,
+            ImVec2(mode_button_w, 0.0f)
+        ))
         state.view_mode = ViewMode::k_split;
     ImGui::SameLine();
-    if (mode_button("Raster", state.view_mode == ViewMode::k_raster, ImVec2(mode_button_w, 0.0f)))
+    if (mode_button(
+            "Raster##ws_mode_raster", state.view_mode == ViewMode::k_raster,
+            ImVec2(mode_button_w, 0.0f)
+        ))
         state.view_mode = ViewMode::k_raster;
     ImGui::SameLine();
-    if (mode_button("Harnack", state.view_mode == ViewMode::k_harnack, ImVec2(mode_button_w, 0.0f)))
+    if (mode_button(
+            "Harnack##ws_mode_harnack", state.view_mode == ViewMode::k_harnack,
+            ImVec2(mode_button_w, 0.0f)
+        ))
         state.view_mode = ViewMode::k_harnack;
     ImGui::SameLine();
     ImVec4 const voxel_palette[4] = {
@@ -211,7 +237,8 @@ draw_editor_layout(AppState &state, float const dt, float const ui_scale) {
         ImVec4(0.70f, 1.00f, 0.80f, 1.0f),
     };
     if (mode_button(
-            "Voxel", state.view_mode == ViewMode::k_voxel, ImVec2(mode_button_w, 0.0f),
+            "Voxel##ws_mode_voxel", state.view_mode == ViewMode::k_voxel,
+            ImVec2(mode_button_w, 0.0f),
             voxel_palette
         ))
         state.view_mode = ViewMode::k_voxel;
@@ -235,11 +262,15 @@ draw_editor_layout(AppState &state, float const dt, float const ui_scale) {
         ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollbar |
             ImGuiWindowFlags_NoScrollWithMouse
     );
-    result.viewport_pos = ImGui::GetCursorScreenPos();
-    result.viewport_size = ImGui::GetContentRegionAvail();
-    result.viewport_size.x = std::max(result.viewport_size.x, 32.0f);
-    result.viewport_size.y = std::max(result.viewport_size.y, 32.0f);
-    ImGui::InvisibleButton("ViewportCanvas", result.viewport_size);
+    ImVec2 const viewport_pos = ImGui::GetCursorScreenPos();
+    ImVec2 viewport_size = ImGui::GetContentRegionAvail();
+    viewport_size.x = std::max(viewport_size.x, 32.0f);
+    viewport_size.y = std::max(viewport_size.y, 32.0f);
+    result.viewport_pos_x = viewport_pos.x;
+    result.viewport_pos_y = viewport_pos.y;
+    result.viewport_w = viewport_size.x;
+    result.viewport_h = viewport_size.y;
+    ImGui::InvisibleButton("ViewportCanvas", viewport_size);
 
     bool const viewport_hovered = ImGui::IsItemHovered();
     bool const viewport_active = ImGui::IsItemActive();
@@ -281,16 +312,16 @@ draw_editor_layout(AppState &state, float const dt, float const ui_scale) {
     }
 
     ImDrawList *draw_list = ImGui::GetWindowDrawList();
-    ImVec2 const p0 = result.viewport_pos;
+    ImVec2 const p0{result.viewport_pos_x, result.viewport_pos_y};
     ImVec2 const p1 = ImVec2(
-        result.viewport_pos.x + result.viewport_size.x,
-        result.viewport_pos.y + result.viewport_size.y
+        result.viewport_pos_x + result.viewport_w,
+        result.viewport_pos_y + result.viewport_h
     );
     float const corner_r = ImGui::GetStyle().ChildRounding;
     draw_list->AddRect(p0, p1, IM_COL32(50, 65, 85, 120), corner_r, 0, 0.6f);
 
     if (state.view_mode == ViewMode::k_split) {
-        float const mid_x = p0.x + result.viewport_size.x * 0.5f;
+        float const mid_x = p0.x + result.viewport_w * 0.5f;
         draw_list->AddLine(
             ImVec2(mid_x, p0.y), ImVec2(mid_x, p1.y), IM_COL32(180, 190, 210, 60), 1.0f
         );
@@ -314,8 +345,8 @@ draw_editor_layout(AppState &state, float const dt, float const ui_scale) {
         char const *msg = "No active mesh";
         ImVec2 const text_size = ImGui::CalcTextSize(msg);
         ImVec2 const text_pos{
-            p0.x + 0.5f * (result.viewport_size.x - text_size.x),
-            p0.y + 0.5f * (result.viewport_size.y - text_size.y),
+            p0.x + 0.5f * (result.viewport_w - text_size.x),
+            p0.y + 0.5f * (result.viewport_h - text_size.y),
         };
         draw_list->AddText(text_pos, IM_COL32(150, 165, 190, 160), msg);
     }
@@ -334,7 +365,8 @@ draw_editor_layout(AppState &state, float const dt, float const ui_scale) {
             for (int i = 0; i < static_cast<int>(state.mesh_library.size()); ++i) {
                 MeshLibraryEntry const &entry = state.mesh_library[static_cast<std::size_t>(i)];
                 bool const selected = (state.selected_mesh_index == i);
-                std::string const label = mesh_list_label(entry, i == state.active_mesh_index);
+                std::string const label = mesh_list_label(entry, i == state.active_mesh_index) +
+                                          "##ws_mesh_row_" + std::to_string(i);
                 ImGui::PushID(i);
                 if (ImGui::Selectable(label.c_str(), selected)) {
                     state.selected_mesh_index = i;
@@ -351,17 +383,9 @@ draw_editor_layout(AppState &state, float const dt, float const ui_scale) {
         else
             ImGui::TextDisabled("Click a row to show it in the viewport.");
 
-        if (!state.file_browser_initialized) {
-            state.file_browser.SetTitle("Open Mesh File");
-            state.file_browser.SetTypeFilters({".obj", ".ply", ".stl", ".off", ".*"});
-            if (char const *home = std::getenv("HOME"); home != nullptr && home[0] != '\0')
-                (void)state.file_browser.SetPwd(home);
-            state.file_browser_initialized = true;
-        }
-
         ImGui::Spacing();
-        if (ImGui::Button("Add Mesh..."))
-            state.file_browser.Open();
+        if (ImGui::Button("Add Mesh...##ws_add_mesh"))
+            file_browser.Open();
         item_tooltip("Add a mesh file to this session (.obj, .ply, .stl, .off).");
         ImGui::SameLine();
         bool const can_remove_selected =
@@ -369,7 +393,7 @@ draw_editor_layout(AppState &state, float const dt, float const ui_scale) {
             !state.mesh_library[static_cast<std::size_t>(state.selected_mesh_index)].is_builtin;
         if (!can_remove_selected)
             ImGui::BeginDisabled();
-        if (ImGui::Button("Remove"))
+        if (ImGui::Button("Remove##ws_remove_selected"))
             result.remove_mesh_index = state.selected_mesh_index;
         if (!can_remove_selected)
             ImGui::EndDisabled();
@@ -378,8 +402,8 @@ draw_editor_layout(AppState &state, float const dt, float const ui_scale) {
 
     if (begin_collapsing_section("Camera", true)) {
         auto reset_camera = [&]() {
-            state.yaw = 0.0f;
-            state.pitch = 0.35f;
+            state.yaw = 0.7853981634f;
+            state.pitch = 0.6154797087f;
             state.camera_radius = 2.7f;
             state.camera_target = Vec3{0.0f, 0.0f, 0.0f};
             state.auto_rotate = false;
@@ -551,12 +575,12 @@ draw_editor_layout(AppState &state, float const dt, float const ui_scale) {
 
             ImGui::Spacing();
             result.harnack_params_changed |=
-                ImGui::Checkbox("Live Update", &state.harnack_live_update);
+                ImGui::Checkbox("Live Update##ws_harnack_live_update", &state.harnack_live_update);
             item_tooltip(
                 "Continuously re-trace when parameters change. Disable for manual control"
             );
             ImGui::SameLine();
-            if (ImGui::Button("Refresh"))
+            if (ImGui::Button("Refresh##ws_harnack_refresh"))
                 result.request_harnack_refresh = true;
             item_tooltip("Force a single Harnack trace refresh");
         }
@@ -631,7 +655,7 @@ draw_editor_layout(AppState &state, float const dt, float const ui_scale) {
     status_segment("Mesh:", buf);
     ImGui::SameLine(0.0f, 16.0f);
 
-    std::snprintf(buf, sizeof(buf), "%.0f x %.0f", result.viewport_size.x, result.viewport_size.y);
+    std::snprintf(buf, sizeof(buf), "%.0f x %.0f", result.viewport_w, result.viewport_h);
     status_segment("Viewport:", buf);
 
     bool const show_harnack_stats =
@@ -648,9 +672,16 @@ draw_editor_layout(AppState &state, float const dt, float const ui_scale) {
     }
     if (state.view_mode == ViewMode::k_voxel) {
         ImGui::SameLine(0.0f, 16.0f);
-        std::snprintf(
-            buf, sizeof(buf), "%zu / %zu", state.voxel_occupied_count, state.voxel_grid_total
-        );
+        if (state.voxel_truncated) {
+            std::snprintf(
+                buf, sizeof(buf), "%zu / %zu (req %zu)", state.voxel_occupied_count,
+                state.voxel_grid_total, state.voxel_requested_count
+            );
+        } else {
+            std::snprintf(
+                buf, sizeof(buf), "%zu / %zu", state.voxel_occupied_count, state.voxel_grid_total
+            );
+        }
         status_segment("Voxels:", buf);
         ImGui::SameLine(0.0f, 16.0f);
         std::snprintf(buf, sizeof(buf), "%.2f ms", state.last_voxel_ms);
@@ -661,10 +692,10 @@ draw_editor_layout(AppState &state, float const dt, float const ui_scale) {
 
     ImGui::End();
 
-    state.file_browser.Display();
-    if (state.file_browser.HasSelected()) {
-        result.mesh_file_to_add = state.file_browser.GetSelected().string();
-        state.file_browser.ClearSelected();
+    file_browser.Display();
+    if (file_browser.HasSelected()) {
+        result.mesh_file_to_add = file_browser.GetSelected().string();
+        file_browser.ClearSelected();
     }
 
     return result;
@@ -678,11 +709,11 @@ draw_editor_layout(AppState &state, float const dt, float const ui_scale) {
     float const scale_y = io.DisplayFramebufferScale.y > 0.0f ? io.DisplayFramebufferScale.y : 1.0f;
 
     int const x =
-        static_cast<int>(std::lround((layout.viewport_pos.x - main_viewport.Pos.x) * scale_x));
+        static_cast<int>(std::lround((layout.viewport_pos_x - main_viewport.Pos.x) * scale_x));
     int const y_top =
-        static_cast<int>(std::lround((layout.viewport_pos.y - main_viewport.Pos.y) * scale_y));
-    int const w = std::max(0, static_cast<int>(std::lround(layout.viewport_size.x * scale_x)));
-    int const h = std::max(0, static_cast<int>(std::lround(layout.viewport_size.y * scale_y)));
+        static_cast<int>(std::lround((layout.viewport_pos_y - main_viewport.Pos.y) * scale_y));
+    int const w = std::max(0, static_cast<int>(std::lround(layout.viewport_w * scale_x)));
+    int const h = std::max(0, static_cast<int>(std::lround(layout.viewport_h * scale_y)));
     int const y = fb_h - (y_top + h);
 
     int const x0 = std::clamp(x, 0, fb_w);

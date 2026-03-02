@@ -17,6 +17,8 @@ struct VoxelizeConfig {
 struct VoxelizeStats {
     std::size_t occupied_count{0};
     std::size_t total_voxels{0};
+    std::size_t requested_selected_count{0};
+    bool truncated{false};
 };
 
 class Voxelizer final {

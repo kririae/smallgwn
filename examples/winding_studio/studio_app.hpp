@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ws_types.hpp"
+#include "studio_domain.hpp"
 
 namespace winding_studio::app {
 

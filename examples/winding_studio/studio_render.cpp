@@ -1,4 +1,4 @@
-#include "ws_render.hpp"
+#include "studio_render.hpp"
 
 #include <algorithm>
 #include <array>
@@ -10,8 +10,9 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <tbb/parallel_for.h>
 
-#include "ws_core.hpp"
-#include "ws_math.hpp"
+#include "studio_math.hpp"
+#include "studio_mesh_library.hpp"
+#include "studio_mesh_validate.hpp"
 
 namespace winding_studio::app {
 
@@ -121,6 +122,10 @@ MeshRenderer::~MeshRenderer() {
 }
 
 void MeshRenderer::upload_mesh(MeshData const &mesh) {
+    std::string validation_error;
+    if (!validate_mesh_data(mesh, validation_error))
+        throw std::runtime_error("invalid mesh for raster upload: " + validation_error);
+
     std::size_t const tri_count = mesh.indices.size() / 3u;
     std::vector<float> verts(tri_count * 3u * 6u);
     float const *positions = mesh.positions.data();
@@ -269,6 +274,12 @@ TextureRenderer::~TextureRenderer() {
         glDeleteVertexArrays(1, &vao_);
     if (program_ != 0)
         glDeleteProgram(program_);
+}
+
+void TextureRenderer::clear() noexcept {
+    has_texture_ = false;
+    tex_w_ = 0;
+    tex_h_ = 0;
 }
 
 void TextureRenderer::upload_rgba(

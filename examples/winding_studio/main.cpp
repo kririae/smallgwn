@@ -1,8 +1,8 @@
 #include <exception>
 #include <iostream>
 
-#include "ws_app.hpp"
-#include "ws_cli.hpp"
+#include "studio_app.hpp"
+#include "studio_cli.hpp"
 
 int main(int argc, char **argv) {
     try {
