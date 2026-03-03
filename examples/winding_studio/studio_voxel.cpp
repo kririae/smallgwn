@@ -1,9 +1,9 @@
 #include "studio_voxel.hpp"
 
-#include "studio_mesh_library.hpp"
-
 #include <chrono>
 #include <string>
+
+#include "studio_mesh_library.hpp"
 
 namespace winding_studio::app {
 
@@ -12,12 +12,14 @@ void update_voxelization_if_needed(
     winding_studio::VoxelizeStats &voxel_stats
 ) {
     bool const needs_voxel = state.view_mode == ViewMode::k_voxel;
-    if (!(needs_voxel && has_active_mesh(state) && voxelizer.has_mesh() && state.force_voxel_refresh))
+    if (!(needs_voxel && has_active_mesh(state) && voxelizer.has_mesh() &&
+          state.force_voxel_refresh))
         return;
 
-    winding_studio::voxel::VoxelGridSpec const grid = winding_studio::voxel::make_voxel_grid_from_dx(
-        state.mesh_bounds, state.voxel_dx, state.voxel_max_voxels
-    );
+    winding_studio::voxel::VoxelGridSpec const grid =
+        winding_studio::voxel::make_voxel_grid_from_dx(
+            state.mesh_bounds, state.voxel_dx, state.voxel_max_voxels
+        );
     state.voxel_grid_nx = grid.nx;
     state.voxel_grid_ny = grid.ny;
     state.voxel_grid_nz = grid.nz;
@@ -41,8 +43,8 @@ void update_voxelization_if_needed(
     auto const voxel_begin = std::chrono::steady_clock::now();
     std::string voxel_error;
     bool const ok = voxelizer.voxelize(
-        grid, config, voxel_renderer.instance_buffer(), voxel_renderer.instance_capacity(), voxel_stats,
-        voxel_error
+        grid, config, voxel_renderer.instance_buffer(), voxel_renderer.instance_capacity(),
+        voxel_stats, voxel_error
     );
     auto const voxel_end = std::chrono::steady_clock::now();
     state.last_voxel_ms = std::chrono::duration<float, std::milli>(voxel_end - voxel_begin).count();

@@ -1,13 +1,13 @@
 #include "studio_trace.hpp"
 
-#include "studio_math.hpp"
-#include "studio_mesh_library.hpp"
-
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <exception>
 #include <string>
+
+#include "studio_math.hpp"
+#include "studio_mesh_library.hpp"
 
 namespace winding_studio::app {
 
@@ -42,8 +42,10 @@ void update_harnack_trace_if_needed(
     AppState &state, FramebufferRect const viewport, winding_studio::HarnackTracer &harnack_tracer,
     TextureRenderer &harnack_texture_renderer, winding_studio::HarnackTraceImages &trace_images
 ) {
-    bool const needs_harnack = state.view_mode == ViewMode::k_split || state.view_mode == ViewMode::k_harnack;
-    if (!(needs_harnack && has_active_mesh(state) && harnack_tracer.has_mesh() && viewport.w > 0 && viewport.h > 0))
+    bool const needs_harnack =
+        state.view_mode == ViewMode::k_split || state.view_mode == ViewMode::k_harnack;
+    if (!(needs_harnack && has_active_mesh(state) && harnack_tracer.has_mesh() && viewport.w > 0 &&
+          viewport.h > 0))
         return;
 
     bool const should_trace = state.force_harnack_refresh || state.harnack_live_update;
@@ -60,18 +62,16 @@ void update_harnack_trace_if_needed(
 
     winding_studio::CameraFrame const camera = make_harnack_camera_frame(state, trace_w, trace_h);
     winding_studio::HarnackTraceConfig const config{
-        state.target_winding,
-        state.epsilon,
-        state.max_iterations,
-        state.t_max,
-        state.accuracy_scale,
+        state.target_winding, state.epsilon,        state.max_iterations,
+        state.t_max,          state.accuracy_scale,
     };
 
     auto const trace_begin = std::chrono::steady_clock::now();
     std::string trace_error;
     bool const ok = harnack_tracer.trace(camera, config, trace_images, trace_error);
     auto const trace_end = std::chrono::steady_clock::now();
-    state.last_harnack_ms = std::chrono::duration<float, std::milli>(trace_end - trace_begin).count();
+    state.last_harnack_ms =
+        std::chrono::duration<float, std::milli>(trace_end - trace_begin).count();
 
     if (ok) {
         try {

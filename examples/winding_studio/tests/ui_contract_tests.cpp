@@ -1,15 +1,14 @@
 #include "ui_contract_tests.hpp"
 
-#include "imgui.h"
-#include "imgui_internal.h"
-#include "imgui_test_engine/imgui_te_context.h"
-
-#include "studio_mesh_library.hpp"
-#include "studio_ui.hpp"
-
 #include <cmath>
 #include <cstring>
 #include <string>
+
+#include "imgui.h"
+#include "imgui_internal.h"
+#include "imgui_test_engine/imgui_te_context.h"
+#include "studio_mesh_library.hpp"
+#include "studio_ui.hpp"
 
 namespace {
 
@@ -30,7 +29,8 @@ struct UiContractVars {
 void initialize_state(UiContractVars &vars, bool const include_imported_mesh) {
     vars.state = AppState{};
     int const i0 = add_mesh_to_library(vars.state, build_default_mesh(), "Half Octahedron", true);
-    int const i1 = add_mesh_to_library(vars.state, build_closed_octa_mesh(), "Closed Octahedron", true);
+    int const i1 =
+        add_mesh_to_library(vars.state, build_closed_octa_mesh(), "Closed Octahedron", true);
     (void)i0;
     (void)i1;
 
@@ -40,7 +40,8 @@ void initialize_state(UiContractVars &vars, bool const include_imported_mesh) {
         vars.state.active_mesh_index = i2;
         vars.state.selected_mesh_index = i2;
         vars.state.active_mesh_name = vars.state.mesh_library[static_cast<std::size_t>(i2)].name;
-        vars.state.triangle_count = vars.state.mesh_library[static_cast<std::size_t>(i2)].triangle_count;
+        vars.state.triangle_count =
+            vars.state.mesh_library[static_cast<std::size_t>(i2)].triangle_count;
     } else {
         vars.state.active_mesh_index = 0;
         vars.state.selected_mesh_index = 0;
@@ -88,6 +89,8 @@ ImGuiWindow *find_toolbar_window() { return find_window_with_fragment("/Toolbar_
 
 ImGuiWindow *find_inspector_window() { return find_window_with_fragment("/InspectorPanel_"); }
 
+ImGuiWindow *find_viewport_window() { return find_window_with_fragment("/ViewportPanel_"); }
+
 void set_ref_toolbar(ImGuiTestContext *ctx) {
     ImGuiWindow *toolbar = find_toolbar_window();
     IM_CHECK(toolbar != nullptr);
@@ -98,6 +101,12 @@ void set_ref_inspector(ImGuiTestContext *ctx) {
     ImGuiWindow *inspector = find_inspector_window();
     IM_CHECK(inspector != nullptr);
     ctx->SetRef(inspector);
+}
+
+void set_ref_viewport(ImGuiTestContext *ctx) {
+    ImGuiWindow *viewport = find_viewport_window();
+    IM_CHECK(viewport != nullptr);
+    ctx->SetRef(viewport);
 }
 
 [[nodiscard]] bool item_exists(ImGuiTestContext *ctx, char const *ref) {
@@ -216,10 +225,14 @@ void RegisterWindingStudioUiContractTests(ImGuiTestEngine *engine) {
         IM_CHECK((remove_button.ItemFlags & ImGuiItemFlags_Disabled) != 0);
         std::size_t const library_size = vars.state.mesh_library.size();
 
-        ctx->ItemClick("Remove##ws_remove_selected", ImGuiMouseButton_Left, ImGuiTestOpFlags_NoError);
+        ctx->ItemClick(
+            "Remove##ws_remove_selected", ImGuiMouseButton_Left, ImGuiTestOpFlags_NoError
+        );
         IM_CHECK_EQ(vars.last_remove_mesh_index, -1);
         IM_CHECK_EQ(vars.state.selected_mesh_index, 0);
-        IM_CHECK_EQ(static_cast<int>(vars.state.mesh_library.size()), static_cast<int>(library_size));
+        IM_CHECK_EQ(
+            static_cast<int>(vars.state.mesh_library.size()), static_cast<int>(library_size)
+        );
     };
 
     test = IM_REGISTER_TEST(engine, "winding_studio", "geometry_remove_imported_reselection");
@@ -399,6 +412,63 @@ void RegisterWindingStudioUiContractTests(ImGuiTestEngine *engine) {
             ctx->ItemInfo("Frame Mesh", ImGuiTestOpFlags_NoError);
         IM_CHECK(frame_mesh_enabled.ID != 0);
         IM_CHECK((frame_mesh_enabled.ItemFlags & ImGuiItemFlags_Disabled) == 0);
+    };
+
+    test = IM_REGISTER_TEST(engine, "winding_studio", "camera_orbit_drag_direction_contract");
+    test->SetVarsDataType<UiContractVars>();
+    test->GuiFunc = [](ImGuiTestContext *ctx) {
+        UiContractVars &vars = ctx->GetVars<UiContractVars>();
+        if (!vars.initialized)
+            initialize_state(vars, false);
+        draw_ui(vars);
+    };
+    test->TestFunc = [](ImGuiTestContext *ctx) {
+        UiContractVars &vars = ctx->GetVars<UiContractVars>();
+        vars.state.pitch = 0.0f;
+        ctx->Yield();
+
+        set_ref_viewport(ctx);
+        ImGuiTestItemInfo const viewport_canvas =
+            ctx->ItemInfo("ViewportCanvas", ImGuiTestOpFlags_NoError);
+        IM_CHECK(viewport_canvas.ID != 0);
+
+        float const pitch_before = vars.state.pitch;
+        ctx->MouseMove(viewport_canvas.ID);
+        ctx->MouseDragWithDelta(ImVec2(0.0f, -40.0f), ImGuiMouseButton_Middle);
+        ctx->Yield();
+
+        IM_CHECK(vars.state.pitch < pitch_before);
+    };
+
+    test = IM_REGISTER_TEST(engine, "winding_studio", "camera_pan_drag_direction_contract");
+    test->SetVarsDataType<UiContractVars>();
+    test->GuiFunc = [](ImGuiTestContext *ctx) {
+        UiContractVars &vars = ctx->GetVars<UiContractVars>();
+        if (!vars.initialized)
+            initialize_state(vars, false);
+        draw_ui(vars);
+    };
+    test->TestFunc = [](ImGuiTestContext *ctx) {
+        UiContractVars &vars = ctx->GetVars<UiContractVars>();
+        vars.state.yaw = 0.0f;
+        vars.state.pitch = 0.0f;
+        vars.state.camera_target = Vec3{0.0f, 0.0f, 0.0f};
+        ctx->Yield();
+
+        set_ref_viewport(ctx);
+        ImGuiTestItemInfo const viewport_canvas =
+            ctx->ItemInfo("ViewportCanvas", ImGuiTestOpFlags_NoError);
+        IM_CHECK(viewport_canvas.ID != 0);
+
+        float const target_y_before = vars.state.camera_target.y;
+        ctx->MouseMove(viewport_canvas.ID);
+        ctx->KeyDown(ImGuiMod_Shift);
+        ctx->MouseDragWithDelta(ImVec2(0.0f, -40.0f), ImGuiMouseButton_Middle);
+        ctx->KeyUp(ImGuiMod_Shift);
+        ctx->Yield();
+
+        IM_CHECK(vars.state.camera_target.y < target_y_before);
+        IM_CHECK(std::abs(vars.state.camera_target.y - target_y_before) < 0.30f);
     };
 
     test = IM_REGISTER_TEST(engine, "winding_studio", "status_line_contract");

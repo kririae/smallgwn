@@ -238,8 +238,7 @@ draw_editor_layout(AppState &state, float const dt, float const ui_scale) {
     };
     if (mode_button(
             "Voxel##ws_mode_voxel", state.view_mode == ViewMode::k_voxel,
-            ImVec2(mode_button_w, 0.0f),
-            voxel_palette
+            ImVec2(mode_button_w, 0.0f), voxel_palette
         ))
         state.view_mode = ViewMode::k_voxel;
 
@@ -295,15 +294,19 @@ draw_editor_layout(AppState &state, float const dt, float const ui_scale) {
             } else if (interact_io.KeyShift) {
                 CameraBasis const cam = build_camera_basis(state);
                 float const pan_speed = 0.003f * state.camera_radius;
+                float const pan_vertical_scale = 0.72f;
                 state.camera_target.x -=
-                    (cam.right.x * delta.x + cam.ortho_up.x * delta.y) * pan_speed;
+                    (cam.right.x * delta.x - cam.ortho_up.x * (delta.y * pan_vertical_scale)) *
+                    pan_speed;
                 state.camera_target.y -=
-                    (cam.right.y * delta.x + cam.ortho_up.y * delta.y) * pan_speed;
+                    (cam.right.y * delta.x - cam.ortho_up.y * (delta.y * pan_vertical_scale)) *
+                    pan_speed;
                 state.camera_target.z -=
-                    (cam.right.z * delta.x + cam.ortho_up.z * delta.y) * pan_speed;
+                    (cam.right.z * delta.x - cam.ortho_up.z * (delta.y * pan_vertical_scale)) *
+                    pan_speed;
             } else {
                 state.yaw -= delta.x * 0.005f;
-                state.pitch -= delta.y * 0.005f;
+                state.pitch += delta.y * 0.005f;
                 state.pitch = std::clamp(state.pitch, -1.4f, 1.4f);
             }
             state.auto_rotate = false;
@@ -314,8 +317,7 @@ draw_editor_layout(AppState &state, float const dt, float const ui_scale) {
     ImDrawList *draw_list = ImGui::GetWindowDrawList();
     ImVec2 const p0{result.viewport_pos_x, result.viewport_pos_y};
     ImVec2 const p1 = ImVec2(
-        result.viewport_pos_x + result.viewport_w,
-        result.viewport_pos_y + result.viewport_h
+        result.viewport_pos_x + result.viewport_w, result.viewport_pos_y + result.viewport_h
     );
     float const corner_r = ImGui::GetStyle().ChildRounding;
     draw_list->AddRect(p0, p1, IM_COL32(50, 65, 85, 120), corner_r, 0, 0.6f);

@@ -1,9 +1,9 @@
 #include "studio_activation.hpp"
 
-#include "studio_mesh_validate.hpp"
-
 #include <exception>
 #include <string>
+
+#include "studio_mesh_validate.hpp"
 
 namespace winding_studio::app {
 

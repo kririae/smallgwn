@@ -1,13 +1,13 @@
 #include "studio_mesh_library.hpp"
 
-#include "harnack_tracer.hpp"
-#include "mesh_loader.hpp"
-
 #include <algorithm>
 #include <cmath>
 #include <sstream>
 
 #include <tbb/parallel_for.h>
+
+#include "harnack_tracer.hpp"
+#include "mesh_loader.hpp"
 
 namespace winding_studio::app {
 
@@ -81,7 +81,9 @@ bool has_valid_mesh_index(AppState const &state, int const index) {
     return index >= 0 && static_cast<std::size_t>(index) < state.mesh_library.size();
 }
 
-bool has_active_mesh(AppState const &state) { return has_valid_mesh_index(state, state.active_mesh_index); }
+bool has_active_mesh(AppState const &state) {
+    return has_valid_mesh_index(state, state.active_mesh_index);
+}
 
 std::string mesh_list_label(MeshLibraryEntry const &entry, bool const is_active) {
     std::ostringstream oss;
@@ -97,10 +99,9 @@ static std::string make_unique_mesh_name(AppState const &state, std::string name
     if (name.empty())
         name = "Imported Mesh";
     auto const name_exists = [&](std::string const &candidate) {
-        for (MeshLibraryEntry const &entry : state.mesh_library) {
+        for (MeshLibraryEntry const &entry : state.mesh_library)
             if (entry.name == candidate)
                 return true;
-        }
         return false;
     };
     if (!name_exists(name))
@@ -174,13 +175,15 @@ void remove_mesh_from_library(AppState &state, int const index) {
 
     if (removed_active) {
         clear_active_mesh_state(state);
-        state.selected_mesh_index = std::clamp(index, 0, static_cast<int>(state.mesh_library.size()) - 1);
+        state.selected_mesh_index =
+            std::clamp(index, 0, static_cast<int>(state.mesh_library.size()) - 1);
         state.status_line = "Removed mesh: " + removed.name + ". No active mesh.";
         return;
     }
 
     if (!has_valid_mesh_index(state, state.selected_mesh_index)) {
-        state.selected_mesh_index = std::clamp(index, 0, static_cast<int>(state.mesh_library.size()) - 1);
+        state.selected_mesh_index =
+            std::clamp(index, 0, static_cast<int>(state.mesh_library.size()) - 1);
     }
     state.status_line = "Removed mesh: " + removed.name;
 }

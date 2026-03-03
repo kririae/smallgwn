@@ -2,7 +2,7 @@
 
 #include "studio_state.hpp"
 
-#include <GL/glew.h>
+#include <glad/gl.h>
 
 #include <array>
 #include <cstddef>

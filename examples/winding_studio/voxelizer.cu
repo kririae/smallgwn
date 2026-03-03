@@ -11,8 +11,8 @@
 #include <string_view>
 #include <vector>
 
-#include <GL/glew.h>
 #include <cub/device/device_scan.cuh>
+#include <glad/gl.h>
 
 #include <gwn/gwn.cuh>
 
@@ -132,8 +132,7 @@ public:
 
             throw_if_error(
                 gwn::gwn_upload_geometry(
-                    geometry_,
-                    cuda::std::span<Real const>(mesh.vx.data(), mesh.vx.size()),
+                    geometry_, cuda::std::span<Real const>(mesh.vx.data(), mesh.vx.size()),
                     cuda::std::span<Real const>(mesh.vy.data(), mesh.vy.size()),
                     cuda::std::span<Real const>(mesh.vz.data(), mesh.vz.size()),
                     cuda::std::span<Index const>(mesh.i0.data(), mesh.i0.size()),

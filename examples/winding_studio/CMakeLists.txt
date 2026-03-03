@@ -4,7 +4,7 @@ if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
     set(CMAKE_CUDA_ARCHITECTURES native)
 endif()
 
-project(winding_studio LANGUAGES CXX CUDA)
+project(winding_studio LANGUAGES C CXX CUDA)
 
 option(
     WINDING_STUDIO_ENABLE_IMGUI_TEST_ENGINE
@@ -123,11 +123,26 @@ CPMAddPackage(
         "TBB_STRICT OFF")
 
 # ----------------------------------------------------------
-# glfw3, OpenGL, GLEW (system packages)
+# GLAD2 (OpenGL loader)
+# ----------------------------------------------------------
+CPMAddPackage(
+    NAME glad
+    GITHUB_REPOSITORY Dav1dde/glad
+    GIT_TAG v2.0.8
+    SOURCE_SUBDIR cmake)
+
+# ----------------------------------------------------------
+# glfw3, OpenGL (system packages)
 # ----------------------------------------------------------
 find_package(OpenGL REQUIRED)
 find_package(glfw3 3.3 REQUIRED)
-find_package(GLEW REQUIRED)
+
+glad_add_library(
+    glad_gl_core_33
+    REPRODUCIBLE
+    EXCLUDE_FROM_ALL
+    LOADER
+    API gl:core=3.3)
 
 # ----------------------------------------------------------
 # ImGui core static library
@@ -149,9 +164,9 @@ add_library(imgui_backend STATIC
 target_include_directories(imgui_backend
     PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends)
 target_link_libraries(imgui_backend
-    PUBLIC imgui_core glfw OpenGL::GL GLEW::GLEW)
+    PUBLIC imgui_core glfw OpenGL::GL glad_gl_core_33)
 target_compile_definitions(imgui_backend
-    PUBLIC IMGUI_IMPL_OPENGL_LOADER_GLEW)
+    PUBLIC IMGUI_IMPL_OPENGL_LOADER_GLAD)
 
 # ----------------------------------------------------------
 # Winding Studio

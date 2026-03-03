@@ -296,9 +296,14 @@ __device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_ray_impl(
             // 1) gradient-scaled level-set proximity (paper §3.1.2)
             // 2) very small safe-ball radius near singular boundary
             if (dist < epsilon * grad_omega_mag || R < epsilon) {
+                // Always use the Biot-Savart gradient for the surface normal.
+                // The gradient of the winding number naturally provides smooth
+                // normals everywhere on the level set — even for closed meshes
+                // (where it smoothly interpolates face normals across edges)
+                // and near boundary edges of open meshes.  The degenerate-
+                // gradient fallback in fill_result handles the rare case where
+                // the gradient magnitude is near zero.
                 gwn_query_vec3<Real> grad_shading = eval_grad_shading(px, py, pz, grad_w);
-                if (R < epsilon)
-                    grad_shading = eval_closest_triangle_normal(px, py, pz);
                 fill_result(t_eval, w, grad_shading, iter + 1);
                 return result;
             }

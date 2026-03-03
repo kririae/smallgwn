@@ -1,5 +1,3 @@
-#include "ui_contract_tests.hpp"
-
 #include <cstdio>
 #include <cstdlib>
 
@@ -7,8 +5,8 @@
 #include "imgui_test_engine/imgui_te_engine.h"
 #include "imgui_test_engine/imgui_te_exporters.h"
 #include "imgui_test_engine/imgui_te_utils.h"
-
 #include "studio_ui.hpp"
+#include "ui_contract_tests.hpp"
 
 int main() {
     IMGUI_CHECKVERSION();
@@ -41,7 +39,8 @@ int main() {
     test_io.ConfigWatchdogKillTest = 10.0f;
     test_io.ConfigWatchdogKillApp = 20.0f;
 
-    if (char const *xml_path = std::getenv("WINDING_STUDIO_UI_CONTRACT_XML"); xml_path != nullptr && xml_path[0] != '\0') {
+    if (char const *xml_path = std::getenv("WINDING_STUDIO_UI_CONTRACT_XML");
+        xml_path != nullptr && xml_path[0] != '\0') {
         test_io.ExportResultsFilename = xml_path;
         test_io.ExportResultsFormat = ImGuiTestEngineExportFormat_JUnitXml;
     }

@@ -7,7 +7,11 @@
 #include <stdexcept>
 #include <string>
 
-#include <GL/glew.h>
+#include <glad/gl.h>
+
+#ifndef GLFW_INCLUDE_NONE
+#define GLFW_INCLUDE_NONE
+#endif
 #include <GLFW/glfw3.h>
 
 #include "backends/imgui_impl_glfw.h"
@@ -46,16 +50,16 @@ int run_app(CliOptions const &cli) {
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
 #endif
 
-    GLFWwindow *window = glfwCreateWindow(cli.width, cli.height, "Winding Studio", nullptr, nullptr);
+    GLFWwindow *window =
+        glfwCreateWindow(cli.width, cli.height, "Winding Studio", nullptr, nullptr);
     if (window == nullptr)
         throw std::runtime_error("glfwCreateWindow failed");
 
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1);
 
-    glewExperimental = GL_TRUE;
-    if (glewInit() != GLEW_OK)
-        throw std::runtime_error("glewInit failed");
+    if (gladLoadGL(reinterpret_cast<GLADloadfunc>(glfwGetProcAddress)) == 0)
+        throw std::runtime_error("gladLoadGL failed");
     glGetError();
 
     IMGUI_CHECKVERSION();
@@ -125,7 +129,8 @@ int run_app(CliOptions const &cli) {
             return false;
         }
 
-        int const mesh_index = add_mesh_to_library(state, std::move(mesh), std::move(name), is_builtin);
+        int const mesh_index =
+            add_mesh_to_library(state, std::move(mesh), std::move(name), is_builtin);
         std::string activation_error;
         if (!activate_mesh_by_index(
                 state, mesh_index, status_prefix, renderer, harnack_tracer, voxelizer,
@@ -183,7 +188,8 @@ int run_app(CliOptions const &cli) {
                 harnack_texture_renderer.clear();
         }
 
-        if (ui_layout.activate_mesh_index >= 0 && ui_layout.activate_mesh_index != state.active_mesh_index) {
+        if (ui_layout.activate_mesh_index >= 0 &&
+            ui_layout.activate_mesh_index != state.active_mesh_index) {
             std::string activation_error;
             if (!activate_mesh_by_index(
                     state, ui_layout.activate_mesh_index, "Active mesh: ", renderer, harnack_tracer,
@@ -198,8 +204,11 @@ int run_app(CliOptions const &cli) {
         if (!ui_layout.mesh_file_to_add.empty()) {
             winding_studio::LoadedMesh loaded{};
             std::string load_error;
-            if (winding_studio::load_mesh_from_file(ui_layout.mesh_file_to_add, loaded, load_error)) {
-                std::string const name = std::filesystem::path(ui_layout.mesh_file_to_add).filename().string();
+            if (winding_studio::load_mesh_from_file(
+                    ui_layout.mesh_file_to_add, loaded, load_error
+                )) {
+                std::string const name =
+                    std::filesystem::path(ui_layout.mesh_file_to_add).filename().string();
                 (void)add_and_activate(to_mesh_data(loaded), name, false, "Loaded mesh: ");
             } else {
                 state.status_line = "Load failed: " + load_error;

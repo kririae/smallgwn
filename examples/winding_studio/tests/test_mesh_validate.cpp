@@ -1,7 +1,7 @@
-#include "studio_mesh_validate.hpp"
-
 #include <cassert>
 #include <string>
+
+#include "studio_mesh_validate.hpp"
 
 using namespace winding_studio::app;
 
