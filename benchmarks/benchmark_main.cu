@@ -338,6 +338,78 @@ gwn::gwn_status run_taylor_query_with_stack_capacity(
     }
 }
 
+gwn::gwn_status run_ray_first_hit_with_stack_capacity(
+    int const stack_capacity, gwn::gwn_geometry_accessor<Real, Index> const &geometry,
+    gwn::gwn_bvh4_topology_accessor<Real, Index> const &topology,
+    gwn::gwn_bvh4_aabb_accessor<Real, Index> const &aabb_tree,
+    cuda::std::span<Real const> const ray_origin_x, cuda::std::span<Real const> const ray_origin_y,
+    cuda::std::span<Real const> const ray_origin_z, cuda::std::span<Real const> const ray_dir_x,
+    cuda::std::span<Real const> const ray_dir_y, cuda::std::span<Real const> const ray_dir_z,
+    cuda::std::span<Real> const output_t, cuda::std::span<Index> const output_primitive_id,
+    cudaStream_t const stream
+) noexcept {
+    switch (stack_capacity) {
+    case 16:
+        return gwn::gwn_compute_ray_first_hit_batch_bvh<Real, Index, 16>(
+            geometry, topology, aabb_tree, ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x,
+            ray_dir_y, ray_dir_z, output_t, output_primitive_id, Real(0),
+            std::numeric_limits<Real>::infinity(), stream
+        );
+    case 24:
+        return gwn::gwn_compute_ray_first_hit_batch_bvh<Real, Index, 24>(
+            geometry, topology, aabb_tree, ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x,
+            ray_dir_y, ray_dir_z, output_t, output_primitive_id, Real(0),
+            std::numeric_limits<Real>::infinity(), stream
+        );
+    case 32:
+        return gwn::gwn_compute_ray_first_hit_batch_bvh<Real, Index, 32>(
+            geometry, topology, aabb_tree, ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x,
+            ray_dir_y, ray_dir_z, output_t, output_primitive_id, Real(0),
+            std::numeric_limits<Real>::infinity(), stream
+        );
+    case 48:
+        return gwn::gwn_compute_ray_first_hit_batch_bvh<Real, Index, 48>(
+            geometry, topology, aabb_tree, ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x,
+            ray_dir_y, ray_dir_z, output_t, output_primitive_id, Real(0),
+            std::numeric_limits<Real>::infinity(), stream
+        );
+    case 64:
+        return gwn::gwn_compute_ray_first_hit_batch_bvh<Real, Index, 64>(
+            geometry, topology, aabb_tree, ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x,
+            ray_dir_y, ray_dir_z, output_t, output_primitive_id, Real(0),
+            std::numeric_limits<Real>::infinity(), stream
+        );
+    case 96:
+        return gwn::gwn_compute_ray_first_hit_batch_bvh<Real, Index, 96>(
+            geometry, topology, aabb_tree, ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x,
+            ray_dir_y, ray_dir_z, output_t, output_primitive_id, Real(0),
+            std::numeric_limits<Real>::infinity(), stream
+        );
+    case 128:
+        return gwn::gwn_compute_ray_first_hit_batch_bvh<Real, Index, 128>(
+            geometry, topology, aabb_tree, ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x,
+            ray_dir_y, ray_dir_z, output_t, output_primitive_id, Real(0),
+            std::numeric_limits<Real>::infinity(), stream
+        );
+    case 192:
+        return gwn::gwn_compute_ray_first_hit_batch_bvh<Real, Index, 192>(
+            geometry, topology, aabb_tree, ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x,
+            ray_dir_y, ray_dir_z, output_t, output_primitive_id, Real(0),
+            std::numeric_limits<Real>::infinity(), stream
+        );
+    case 256:
+        return gwn::gwn_compute_ray_first_hit_batch_bvh<Real, Index, 256>(
+            geometry, topology, aabb_tree, ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x,
+            ray_dir_y, ray_dir_z, output_t, output_primitive_id, Real(0),
+            std::numeric_limits<Real>::infinity(), stream
+        );
+    default:
+        return gwn::gwn_status::invalid_argument(
+            "Unsupported --stack-capacity. Supported: 16,24,32,48,64,96,128,192,256."
+        );
+    }
+}
+
 template <class SetupFn, class StageFn>
 gwn::bench::gwn_benchmark_stage_result run_stage(
     std::string const &stage_name, std::string const &unit,
@@ -479,8 +551,7 @@ int main(int argc, char **argv) try {
 
         gwn::gwn_geometry_object<Real, Index> geometry;
         gwn::gwn_status const upload_status = gwn::gwn_upload_geometry(
-            geometry,
-            cuda::std::span<Real const>(mesh.vertex_x.data(), mesh.vertex_x.size()),
+            geometry, cuda::std::span<Real const>(mesh.vertex_x.data(), mesh.vertex_x.size()),
             cuda::std::span<Real const>(mesh.vertex_y.data(), mesh.vertex_y.size()),
             cuda::std::span<Real const>(mesh.vertex_z.data(), mesh.vertex_z.size()),
             cuda::std::span<Index const>(mesh.tri_i0.data(), mesh.tri_i0.size()),
@@ -502,10 +573,23 @@ int main(int argc, char **argv) try {
 
         auto const query_host =
             gwn::bench::gwn_make_mixed_query_soa(mesh, options.query_count, options.seed);
+        auto const ray_host = gwn::bench::gwn_make_mixed_ray_soa(
+            mesh, options.query_count, options.seed ^ 0xD1B54A32D192ED03ULL
+        );
+
         gwn::gwn_device_array<Real> d_qx(stream);
         gwn::gwn_device_array<Real> d_qy(stream);
         gwn::gwn_device_array<Real> d_qz(stream);
         gwn::gwn_device_array<Real> d_out(stream);
+        gwn::gwn_device_array<Real> d_ray_ox(stream);
+        gwn::gwn_device_array<Real> d_ray_oy(stream);
+        gwn::gwn_device_array<Real> d_ray_oz(stream);
+        gwn::gwn_device_array<Real> d_ray_dx(stream);
+        gwn::gwn_device_array<Real> d_ray_dy(stream);
+        gwn::gwn_device_array<Real> d_ray_dz(stream);
+        gwn::gwn_device_array<Real> d_ray_t(stream);
+        gwn::gwn_device_array<Index> d_ray_pi(stream);
+
         gwn::gwn_status const qx_status = d_qx.copy_from_host(
             cuda::std::span<Real const>(query_host[0].data(), query_host[0].size()), stream
         );
@@ -516,7 +600,37 @@ int main(int argc, char **argv) try {
             cuda::std::span<Real const>(query_host[2].data(), query_host[2].size()), stream
         );
         gwn::gwn_status const out_status = d_out.resize(options.query_count, stream);
-        if (!qx_status.is_ok() || !qy_status.is_ok() || !qz_status.is_ok() || !out_status.is_ok()) {
+        gwn::gwn_status const ray_ox_status = d_ray_ox.copy_from_host(
+            cuda::std::span<Real const>(ray_host.origin[0].data(), ray_host.origin[0].size()),
+            stream
+        );
+        gwn::gwn_status const ray_oy_status = d_ray_oy.copy_from_host(
+            cuda::std::span<Real const>(ray_host.origin[1].data(), ray_host.origin[1].size()),
+            stream
+        );
+        gwn::gwn_status const ray_oz_status = d_ray_oz.copy_from_host(
+            cuda::std::span<Real const>(ray_host.origin[2].data(), ray_host.origin[2].size()),
+            stream
+        );
+        gwn::gwn_status const ray_dx_status = d_ray_dx.copy_from_host(
+            cuda::std::span<Real const>(ray_host.direction[0].data(), ray_host.direction[0].size()),
+            stream
+        );
+        gwn::gwn_status const ray_dy_status = d_ray_dy.copy_from_host(
+            cuda::std::span<Real const>(ray_host.direction[1].data(), ray_host.direction[1].size()),
+            stream
+        );
+        gwn::gwn_status const ray_dz_status = d_ray_dz.copy_from_host(
+            cuda::std::span<Real const>(ray_host.direction[2].data(), ray_host.direction[2].size()),
+            stream
+        );
+        gwn::gwn_status const ray_t_status = d_ray_t.resize(options.query_count, stream);
+        gwn::gwn_status const ray_pi_status = d_ray_pi.resize(options.query_count, stream);
+
+        if (!qx_status.is_ok() || !qy_status.is_ok() || !qz_status.is_ok() || !out_status.is_ok() ||
+            !ray_ox_status.is_ok() || !ray_oy_status.is_ok() || !ray_oz_status.is_ok() ||
+            !ray_dx_status.is_ok() || !ray_dy_status.is_ok() || !ray_dz_status.is_ok() ||
+            !ray_t_status.is_ok() || !ray_pi_status.is_ok()) {
             std::cerr << "Query buffer setup failed for model " << model_path.string() << "\n";
             continue;
         }
@@ -616,6 +730,47 @@ int main(int argc, char **argv) try {
             );
         };
 
+        double ray_mix_hit_ratio = 0.0;
+        auto setup_topology_aabb_and_validate_rays = [&]() noexcept -> gwn::gwn_status {
+            gwn::gwn_status const setup_status = setup_topology_and_aabb();
+            if (!setup_status.is_ok())
+                return setup_status;
+
+            gwn::gwn_status const ray_status = run_ray_first_hit_with_stack_capacity(
+                options.stack_capacity, geometry.accessor(), topology.accessor(),
+                aabb_tree.accessor(), d_ray_ox.span(), d_ray_oy.span(), d_ray_oz.span(),
+                d_ray_dx.span(), d_ray_dy.span(), d_ray_dz.span(), d_ray_t.span(), d_ray_pi.span(),
+                stream
+            );
+            if (!ray_status.is_ok())
+                return ray_status;
+
+            std::vector<Real> ray_t_host(options.query_count, Real(-1));
+            gwn::gwn_status const copy_status = d_ray_t.copy_to_host(
+                cuda::std::span<Real>(ray_t_host.data(), ray_t_host.size()), stream
+            );
+            if (!copy_status.is_ok())
+                return copy_status;
+
+            gwn::gwn_status const sync_status =
+                gwn::gwn_cuda_to_status(cudaStreamSynchronize(stream));
+            if (!sync_status.is_ok())
+                return sync_status;
+
+            std::size_t const hit_count = static_cast<std::size_t>(std::count_if(
+                ray_t_host.begin(), ray_t_host.end(), [](Real const t) { return t >= Real(0); }
+            ));
+            ray_mix_hit_ratio =
+                static_cast<double>(hit_count) / static_cast<double>(options.query_count);
+            if (!(ray_mix_hit_ratio > 0.05 && ray_mix_hit_ratio < 0.95)) {
+                return gwn::gwn_status::invalid_argument(
+                    "Ray benchmark mix hit ratio is outside (0.05, 0.95)."
+                );
+            }
+
+            return gwn::gwn_status::ok();
+        };
+
         auto const refit_moment_o0_stage = run_stage(
             "refit_moment_o0", "triangles/s", mesh.tri_i0.size(), options, mesh.vertex_x.size(),
             mesh.tri_i0.size(), options.query_count, stream, setup_topology_and_aabb,
@@ -705,6 +860,24 @@ int main(int argc, char **argv) try {
         }
         );
         emit_result(query_o2_stage);
+
+        auto const ray_first_hit_stage = run_stage(
+            "query_ray_first_hit", "rays/s", options.query_count, options, mesh.vertex_x.size(),
+            mesh.tri_i0.size(), options.query_count, stream, setup_topology_aabb_and_validate_rays,
+            [&]() noexcept {
+            return run_ray_first_hit_with_stack_capacity(
+                options.stack_capacity, geometry.accessor(), topology.accessor(),
+                aabb_tree.accessor(), d_ray_ox.span(), d_ray_oy.span(), d_ray_oz.span(),
+                d_ray_dx.span(), d_ray_dy.span(), d_ray_dz.span(), d_ray_t.span(), d_ray_pi.span(),
+                stream
+            );
+        }
+        );
+        emit_result(ray_first_hit_stage);
+        if (ray_first_hit_stage.success) {
+            std::cout << "    ray_mix_hit_ratio=" << std::fixed << std::setprecision(3)
+                      << ray_mix_hit_ratio << std::defaultfloat << "\n";
+        }
 
         std::cout << "\n";
         ++successful_models;

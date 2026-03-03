@@ -105,6 +105,7 @@ if(SMALLGWN_BUILD_TESTS)
         smallgwn_add_test(smallgwn_unit_winding_taylor SOURCES tests/unit_winding_taylor.cu)
         smallgwn_add_test(smallgwn_unit_winding_gradient SOURCES tests/unit_winding_gradient.cu)
         smallgwn_add_test(smallgwn_unit_harnack_trace    SOURCES tests/unit_harnack_trace.cu)
+        smallgwn_add_test(smallgwn_unit_ray_query        SOURCES tests/unit_ray_query.cu)
 
         # SDF tests (libigl parity).
         find_package(libigl QUIET HINTS /usr/lib/cmake/igl)

@@ -44,6 +44,23 @@ template <gwn_real_type Real> struct gwn_query_vec3 {
         z /= s;
         return *this;
     }
+
+    [[nodiscard]] __host__ __device__ constexpr Real &operator[](int const axis) noexcept {
+        switch (axis) {
+        case 0: return x;
+        case 1: return y;
+        default: return z;
+        }
+    }
+
+    [[nodiscard]] __host__ __device__ constexpr Real const &
+    operator[](int const axis) const noexcept {
+        switch (axis) {
+        case 0: return x;
+        case 1: return y;
+        default: return z;
+        }
+    }
 };
 
 template <gwn_real_type Real>

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <ctime>
@@ -47,6 +48,11 @@ struct gwn_benchmark_stage_result {
 
     bool success{false};
     std::string error_message{};
+};
+
+struct gwn_ray_soa {
+    std::array<std::vector<Real>, 3> origin{};
+    std::array<std::vector<Real>, 3> direction{};
 };
 
 [[nodiscard]] inline std::string gwn_status_to_string(gwn_status const &status) {
@@ -199,6 +205,171 @@ gwn_status gwn_measure_stage_latency_ms(
     }
 
     return queries;
+}
+
+[[nodiscard]] inline gwn_ray_soa gwn_make_mixed_ray_soa(
+    HostMesh const &mesh, std::size_t const ray_count, std::uint64_t const seed
+) {
+    gwn_ray_soa rays{};
+    for (int axis = 0; axis < 3; ++axis) {
+        rays.origin[axis].reserve(ray_count);
+        rays.direction[axis].reserve(ray_count);
+    }
+
+    if (mesh.vertex_x.empty())
+        return rays;
+
+    Real min_x = std::numeric_limits<Real>::max();
+    Real min_y = std::numeric_limits<Real>::max();
+    Real min_z = std::numeric_limits<Real>::max();
+    Real max_x = std::numeric_limits<Real>::lowest();
+    Real max_y = std::numeric_limits<Real>::lowest();
+    Real max_z = std::numeric_limits<Real>::lowest();
+
+    for (std::size_t i = 0; i < mesh.vertex_x.size(); ++i) {
+        min_x = std::min(min_x, mesh.vertex_x[i]);
+        min_y = std::min(min_y, mesh.vertex_y[i]);
+        min_z = std::min(min_z, mesh.vertex_z[i]);
+        max_x = std::max(max_x, mesh.vertex_x[i]);
+        max_y = std::max(max_y, mesh.vertex_y[i]);
+        max_z = std::max(max_z, mesh.vertex_z[i]);
+    }
+
+    Real const center_x = (min_x + max_x) * Real(0.5);
+    Real const center_y = (min_y + max_y) * Real(0.5);
+    Real const center_z = (min_z + max_z) * Real(0.5);
+    Real const extent_x = std::max(max_x - min_x, Real(1e-3));
+    Real const extent_y = std::max(max_y - min_y, Real(1e-3));
+    Real const extent_z = std::max(max_z - min_z, Real(1e-3));
+    Real const extent_max = std::max(extent_x, std::max(extent_y, extent_z));
+
+    std::mt19937_64 rng(seed ^ 0x9E3779B97F4A7C15ULL);
+    std::uniform_real_distribution<Real> unit_dist(Real(-1), Real(1));
+    std::uniform_real_distribution<Real> shell_dist(Real(1.6), Real(3.2));
+    std::uniform_real_distribution<Real> jitter_dist(Real(-0.08), Real(0.08));
+    std::uniform_real_distribution<Real> normal_offset_dist(Real(0.2), Real(0.45));
+
+    auto normalize_or = [](Real &x, Real &y, Real &z, Real const fallback_x, Real const fallback_y,
+                           Real const fallback_z) {
+        Real const n2 = x * x + y * y + z * z;
+        if (!(n2 > Real(0))) {
+            x = fallback_x;
+            y = fallback_y;
+            z = fallback_z;
+            return;
+        }
+
+        Real const inv_n = Real(1) / std::sqrt(n2);
+        x *= inv_n;
+        y *= inv_n;
+        z *= inv_n;
+    };
+
+    auto sample_unit = [&]() {
+        Real x = unit_dist(rng);
+        Real y = unit_dist(rng);
+        Real z = unit_dist(rng);
+        normalize_or(x, y, z, Real(1), Real(0), Real(0));
+        return std::array<Real, 3>{x, y, z};
+    };
+
+    auto fetch_vertex = [&](Index const idx) {
+        std::size_t const i = static_cast<std::size_t>(idx);
+        return std::array<Real, 3>{mesh.vertex_x[i], mesh.vertex_y[i], mesh.vertex_z[i]};
+    };
+
+    auto push_ray = [&](Real const ox, Real const oy, Real const oz, Real const dx, Real const dy,
+                        Real const dz) {
+        rays.origin[0].push_back(ox);
+        rays.origin[1].push_back(oy);
+        rays.origin[2].push_back(oz);
+        rays.direction[0].push_back(dx);
+        rays.direction[1].push_back(dy);
+        rays.direction[2].push_back(dz);
+    };
+
+    for (std::size_t ray_id = 0; ray_id < ray_count; ++ray_id) {
+        if ((ray_id % 4) < 2 && !mesh.tri_i0.empty()) {
+            // Triangle-centric rays keep a stable, non-degenerate hit/miss mix on most meshes.
+            std::size_t const tri_id = ray_id % mesh.tri_i0.size();
+            auto const a = fetch_vertex(mesh.tri_i0[tri_id]);
+            auto const b = fetch_vertex(mesh.tri_i1[tri_id]);
+            auto const c = fetch_vertex(mesh.tri_i2[tri_id]);
+
+            Real const cx = (a[0] + b[0] + c[0]) / Real(3);
+            Real const cy = (a[1] + b[1] + c[1]) / Real(3);
+            Real const cz = (a[2] + b[2] + c[2]) / Real(3);
+
+            Real nx = (b[1] - a[1]) * (c[2] - a[2]) - (b[2] - a[2]) * (c[1] - a[1]);
+            Real ny = (b[2] - a[2]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[2] - a[2]);
+            Real nz = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+            auto const random_unit = sample_unit();
+            normalize_or(nx, ny, nz, random_unit[0], random_unit[1], random_unit[2]);
+
+            Real side = (ray_id & 1u) == 0u ? Real(1) : Real(-1);
+            Real const offset = normal_offset_dist(rng) * extent_max;
+            Real ox = cx + side * offset * nx;
+            Real oy = cy + side * offset * ny;
+            Real oz = cz + side * offset * nz;
+
+            Real dx = cx - ox;
+            Real dy = cy - oy;
+            Real dz = cz - oz;
+
+            if ((ray_id % 4) == 1u) {
+                // Miss-biased counterpart shot away from the sampled triangle.
+                dx = -dx;
+                dy = -dy;
+                dz = -dz;
+            }
+
+            dx += jitter_dist(rng) * random_unit[0];
+            dy += jitter_dist(rng) * random_unit[1];
+            dz += jitter_dist(rng) * random_unit[2];
+            normalize_or(dx, dy, dz, -side * nx, -side * ny, -side * nz);
+            push_ray(ox, oy, oz, dx, dy, dz);
+            continue;
+        }
+
+        // Global rays from outside the bounding volume cover traversal-heavy cases.
+        auto const outward = sample_unit();
+        Real const shell = shell_dist(rng);
+
+        Real const ox = center_x + outward[0] * shell * extent_x;
+        Real const oy = center_y + outward[1] * shell * extent_y;
+        Real const oz = center_z + outward[2] * shell * extent_z;
+
+        Real inward_x = center_x - ox;
+        Real inward_y = center_y - oy;
+        Real inward_z = center_z - oz;
+        normalize_or(inward_x, inward_y, inward_z, Real(0), Real(0), Real(1));
+
+        auto const j = sample_unit();
+        Real dx = inward_x;
+        Real dy = inward_y;
+        Real dz = inward_z;
+
+        if ((ray_id % 4) == 2u) {
+            // Hit-biased long rays.
+            dx = inward_x + jitter_dist(rng) * j[0];
+            dy = inward_y + jitter_dist(rng) * j[1];
+            dz = inward_z + jitter_dist(rng) * j[2];
+        } else {
+            // Grazing / miss-biased rays.
+            Real tx = inward_y * j[2] - inward_z * j[1];
+            Real ty = inward_z * j[0] - inward_x * j[2];
+            Real tz = inward_x * j[1] - inward_y * j[0];
+            normalize_or(tx, ty, tz, Real(1), Real(0), Real(0));
+            dx = Real(0.2) * inward_x + Real(0.8) * tx;
+            dy = Real(0.2) * inward_y + Real(0.8) * ty;
+            dz = Real(0.2) * inward_z + Real(0.8) * tz;
+        }
+
+        normalize_or(dx, dy, dz, inward_x, inward_y, inward_z);
+        push_ray(ox, oy, oz, dx, dy, dz);
+    }
+
+    return rays;
 }
 
 [[nodiscard]] inline std::string gwn_now_timestamp_string() {

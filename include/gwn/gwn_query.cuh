@@ -16,6 +16,7 @@
 #include "detail/gwn_query_distance_impl.cuh"
 #include "detail/gwn_query_geometry_impl.cuh"
 #include "detail/gwn_query_gradient_impl.cuh"
+#include "detail/gwn_query_ray_impl.cuh"
 #include "detail/gwn_query_winding_impl.cuh"
 #include "gwn_bvh.cuh"
 #include "gwn_geometry.cuh"
@@ -144,6 +145,110 @@ gwn_status gwn_compute_unsigned_edge_distance_batch_bvh(
 ) noexcept {
     return gwn_compute_unsigned_edge_distance_batch_bvh<4, Real, Index, StackCapacity>(
         geometry, bvh, aabb_tree, query_x, query_y, query_z, output, culling_band, stream
+    );
+}
+
+/// \brief First-hit result of a ray query against mesh triangles.
+template <gwn_real_type Real, gwn_index_type Index = std::uint32_t>
+using gwn_ray_first_hit_result = detail::gwn_ray_first_hit_result<Real, Index>;
+
+/// \brief Compute the nearest ray-triangle hit for a single ray
+///        (\c __device__ only).
+///
+/// Returns hit distance \c t and primitive id. Misses return
+/// \c t = -1 and \c primitive_id = gwn_invalid_index<Index>().
+template <
+    int Width, gwn_real_type Real, gwn_index_type Index,
+    int StackCapacity = k_gwn_default_traversal_stack_capacity>
+__device__ inline gwn_ray_first_hit_result<Real, Index> gwn_ray_first_hit_bvh(
+    gwn_geometry_accessor<Real, Index> const &geometry,
+    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
+    gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree, Real const ray_ox,
+    Real const ray_oy, Real const ray_oz, Real const ray_dx, Real const ray_dy, Real const ray_dz,
+    Real const t_min = Real(0), Real const t_max = std::numeric_limits<Real>::infinity()
+) noexcept {
+    static_assert(StackCapacity > 0, "Traversal stack capacity must be positive.");
+    return detail::gwn_ray_first_hit_bvh_impl<Width, Real, Index, StackCapacity>(
+        geometry, bvh, aabb_tree, ray_ox, ray_oy, ray_oz, ray_dx, ray_dy, ray_dz, t_min, t_max
+    );
+}
+
+/// \brief Compute the nearest ray-triangle hit (`t` + primitive id) for a
+///        batch of rays using BVH + AABB traversal.
+///
+/// Rays are evaluated over the interval [`t_min`, `t_max`]. Misses write
+/// `t = -1` and `primitive_id = gwn_invalid_index<Index>()`.
+template <
+    int Width, gwn_real_type Real, gwn_index_type Index = std::uint32_t,
+    int StackCapacity = k_gwn_default_traversal_stack_capacity>
+gwn_status gwn_compute_ray_first_hit_batch_bvh(
+    gwn_geometry_accessor<Real, Index> const &geometry,
+    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
+    gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree,
+    cuda::std::span<Real const> const ray_origin_x, cuda::std::span<Real const> const ray_origin_y,
+    cuda::std::span<Real const> const ray_origin_z, cuda::std::span<Real const> const ray_dir_x,
+    cuda::std::span<Real const> const ray_dir_y, cuda::std::span<Real const> const ray_dir_z,
+    cuda::std::span<Real> const output_t, cuda::std::span<Index> const output_primitive_id,
+    Real const t_min = Real(0), Real const t_max = std::numeric_limits<Real>::infinity(),
+    cudaStream_t const stream = gwn_default_stream()
+) noexcept {
+    static_assert(StackCapacity > 0, "Traversal stack capacity must be positive.");
+
+    if (!geometry.is_valid())
+        return gwn_status::invalid_argument("Geometry accessor contains mismatched span lengths.");
+    if (!bvh.is_valid())
+        return gwn_status::invalid_argument("BVH accessor is invalid.");
+    if (!aabb_tree.is_valid_for(bvh))
+        return gwn_status::invalid_argument("BVH AABB tree is invalid for the given topology.");
+
+    std::size_t const n = ray_origin_x.size();
+    if (ray_origin_y.size() != n || ray_origin_z.size() != n || ray_dir_x.size() != n ||
+        ray_dir_y.size() != n || ray_dir_z.size() != n || output_t.size() != n ||
+        output_primitive_id.size() != n) {
+        return gwn_status::invalid_argument("ray first-hit: mismatched span sizes");
+    }
+    if (!gwn_span_has_storage(ray_origin_x) || !gwn_span_has_storage(ray_origin_y) ||
+        !gwn_span_has_storage(ray_origin_z) || !gwn_span_has_storage(ray_dir_x) ||
+        !gwn_span_has_storage(ray_dir_y) || !gwn_span_has_storage(ray_dir_z) ||
+        !gwn_span_has_storage(output_t) || !gwn_span_has_storage(output_primitive_id)) {
+        return gwn_status::invalid_argument(
+            "Ray/output spans must use non-null storage when non-empty."
+        );
+    }
+    if (!(t_max >= t_min))
+        return gwn_status::invalid_argument("ray first-hit: requires t_max >= t_min.");
+    if (n == 0)
+        return gwn_status::ok();
+
+    constexpr int k_block_size = detail::k_gwn_default_block_size;
+    return detail::gwn_launch_linear_kernel<k_block_size>(
+        n,
+        detail::gwn_make_ray_first_hit_batch_bvh_functor<Width, Real, Index, StackCapacity>(
+            geometry, bvh, aabb_tree, ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x,
+            ray_dir_y, ray_dir_z, output_t, output_primitive_id, t_min, t_max
+        ),
+        stream
+    );
+}
+
+/// \brief Width-4 convenience wrapper for batch ray first-hit queries.
+template <
+    gwn_real_type Real, gwn_index_type Index = std::uint32_t,
+    int StackCapacity = k_gwn_default_traversal_stack_capacity>
+gwn_status gwn_compute_ray_first_hit_batch_bvh(
+    gwn_geometry_accessor<Real, Index> const &geometry,
+    gwn_bvh4_topology_accessor<Real, Index> const &bvh,
+    gwn_bvh4_aabb_accessor<Real, Index> const &aabb_tree,
+    cuda::std::span<Real const> const ray_origin_x, cuda::std::span<Real const> const ray_origin_y,
+    cuda::std::span<Real const> const ray_origin_z, cuda::std::span<Real const> const ray_dir_x,
+    cuda::std::span<Real const> const ray_dir_y, cuda::std::span<Real const> const ray_dir_z,
+    cuda::std::span<Real> const output_t, cuda::std::span<Index> const output_primitive_id,
+    Real const t_min = Real(0), Real const t_max = std::numeric_limits<Real>::infinity(),
+    cudaStream_t const stream = gwn_default_stream()
+) noexcept {
+    return gwn_compute_ray_first_hit_batch_bvh<4, Real, Index, StackCapacity>(
+        geometry, bvh, aabb_tree, ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x, ray_dir_y,
+        ray_dir_z, output_t, output_primitive_id, t_min, t_max, stream
     );
 }
 
