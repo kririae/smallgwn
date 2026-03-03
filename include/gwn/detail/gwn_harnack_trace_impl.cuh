@@ -182,20 +182,6 @@ __device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_ray_impl(
         );
     };
 
-    auto eval_grad_shading = [&](Real const, Real const, Real const,
-                                 gwn_query_vec3<Real> const &fallback) -> gwn_query_vec3<Real> {
-        return fallback;
-    };
-
-    auto eval_closest_triangle_normal = [&](Real const px, Real const py,
-                                            Real const pz) -> gwn_query_vec3<Real> {
-        auto const r =
-            gwn_closest_triangle_normal_point_bvh_impl<Width, Real, Index, StackCapacity>(
-                geometry, bvh, aabb_tree, px, py, pz, std::numeric_limits<Real>::infinity()
-            );
-        return gwn_query_vec3<Real>(r.normal_x, r.normal_y, r.normal_z);
-    };
-
     auto fill_result = [&](Real t_, Real w_, gwn_query_vec3<Real> const &g, int iters) {
         result.t = t_;
         result.winding = w_;
@@ -208,7 +194,15 @@ __device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_ray_impl(
             Real const px = ray_ox + t_ * ray_dx;
             Real const py = ray_oy + t_ * ray_dy;
             Real const pz = ray_oz + t_ * ray_dz;
-            n = eval_closest_triangle_normal(px, py, pz);
+            auto const cn =
+                gwn_closest_triangle_normal_point_bvh_impl<
+                    Width, Real, Index, StackCapacity>(
+                    geometry, bvh, aabb_tree, px, py, pz,
+                    std::numeric_limits<Real>::infinity()
+                );
+            n.x = cn.normal_x;
+            n.y = cn.normal_y;
+            n.z = cn.normal_z;
             gm = sqrt(n.x * n.x + n.y * n.y + n.z * n.z);
         }
         if (gm > Real(0)) {
@@ -275,6 +269,7 @@ __device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_ray_impl(
             if (band >= Real(0) && isfinite(band))
                 culling_band = band;
         }
+
         Real const R = gwn_unsigned_distance_point_bvh_impl<Width, Real, Index, StackCapacity>(
             geometry, bvh, aabb_tree, px, py, pz, culling_band
         );
@@ -296,15 +291,19 @@ __device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_ray_impl(
             // 1) gradient-scaled level-set proximity (paper §3.1.2)
             // 2) very small safe-ball radius near singular boundary
             if (dist < epsilon * grad_omega_mag || R < epsilon) {
-                // Always use the Biot-Savart gradient for the surface normal.
-                // The gradient of the winding number naturally provides smooth
-                // normals everywhere on the level set — even for closed meshes
-                // (where it smoothly interpolates face normals across edges)
-                // and near boundary edges of open meshes.  The degenerate-
-                // gradient fallback in fill_result handles the rare case where
-                // the gradient magnitude is near zero.
-                gwn_query_vec3<Real> grad_shading = eval_grad_shading(px, py, pz, grad_w);
-                fill_result(t_eval, w, grad_shading, iter + 1);
+                gwn_query_vec3<Real> shade_normal = grad_w;
+                if (R < epsilon) {
+                    auto const cn =
+                        gwn_closest_triangle_normal_point_bvh_impl<
+                            Width, Real, Index, StackCapacity>(
+                            geometry, bvh, aabb_tree, px, py, pz,
+                            std::numeric_limits<Real>::infinity()
+                        );
+                    shade_normal.x = cn.normal_x;
+                    shade_normal.y = cn.normal_y;
+                    shade_normal.z = cn.normal_z;
+                }
+                fill_result(t_eval, w, shade_normal, iter + 1);
                 return result;
             }
 

@@ -32,15 +32,34 @@ include(GetCPM.cmake)
 # ----------------------------------------------------------
 # smallgwn (header-only CUDA winding number library)
 # ----------------------------------------------------------
-CPMAddPackage(
-    NAME smallgwn
-    GITHUB_REPOSITORY kririae/smallgwn
-    GIT_TAG main
-    OPTIONS
-        "SMALLGWN_BUILD_BENCHMARKS OFF"
-        "SMALLGWN_BUILD_APPS OFF"
-        "SMALLGWN_BUILD_TESTS OFF"
-        "SMALLGWN_BUILD_EIGEN_BRIDGE_TARGET OFF")
+get_filename_component(
+    WINDING_STUDIO_SMALLGWN_PARENT_DEFAULT
+    "${CMAKE_CURRENT_SOURCE_DIR}/../.."
+    ABSOLUTE
+)
+set(
+    WINDING_STUDIO_SMALLGWN_SOURCE_DIR
+    "${WINDING_STUDIO_SMALLGWN_PARENT_DEFAULT}"
+    CACHE PATH
+    "Local smallgwn source path. Defaults to parent repo root. Set empty to force CPM remote fetch."
+)
+
+if(WINDING_STUDIO_SMALLGWN_SOURCE_DIR AND EXISTS "${WINDING_STUDIO_SMALLGWN_SOURCE_DIR}/CMakeLists.txt")
+    message(STATUS
+        "Using local smallgwn source from: ${WINDING_STUDIO_SMALLGWN_SOURCE_DIR}")
+    CPMAddPackage(
+        NAME smallgwn
+        SOURCE_DIR "${WINDING_STUDIO_SMALLGWN_SOURCE_DIR}"
+        OPTIONS
+            "SMALLGWN_BUILD_BENCHMARKS OFF"
+            "SMALLGWN_BUILD_APPS OFF"
+            "SMALLGWN_BUILD_TESTS OFF"
+            "SMALLGWN_BUILD_EIGEN_BRIDGE_TARGET OFF")
+else()
+    message(FATAL_ERROR
+        "Local smallgwn source not found at WINDING_STUDIO_SMALLGWN_SOURCE_DIR='"
+        "${WINDING_STUDIO_SMALLGWN_SOURCE_DIR}'. Set this cache variable to a valid smallgwn root.")
+endif()
 
 # ----------------------------------------------------------
 # Eigen3

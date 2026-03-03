@@ -124,6 +124,7 @@ if(SMALLGWN_BUILD_TESTS)
         smallgwn_add_test(smallgwn_integration_gradient     SOURCES tests/integration_gradient.cu)
         smallgwn_add_test(smallgwn_integration_harnack_trace SOURCES tests/integration_harnack_trace.cu)
         smallgwn_add_test(smallgwn_integration_harnack_behavior_match SOURCES tests/integration_harnack_behavior_match.cu)
+        smallgwn_add_test(smallgwn_integration_harnack_iteration_stats SOURCES tests/integration_harnack_iteration_stats.cu)
         smallgwn_add_test(smallgwn_integration_hploc_performance SOURCES tests/integration_hploc_performance.cu)
 
         smallgwn_add_test(smallgwn_integration_taylor_matrix NO_CTEST
