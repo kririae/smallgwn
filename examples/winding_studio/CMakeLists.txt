@@ -87,7 +87,7 @@ CPMAddPackage(
 CPMAddPackage(
     NAME imgui
     GITHUB_REPOSITORY ocornut/imgui
-    GIT_TAG v1.91.8
+    GIT_TAG v1.92.6
     DOWNLOAD_ONLY YES)
 
 # ----------------------------------------------------------
@@ -108,7 +108,7 @@ if(WINDING_STUDIO_ENABLE_IMGUI_TEST_ENGINE)
         CPMAddPackage(
             NAME imgui_test_engine
             GITHUB_REPOSITORY ocornut/imgui_test_engine
-            GIT_TAG 23d8000
+            GIT_TAG v1.92.6
             DOWNLOAD_ONLY YES)
     endif()
 endif()

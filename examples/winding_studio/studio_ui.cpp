@@ -12,6 +12,13 @@
 
 namespace winding_studio::app {
 
+namespace {
+
+constexpr std::size_t k_voxel_max_voxels_confirm_threshold = 100'000'000u;
+char const *k_voxel_max_voxels_popup_id = "Confirm Max Voxels##ws_confirm_max_voxels_popup";
+
+} // namespace
+
 [[nodiscard]] static bool
 begin_collapsing_section(char const *label, bool const default_open = true) {
     ImGui::Spacing();
@@ -293,8 +300,8 @@ draw_editor_layout(AppState &state, float const dt, float const ui_scale) {
                 state.camera_radius = std::clamp(state.camera_radius, 0.5f, 12.0f);
             } else if (interact_io.KeyShift) {
                 CameraBasis const cam = build_camera_basis(state);
-                float const pan_speed = 0.003f * state.camera_radius;
-                float const pan_vertical_scale = 0.72f;
+                float const pan_speed = 0.001f * state.camera_radius;
+                float const pan_vertical_scale = 0.84f;
                 state.camera_target.x -=
                     (cam.right.x * delta.x - cam.ortho_up.x * (delta.y * pan_vertical_scale)) *
                     pan_speed;
@@ -370,9 +377,12 @@ draw_editor_layout(AppState &state, float const dt, float const ui_scale) {
                 std::string const label = mesh_list_label(entry, i == state.active_mesh_index) +
                                           "##ws_mesh_row_" + std::to_string(i);
                 ImGui::PushID(i);
-                if (ImGui::Selectable(label.c_str(), selected)) {
+                if (ImGui::Selectable(
+                        label.c_str(), selected, ImGuiSelectableFlags_AllowDoubleClick
+                    )) {
                     state.selected_mesh_index = i;
-                    result.activate_mesh_index = i;
+                    if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+                        result.activate_mesh_index = i;
                 }
                 if (selected)
                     ImGui::SetItemDefaultFocus();
@@ -383,7 +393,7 @@ draw_editor_layout(AppState &state, float const dt, float const ui_scale) {
         if (state.mesh_library.empty())
             ImGui::TextDisabled("No meshes loaded.");
         else
-            ImGui::TextDisabled("Click a row to show it in the viewport.");
+            ImGui::TextDisabled("Single-click to select. Double-click to activate.");
 
         ImGui::Spacing();
         if (ImGui::Button("Add Mesh...##ws_add_mesh"))
@@ -593,6 +603,9 @@ draw_editor_layout(AppState &state, float const dt, float const ui_scale) {
         if (!has_active_mesh(state)) {
             ImGui::TextDisabled("No active mesh. Select one in Geometry.");
         } else {
+            if (state.voxel_max_voxels_pending == 0u)
+                state.voxel_max_voxels_pending = state.voxel_max_voxels;
+
             if (begin_property_table("##VoxelProps", 90.0f * s)) {
                 property_label("Target W");
                 ImGui::SliderFloat("##VoxelTargetW", &state.voxel_target_w, 0.1f, 0.9f, "%.2f");
@@ -610,7 +623,25 @@ draw_editor_layout(AppState &state, float const dt, float const ui_scale) {
                 item_tooltip("Requested voxel size. May be clamped to satisfy voxel-count budget");
 
                 property_label("Max Voxels");
-                ImGui::Text("%zu", state.voxel_max_voxels);
+                ImGui::InputScalar(
+                    "##VoxelMaxVoxels", ImGuiDataType_U64, &state.voxel_max_voxels_pending, nullptr,
+                    nullptr, "%llu"
+                );
+                if (ImGui::IsItemDeactivatedAfterEdit()) {
+                    state.voxel_max_voxels_pending =
+                        std::max<std::size_t>(1u, state.voxel_max_voxels_pending);
+                    if (state.voxel_max_voxels_pending > k_voxel_max_voxels_confirm_threshold &&
+                        state.voxel_max_voxels_pending != state.voxel_max_voxels) {
+                        state.voxel_max_voxels_confirm_popup_open = true;
+                    } else if (state.voxel_max_voxels != state.voxel_max_voxels_pending) {
+                        state.voxel_max_voxels = state.voxel_max_voxels_pending;
+                        result.voxel_params_changed = true;
+                    }
+                }
+                item_tooltip(
+                    "Maximum voxel budget for grid generation. Values over 100,000,000 require "
+                    "confirmation."
+                );
 
                 property_label("Actual dx");
                 ImGui::Text("%.5f", state.voxel_actual_dx);
@@ -623,10 +654,33 @@ draw_editor_layout(AppState &state, float const dt, float const ui_scale) {
                 end_property_table();
             }
 
-            ImGui::Spacing();
-            if (ImGui::Button("Recompute"))
-                result.request_voxel_refresh = true;
-            item_tooltip("Re-run voxelization with current settings");
+            ImGui::TextDisabled("Values over 100,000,000 require confirmation.");
+
+            if (state.voxel_max_voxels_confirm_popup_open) {
+                ImGui::OpenPopup(k_voxel_max_voxels_popup_id);
+                state.voxel_max_voxels_confirm_popup_open = false;
+            }
+            if (ImGui::BeginPopupModal(
+                    k_voxel_max_voxels_popup_id, nullptr, ImGuiWindowFlags_AlwaysAutoResize
+                )) {
+                ImGui::TextWrapped(
+                    "You are requesting %zu max voxels, which is above 100,000,000 and may use "
+                    "substantial GPU memory/time.",
+                    state.voxel_max_voxels_pending
+                );
+                ImGui::Spacing();
+                if (ImGui::Button("Confirm##ws_confirm_max_voxels", ImVec2(120.0f * s, 0.0f))) {
+                    state.voxel_max_voxels = state.voxel_max_voxels_pending;
+                    result.voxel_params_changed = true;
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Cancel##ws_cancel_max_voxels", ImVec2(120.0f * s, 0.0f))) {
+                    state.voxel_max_voxels_pending = state.voxel_max_voxels;
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
+            }
         }
     }
 

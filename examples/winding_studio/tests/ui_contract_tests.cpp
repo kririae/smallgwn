@@ -143,7 +143,7 @@ void RegisterWindingStudioUiContractTests(ImGuiTestEngine *engine) {
         IM_CHECK_EQ(static_cast<int>(vars.state.view_mode), static_cast<int>(ViewMode::k_split));
     };
 
-    test = IM_REGISTER_TEST(engine, "winding_studio", "mesh_activation_intent");
+    test = IM_REGISTER_TEST(engine, "winding_studio", "mesh_select_intent");
     test->SetVarsDataType<UiContractVars>();
     test->GuiFunc = [](ImGuiTestContext *ctx) {
         UiContractVars &vars = ctx->GetVars<UiContractVars>();
@@ -169,6 +169,31 @@ void RegisterWindingStudioUiContractTests(ImGuiTestEngine *engine) {
         }
         IM_CHECK(row_item.ID != 0);
         ctx->ItemClick(row_item.ID);
+        IM_CHECK_EQ(vars.state.selected_mesh_index, 1);
+        IM_CHECK_EQ(vars.last_activate_mesh_index, -1);
+    };
+
+    test = IM_REGISTER_TEST(engine, "winding_studio", "mesh_double_click_activation_intent");
+    test->SetVarsDataType<UiContractVars>();
+    test->GuiFunc = [](ImGuiTestContext *ctx) {
+        UiContractVars &vars = ctx->GetVars<UiContractVars>();
+        if (!vars.initialized)
+            initialize_state(vars, false);
+        draw_ui(vars);
+    };
+    test->TestFunc = [](ImGuiTestContext *ctx) {
+        UiContractVars &vars = ctx->GetVars<UiContractVars>();
+        set_ref_inspector(ctx);
+
+        std::string const expected_row_label =
+            mesh_list_label(vars.state.mesh_library[1], 1 == vars.state.active_mesh_index) +
+            "##ws_mesh_row_1";
+        std::string const expected_row_ref = "**/" + expected_row_label;
+
+        ImGuiTestItemInfo const row_item =
+            ctx->ItemInfo(expected_row_ref.c_str(), ImGuiTestOpFlags_NoError);
+        IM_CHECK(row_item.ID != 0);
+        ctx->ItemDoubleClick(row_item.ID);
         IM_CHECK_EQ(vars.state.selected_mesh_index, 1);
         IM_CHECK_EQ(vars.last_activate_mesh_index, 1);
     };
@@ -352,8 +377,53 @@ void RegisterWindingStudioUiContractTests(ImGuiTestEngine *engine) {
 
         ctx->ItemInput("**/##VoxelDx");
         ctx->KeyChars("0.0300");
-        ctx->ItemClick("Recompute");
+        ctx->KeyPress(ImGuiKey_Enter);
         IM_CHECK(vars.saw_voxel_params_changed);
+    };
+
+    test =
+        IM_REGISTER_TEST(engine, "winding_studio", "voxel_max_voxels_over_100m_requires_confirm");
+    test->SetVarsDataType<UiContractVars>();
+    test->GuiFunc = [](ImGuiTestContext *ctx) {
+        UiContractVars &vars = ctx->GetVars<UiContractVars>();
+        if (!vars.initialized)
+            initialize_state(vars, false);
+        vars.state.view_mode = ViewMode::k_voxel;
+        draw_ui(vars);
+    };
+    test->TestFunc = [](ImGuiTestContext *ctx) {
+        UiContractVars &vars = ctx->GetVars<UiContractVars>();
+        set_ref_inspector(ctx);
+        std::size_t const previous_max_voxels = vars.state.voxel_max_voxels;
+
+        IM_CHECK(item_exists(ctx, "**/##VoxelMaxVoxels"));
+        ctx->ItemInput("**/##VoxelMaxVoxels");
+        ctx->KeyChars("120000000");
+        ctx->KeyPress(ImGuiKey_Enter);
+        ctx->Yield();
+
+        IM_CHECK_EQ(vars.state.voxel_max_voxels, previous_max_voxels);
+        IM_CHECK(item_exists(ctx, "**/Confirm##ws_confirm_max_voxels"));
+
+        ctx->ItemClick("**/Confirm##ws_confirm_max_voxels");
+        ctx->Yield();
+
+        IM_CHECK_EQ(vars.state.voxel_max_voxels, static_cast<std::size_t>(120000000u));
+        IM_CHECK(vars.saw_voxel_params_changed);
+    };
+
+    test = IM_REGISTER_TEST(engine, "winding_studio", "voxel_recompute_button_removed");
+    test->SetVarsDataType<UiContractVars>();
+    test->GuiFunc = [](ImGuiTestContext *ctx) {
+        UiContractVars &vars = ctx->GetVars<UiContractVars>();
+        if (!vars.initialized)
+            initialize_state(vars, false);
+        vars.state.view_mode = ViewMode::k_voxel;
+        draw_ui(vars);
+    };
+    test->TestFunc = [](ImGuiTestContext *ctx) {
+        set_ref_inspector(ctx);
+        IM_CHECK(!item_exists(ctx, "**/Recompute"));
     };
 
     test = IM_REGISTER_TEST(engine, "winding_studio", "camera_reset_contract");

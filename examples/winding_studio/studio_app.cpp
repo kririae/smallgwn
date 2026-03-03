@@ -77,25 +77,9 @@ int run_app(CliOptions const &cli) {
 
     apply_engine_style(dpi_scale);
 
-    float const base_font_size = 15.0f;
-    float const scaled_font_size = base_font_size * dpi_scale;
-    bool font_loaded = false;
-    for (char const *path : {
-             "/usr/share/fonts/TTF/DejaVuSans.ttf",
-             "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-             "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
-         }) {
-        if (std::filesystem::exists(path)) {
-            io.Fonts->AddFontFromFileTTF(path, scaled_font_size);
-            font_loaded = true;
-            break;
-        }
-    }
-    if (!font_loaded) {
-        ImFontConfig cfg;
-        cfg.SizePixels = 13.0f * dpi_scale;
-        io.Fonts->AddFontDefault(&cfg);
-    }
+    ImFontConfig cfg;
+    cfg.SizePixels = 13.0f * dpi_scale;
+    io.Fonts->AddFontDefault(&cfg);
 
     if (!ImGui_ImplGlfw_InitForOpenGL(window, true))
         throw std::runtime_error("ImGui_ImplGlfw_InitForOpenGL failed");

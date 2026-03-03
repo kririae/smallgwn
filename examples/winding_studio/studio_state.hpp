@@ -87,6 +87,8 @@ struct AppState {
     float voxel_dx = 0.05f;
     float voxel_target_w = 0.5f;
     std::size_t voxel_max_voxels = 10'000'000u;
+    std::size_t voxel_max_voxels_pending = 10'000'000u;
+    bool voxel_max_voxels_confirm_popup_open = false;
     float voxel_actual_dx = 0.05f;
     std::size_t voxel_grid_nx = 1u;
     std::size_t voxel_grid_ny = 1u;
