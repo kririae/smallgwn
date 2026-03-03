@@ -402,9 +402,10 @@ draw_editor_layout(AppState &state, float const dt, float const ui_scale) {
 
     if (begin_collapsing_section("Camera", true)) {
         auto reset_camera = [&]() {
-            state.yaw = 0.7853981634f;
-            state.pitch = 0.6154797087f;
-            state.camera_radius = 2.7f;
+            state.yaw = k_default_camera_yaw;
+            state.pitch = k_default_camera_pitch;
+            state.camera_radius = k_default_camera_radius;
+            state.camera_fovy_radians = k_default_camera_fovy_radians;
             state.camera_target = Vec3{0.0f, 0.0f, 0.0f};
             state.auto_rotate = false;
             result.harnack_params_changed = true;

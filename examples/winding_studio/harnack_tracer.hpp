@@ -37,7 +37,7 @@ struct CameraFrame {
     float up_x{0.0f};
     float up_y{1.0f};
     float up_z{0.0f};
-    float tan_half_fov{0.41421356f};
+    float tan_half_fov{0.36002216f};
     float aspect{1.0f};
     int width{1};
     int height{1};

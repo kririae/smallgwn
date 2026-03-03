@@ -29,7 +29,7 @@ make_harnack_camera_frame(AppState const &state, int const width, int const heig
     camera.up_x = basis.ortho_up.x;
     camera.up_y = basis.ortho_up.y;
     camera.up_z = basis.ortho_up.z;
-    camera.tan_half_fov = std::tan(0.5f * 45.0f * (k_pi / 180.0f));
+    camera.tan_half_fov = std::tan(0.5f * state.camera_fovy_radians);
     camera.aspect = static_cast<float>(width) / static_cast<float>(std::max(height, 1));
     camera.width = width;
     camera.height = height;

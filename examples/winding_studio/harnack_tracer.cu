@@ -189,7 +189,8 @@ public:
             }
 
             throw_if_error(
-                geometry_.upload(
+                gwn::gwn_upload_geometry(
+                    geometry_,
                     cuda::std::span<Real const>(mesh.vx.data(), mesh.vx.size()),
                     cuda::std::span<Real const>(mesh.vy.data(), mesh.vy.size()),
                     cuda::std::span<Real const>(mesh.vz.data(), mesh.vz.size()),

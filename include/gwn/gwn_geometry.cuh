@@ -39,6 +39,16 @@ template <gwn_real_type Real, gwn_index_type Index = std::uint32_t> struct gwn_g
     }
 };
 
+template <gwn_real_type Real, gwn_index_type Index> class gwn_geometry_object;
+
+template <gwn_real_type Real, gwn_index_type Index>
+gwn_status gwn_upload_geometry(
+    gwn_geometry_object<Real, Index> &object, cuda::std::span<Real const> x,
+    cuda::std::span<Real const> y, cuda::std::span<Real const> z, cuda::std::span<Index const> i0,
+    cuda::std::span<Index const> i1, cuda::std::span<Index const> i2,
+    cudaStream_t const stream = gwn_default_stream()
+) noexcept;
+
 namespace detail {
 
 template <class... Spans>
@@ -127,7 +137,7 @@ gwn_status gwn_upload_accessor(
 /// \brief Owning host-side RAII wrapper for geometry accessor storage.
 ///
 /// \remark `clear()` and destructor release memory on the currently bound stream.
-/// \remark The bound stream is updated after successful `upload(..., stream)`.
+/// \remark The bound stream is updated after successful `gwn_upload_geometry(..., stream)`.
 template <gwn_real_type Real = float, gwn_index_type Index = std::uint32_t>
 class gwn_geometry_object final : public gwn_noncopyable, public gwn_stream_mixin {
 public:
@@ -137,15 +147,6 @@ public:
 
     gwn_geometry_object() = default;
 
-    gwn_geometry_object(
-        cuda::std::span<Real const> const x, cuda::std::span<Real const> const y,
-        cuda::std::span<Real const> const z, cuda::std::span<Index const> const i0,
-        cuda::std::span<Index const> const i1, cuda::std::span<Index const> const i2,
-        cudaStream_t const stream = gwn_default_stream()
-    ) {
-        gwn_throw_if_error(upload(x, y, z, i0, i1, i2, stream));
-    }
-
     gwn_geometry_object(gwn_geometry_object &&other) noexcept { swap(*this, other); }
 
     gwn_geometry_object &operator=(gwn_geometry_object other) noexcept {
@@ -154,22 +155,6 @@ public:
     }
 
     ~gwn_geometry_object() { clear(); }
-
-    gwn_status upload(
-        cuda::std::span<Real const> const x, cuda::std::span<Real const> const y,
-        cuda::std::span<Real const> const z, cuda::std::span<Index const> const i0,
-        cuda::std::span<Index const> const i1, cuda::std::span<Index const> const i2,
-        cudaStream_t const stream = gwn_default_stream()
-    ) noexcept {
-        gwn_geometry_object staging;
-        staging.set_stream(stream);
-        GWN_RETURN_ON_ERROR(
-            detail::gwn_upload_accessor(staging.accessor_, x, y, z, i0, i1, i2, stream)
-        );
-
-        swap(*this, staging);
-        return gwn_status::ok();
-    }
 
     void clear() noexcept { detail::gwn_release_accessor(accessor_, stream()); }
 
@@ -190,6 +175,27 @@ public:
     }
 
 private:
+    template <gwn_real_type R, gwn_index_type I>
+    friend gwn_status gwn_upload_geometry(
+        gwn_geometry_object<R, I> &object, cuda::std::span<R const> x, cuda::std::span<R const> y,
+        cuda::std::span<R const> z, cuda::std::span<I const> i0, cuda::std::span<I const> i1,
+        cuda::std::span<I const> i2, cudaStream_t const stream
+    ) noexcept;
+
     accessor_type accessor_{};
 };
+
+template <gwn_real_type Real, gwn_index_type Index>
+gwn_status gwn_upload_geometry(
+    gwn_geometry_object<Real, Index> &object, cuda::std::span<Real const> x,
+    cuda::std::span<Real const> y, cuda::std::span<Real const> z, cuda::std::span<Index const> i0,
+    cuda::std::span<Index const> i1, cuda::std::span<Index const> i2, cudaStream_t const stream
+) noexcept {
+    gwn_geometry_object<Real, Index> staging;
+    staging.set_stream(stream);
+    GWN_RETURN_ON_ERROR(detail::gwn_upload_accessor(staging.accessor_, x, y, z, i0, i1, i2, stream));
+
+    swap(object, staging);
+    return gwn_status::ok();
+}
 } // namespace gwn

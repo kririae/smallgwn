@@ -324,7 +324,8 @@ TEST(smallgwn_integration_model, bvh_exact_batch_matches_cpu_on_common_models) {
             << gwn::tests::status_to_debug_string(reference_status);
 
         gwn::gwn_geometry_object<Real, Index> geometry;
-        gwn::gwn_status const upload_status = geometry.upload(
+        gwn::gwn_status const upload_status = gwn::gwn_upload_geometry(
+            geometry,
             cuda::std::span<Real const>(mesh.vertex_x.data(), mesh.vertex_x.size()),
             cuda::std::span<Real const>(mesh.vertex_y.data(), mesh.vertex_y.size()),
             cuda::std::span<Real const>(mesh.vertex_z.data(), mesh.vertex_z.size()),
@@ -396,7 +397,8 @@ TEST(smallgwn_integration_model, bvh_binary_to_wide_matches_width4_exact_queries
         std::size_t const query_count = query_soa[0].size();
 
         gwn::gwn_geometry_object<Real, Index> geometry;
-        gwn::gwn_status const upload_status = geometry.upload(
+        gwn::gwn_status const upload_status = gwn::gwn_upload_geometry(
+            geometry,
             cuda::std::span<Real const>(mesh.vertex_x.data(), mesh.vertex_x.size()),
             cuda::std::span<Real const>(mesh.vertex_y.data(), mesh.vertex_y.size()),
             cuda::std::span<Real const>(mesh.vertex_z.data(), mesh.vertex_z.size()),
@@ -507,7 +509,8 @@ TEST(smallgwn_integration_model, integration_exact_and_taylor_consistency_on_com
             continue;
 
         gwn::gwn_geometry_object<Real, Index> geometry;
-        gwn::gwn_status const upload_status = geometry.upload(
+        gwn::gwn_status const upload_status = gwn::gwn_upload_geometry(
+            geometry,
             cuda::std::span<Real const>(mesh.vertex_x.data(), mesh.vertex_x.size()),
             cuda::std::span<Real const>(mesh.vertex_y.data(), mesh.vertex_y.size()),
             cuda::std::span<Real const>(mesh.vertex_z.data(), mesh.vertex_z.size()),
@@ -617,7 +620,8 @@ void run_integration_taylor_rebuild_consistency_on_common_models(Real const k_co
             continue;
 
         gwn::gwn_geometry_object<Real, Index> geometry;
-        gwn::gwn_status const upload_status = geometry.upload(
+        gwn::gwn_status const upload_status = gwn::gwn_upload_geometry(
+            geometry,
             cuda::std::span<Real const>(mesh.vertex_x.data(), mesh.vertex_x.size()),
             cuda::std::span<Real const>(mesh.vertex_y.data(), mesh.vertex_y.size()),
             cuda::std::span<Real const>(mesh.vertex_z.data(), mesh.vertex_z.size()),
@@ -773,7 +777,8 @@ TEST(smallgwn_integration_model, integration_taylor_matches_hdk_cpu_order0_order
                          .is_ok()));
 
         gwn::gwn_geometry_object<Real, Index> geometry;
-        gwn::gwn_status const upload_status = geometry.upload(
+        gwn::gwn_status const upload_status = gwn::gwn_upload_geometry(
+            geometry,
             cuda::std::span<Real const>(mesh.vertex_x.data(), mesh.vertex_x.size()),
             cuda::std::span<Real const>(mesh.vertex_y.data(), mesh.vertex_y.size()),
             cuda::std::span<Real const>(mesh.vertex_z.data(), mesh.vertex_z.size()),
@@ -896,7 +901,8 @@ TEST(smallgwn_integration_model, integration_hploc_exact_and_taylor_consistency_
             continue;
 
         gwn::gwn_geometry_object<Real, Index> geometry;
-        gwn::gwn_status const upload_status = geometry.upload(
+        gwn::gwn_status const upload_status = gwn::gwn_upload_geometry(
+            geometry,
             cuda::std::span<Real const>(mesh.vertex_x.data(), mesh.vertex_x.size()),
             cuda::std::span<Real const>(mesh.vertex_y.data(), mesh.vertex_y.size()),
             cuda::std::span<Real const>(mesh.vertex_z.data(), mesh.vertex_z.size()),

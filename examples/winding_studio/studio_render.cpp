@@ -542,7 +542,7 @@ void render_viewport(
             return;
         glViewport(x, y, w, h);
         Mat4 const proj = mat4_perspective(
-            45.0f * (k_pi / 180.0f), static_cast<float>(w) / static_cast<float>(h), 0.1f, 30.0f
+            state.camera_fovy_radians, static_cast<float>(w) / static_cast<float>(h), 0.1f, 30.0f
         );
         Mat4 const vp = mat4_mul(proj, view);
         Mat4 const mvp = mat4_mul(vp, model);
@@ -571,7 +571,7 @@ void render_viewport(
     case ViewMode::k_voxel: {
         glViewport(viewport.x, viewport.y, viewport.w, viewport.h);
         Mat4 const proj = mat4_perspective(
-            45.0f * (k_pi / 180.0f),
+            state.camera_fovy_radians,
             static_cast<float>(viewport.w) / static_cast<float>(viewport.h), 0.1f, 30.0f
         );
         Mat4 const vp = mat4_mul(proj, view);

@@ -16,6 +16,10 @@ namespace winding_studio::app {
  * @brief Shared PI constant used by camera and projection helpers.
  */
 inline constexpr float k_pi = 3.14159265358979323846f;
+inline constexpr float k_default_camera_yaw = 0.7853981634f;        // 45 deg
+inline constexpr float k_default_camera_pitch = 0.6154797087f;      // 35.264 deg
+inline constexpr float k_default_camera_radius = 3.1f;
+inline constexpr float k_default_camera_fovy_radians = 0.6911503838f; // 39.6 deg (Blender-like)
 
 using Vec3 = glm::vec3;
 using Mat4 = glm::mat4;
@@ -67,9 +71,10 @@ struct AppState {
     ViewMode view_mode = ViewMode::k_split;
     bool auto_rotate = false;
     bool wireframe = false;
-    float yaw = 0.7853981634f;   // ~45 deg, Blender-like oblique default
-    float pitch = 0.6154797087f; // ~35.264 deg
-    float camera_radius = 2.7f;
+    float yaw = k_default_camera_yaw;
+    float pitch = k_default_camera_pitch;
+    float camera_radius = k_default_camera_radius;
+    float camera_fovy_radians = k_default_camera_fovy_radians;
     Vec3 camera_target{0.0f, 0.0f, 0.0f};
 
     float epsilon = 1e-3f;

@@ -361,9 +361,10 @@ void RegisterWindingStudioUiContractTests(ImGuiTestEngine *engine) {
 
         set_ref_inspector(ctx);
         ctx->ItemClick("Reset Camera");
-        IM_CHECK(std::abs(vars.state.yaw - 0.7853981634f) < 1e-6f);
-        IM_CHECK(std::abs(vars.state.pitch - 0.6154797087f) < 1e-6f);
-        IM_CHECK(std::abs(vars.state.camera_radius - 2.7f) < 1e-6f);
+        IM_CHECK(std::abs(vars.state.yaw - k_default_camera_yaw) < 1e-6f);
+        IM_CHECK(std::abs(vars.state.pitch - k_default_camera_pitch) < 1e-6f);
+        IM_CHECK(std::abs(vars.state.camera_radius - k_default_camera_radius) < 1e-6f);
+        IM_CHECK(std::abs(vars.state.camera_fovy_radians - k_default_camera_fovy_radians) < 1e-6f);
         IM_CHECK(std::abs(vars.state.camera_target.x - 0.0f) < 1e-6f);
         IM_CHECK(std::abs(vars.state.camera_target.y - 0.0f) < 1e-6f);
         IM_CHECK(std::abs(vars.state.camera_target.z - 0.0f) < 1e-6f);

@@ -291,7 +291,8 @@ struct TraceHarness {
 
     template <class Mesh>
     bool build(Mesh const &mesh, std::string &error_message) {
-        gwn::gwn_status s = geometry.upload(
+        gwn::gwn_status s = gwn::gwn_upload_geometry(
+            geometry,
             cuda::std::span<Real const>(mesh.vx.data(), mesh.vx.size()),
             cuda::std::span<Real const>(mesh.vy.data(), mesh.vy.size()),
             cuda::std::span<Real const>(mesh.vz.data(), mesh.vz.size()),

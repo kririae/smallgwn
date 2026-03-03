@@ -107,7 +107,8 @@ struct SdfTestContext {
 };
 
 void setup_octahedron_sdf(SdfTestContext &ctx, OctahedronMesh const &mesh) {
-    gwn::gwn_status const upload_status = ctx.geometry.upload(
+    gwn::gwn_status const upload_status = gwn::gwn_upload_geometry(
+        ctx.geometry,
         cuda::std::span<Real const>(mesh.vx.data(), mesh.vx.size()),
         cuda::std::span<Real const>(mesh.vy.data(), mesh.vy.size()),
         cuda::std::span<Real const>(mesh.vz.data(), mesh.vz.size()),
@@ -537,7 +538,8 @@ TEST_F(CudaFixture, unsigned_distance_hploc_matches_lbvh) {
     // HPLOC build.
     SdfTestContext ctx_hploc;
     {
-        gwn::gwn_status const upload_status = ctx_hploc.geometry.upload(
+        gwn::gwn_status const upload_status = gwn::gwn_upload_geometry(
+            ctx_hploc.geometry,
             cuda::std::span<Real const>(mesh.vx.data(), mesh.vx.size()),
             cuda::std::span<Real const>(mesh.vy.data(), mesh.vy.size()),
             cuda::std::span<Real const>(mesh.vz.data(), mesh.vz.size()),
@@ -586,7 +588,8 @@ TEST_F(CudaFixture, model_unsigned_distance_vs_libigl) {
 
     // Upload + build.
     gwn::gwn_geometry_object<Real, Index> geometry;
-    gwn::gwn_status const upload_status = geometry.upload(
+    gwn::gwn_status const upload_status = gwn::gwn_upload_geometry(
+        geometry,
         cuda::std::span<Real const>(host_mesh.vertex_x.data(), host_mesh.vertex_x.size()),
         cuda::std::span<Real const>(host_mesh.vertex_y.data(), host_mesh.vertex_y.size()),
         cuda::std::span<Real const>(host_mesh.vertex_z.data(), host_mesh.vertex_z.size()),
@@ -699,7 +702,8 @@ TEST_F(CudaFixture, model_signed_distance_vs_libigl) {
 
     // Upload.
     gwn::gwn_geometry_object<Real, Index> geometry;
-    gwn::gwn_status const upload_status = geometry.upload(
+    gwn::gwn_status const upload_status = gwn::gwn_upload_geometry(
+        geometry,
         cuda::std::span<Real const>(host_mesh.vertex_x.data(), host_mesh.vertex_x.size()),
         cuda::std::span<Real const>(host_mesh.vertex_y.data(), host_mesh.vertex_y.size()),
         cuda::std::span<Real const>(host_mesh.vertex_z.data(), host_mesh.vertex_z.size()),

@@ -158,7 +158,8 @@ TEST(smallgwn_integration_performance, hploc_topology_build_ratio_gate) {
             gwn::gwn_make_scope_exit([&]() noexcept { (void)cudaStreamDestroy(stream); });
 
         gwn::gwn_geometry_object<Real, Index> geometry;
-        gwn::gwn_status const upload_status = geometry.upload(
+        gwn::gwn_status const upload_status = gwn::gwn_upload_geometry(
+            geometry,
             cuda::std::span<Real const>(mesh.vertex_x.data(), mesh.vertex_x.size()),
             cuda::std::span<Real const>(mesh.vertex_y.data(), mesh.vertex_y.size()),
             cuda::std::span<Real const>(mesh.vertex_z.data(), mesh.vertex_z.size()),

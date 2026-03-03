@@ -41,7 +41,8 @@ cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
 
 // Upload geometry to the GPU (SoA layout: separate x/y/z arrays + triangle index arrays)
 gwn::gwn_geometry_object<Real, Index> geometry;
-geometry.upload(
+gwn::gwn_upload_geometry(
+    geometry,
     cuda::std::span<Real const>(vx.data(), vx.size()),
     cuda::std::span<Real const>(vy.data(), vy.size()),
     cuda::std::span<Real const>(vz.data(), vz.size()),

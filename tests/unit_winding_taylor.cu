@@ -50,7 +50,8 @@ void setup_octahedron_taylor(
     std::vector<Index> i1{2, 1, 3, 0, 0, 2, 1, 3};
     std::vector<Index> i2{4, 4, 4, 4, 5, 5, 5, 5};
 
-    gwn::gwn_status const upload_status = ctx.geometry.upload(
+    gwn::gwn_status const upload_status = gwn::gwn_upload_geometry(
+        ctx.geometry,
         cuda::std::span<Real const>(vx.data(), vx.size()),
         cuda::std::span<Real const>(vy.data(), vy.size()),
         cuda::std::span<Real const>(vz.data(), vz.size()),
@@ -171,7 +172,8 @@ TEST_F(CudaFixture, order1_more_accurate_than_order0) {
                      .is_ok()));
 
     gwn::gwn_geometry_object<Real, Index> geometry;
-    gwn::gwn_status const upload_status = geometry.upload(
+    gwn::gwn_status const upload_status = gwn::gwn_upload_geometry(
+        geometry,
         cuda::std::span<Real const>(vx.data(), vx.size()),
         cuda::std::span<Real const>(vy.data(), vy.size()),
         cuda::std::span<Real const>(vz.data(), vz.size()),
@@ -267,7 +269,8 @@ TEST_F(CudaFixture, order2_more_accurate_than_order1) {
                      .is_ok()));
 
     gwn::gwn_geometry_object<Real, Index> geometry;
-    gwn::gwn_status const upload_status = geometry.upload(
+    gwn::gwn_status const upload_status = gwn::gwn_upload_geometry(
+        geometry,
         cuda::std::span<Real const>(vx.data(), vx.size()),
         cuda::std::span<Real const>(vy.data(), vy.size()),
         cuda::std::span<Real const>(vz.data(), vz.size()),
@@ -351,7 +354,8 @@ TEST_F(CudaFixture, repeated_build_matches_order1) {
     std::array<Real, 4> const qz{0.0f, 0.0f, 0.0f, 0.0f};
 
     gwn::gwn_geometry_object<Real, Index> geometry;
-    gwn::gwn_status const upload_status = geometry.upload(
+    gwn::gwn_status const upload_status = gwn::gwn_upload_geometry(
+        geometry,
         cuda::std::span<Real const>(vx.data(), vx.size()),
         cuda::std::span<Real const>(vy.data(), vy.size()),
         cuda::std::span<Real const>(vz.data(), vz.size()),
@@ -430,7 +434,8 @@ TEST_F(CudaFixture, repeated_build_matches_order2) {
     std::array<Real, 4> const qz{0.0f, 0.0f, 0.0f, 0.0f};
 
     gwn::gwn_geometry_object<Real, Index> geometry;
-    gwn::gwn_status const upload_status = geometry.upload(
+    gwn::gwn_status const upload_status = gwn::gwn_upload_geometry(
+        geometry,
         cuda::std::span<Real const>(vx.data(), vx.size()),
         cuda::std::span<Real const>(vy.data(), vy.size()),
         cuda::std::span<Real const>(vz.data(), vz.size()),

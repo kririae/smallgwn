@@ -384,7 +384,8 @@ template <int Order> void run_voxel_rebuild_consistency_test() {
             continue;
 
         gwn::gwn_geometry_object<Real, Index> geometry;
-        gwn::gwn_status const upload_status = geometry.upload(
+        gwn::gwn_status const upload_status = gwn::gwn_upload_geometry(
+            geometry,
             cuda::std::span<Real const>(mesh.vertex_x.data(), mesh.vertex_x.size()),
             cuda::std::span<Real const>(mesh.vertex_y.data(), mesh.vertex_y.size()),
             cuda::std::span<Real const>(mesh.vertex_z.data(), mesh.vertex_z.size()),
@@ -578,7 +579,8 @@ template <int Order> void run_voxel_hploc_vs_lbvh_consistency_test() {
         );
 
         gwn::gwn_geometry_object<Real, Index> geometry;
-        gwn::gwn_status const upload_status = geometry.upload(
+        gwn::gwn_status const upload_status = gwn::gwn_upload_geometry(
+            geometry,
             cuda::std::span<Real const>(mesh.vertex_x.data(), mesh.vertex_x.size()),
             cuda::std::span<Real const>(mesh.vertex_y.data(), mesh.vertex_y.size()),
             cuda::std::span<Real const>(mesh.vertex_z.data(), mesh.vertex_z.size()),
@@ -754,7 +756,8 @@ TEST(smallgwn_integration_correctness, voxel_exact_and_taylor_match_cpu_on_small
             << gwn::tests::status_to_debug_string(reference_status);
 
         gwn::gwn_geometry_object<Real, Index> geometry;
-        gwn::gwn_status const upload_status = geometry.upload(
+        gwn::gwn_status const upload_status = gwn::gwn_upload_geometry(
+            geometry,
             cuda::std::span<Real const>(mesh.vertex_x.data(), mesh.vertex_x.size()),
             cuda::std::span<Real const>(mesh.vertex_y.data(), mesh.vertex_y.size()),
             cuda::std::span<Real const>(mesh.vertex_z.data(), mesh.vertex_z.size()),

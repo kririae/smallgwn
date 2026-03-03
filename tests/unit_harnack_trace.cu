@@ -41,7 +41,8 @@ bool run_harnack_trace(
 ) {
     // 1. Upload geometry.
     gwn::gwn_geometry_object<Real, Index> geometry;
-    gwn::gwn_status s = geometry.upload(
+    gwn::gwn_status s = gwn::gwn_upload_geometry(
+        geometry,
         cuda::std::span<Real const>(mesh.vx.data(), mesh.vx.size()),
         cuda::std::span<Real const>(mesh.vy.data(), mesh.vy.size()),
         cuda::std::span<Real const>(mesh.vz.data(), mesh.vz.size()),
@@ -133,7 +134,8 @@ bool run_harnack_trace_angle(
     Real const accuracy_scale = Real(2)
 ) {
     gwn::gwn_geometry_object<Real, Index> geometry;
-    gwn::gwn_status s = geometry.upload(
+    gwn::gwn_status s = gwn::gwn_upload_geometry(
+        geometry,
         cuda::std::span<Real const>(mesh.vx.data(), mesh.vx.size()),
         cuda::std::span<Real const>(mesh.vy.data(), mesh.vy.size()),
         cuda::std::span<Real const>(mesh.vz.data(), mesh.vz.size()),
@@ -217,7 +219,8 @@ bool run_winding_query(
     Real const accuracy_scale = Real(2)
 ) {
     gwn::gwn_geometry_object<Real, Index> geometry;
-    gwn::gwn_status s = geometry.upload(
+    gwn::gwn_status s = gwn::gwn_upload_geometry(
+        geometry,
         cuda::std::span<Real const>(mesh.vx.data(), mesh.vx.size()),
         cuda::std::span<Real const>(mesh.vy.data(), mesh.vy.size()),
         cuda::std::span<Real const>(mesh.vz.data(), mesh.vz.size()),
@@ -274,7 +277,8 @@ bool run_edge_distance_query(
     std::vector<Real> &out_d
 ) {
     gwn::gwn_geometry_object<Real, Index> geometry;
-    gwn::gwn_status s = geometry.upload(
+    gwn::gwn_status s = gwn::gwn_upload_geometry(
+        geometry,
         cuda::std::span<Real const>(mesh.vx.data(), mesh.vx.size()),
         cuda::std::span<Real const>(mesh.vy.data(), mesh.vy.size()),
         cuda::std::span<Real const>(mesh.vz.data(), mesh.vz.size()),

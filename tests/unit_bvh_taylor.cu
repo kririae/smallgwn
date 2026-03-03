@@ -35,7 +35,8 @@ std::optional<gwn::gwn_geometry_object<Real, Index>> upload_octahedron() {
     std::vector<Index> i2{4, 4, 4, 4, 5, 5, 5, 5};
 
     gwn::gwn_geometry_object<Real, Index> geometry;
-    gwn::gwn_status const status = geometry.upload(
+    gwn::gwn_status const status = gwn::gwn_upload_geometry(
+        geometry,
         cuda::std::span<Real const>(vx.data(), vx.size()),
         cuda::std::span<Real const>(vy.data(), vy.size()),
         cuda::std::span<Real const>(vz.data(), vz.size()),
@@ -299,7 +300,8 @@ TEST_F(CudaFixture, taylor_single_triangle) {
     std::vector<Index> i0{0}, i1{1}, i2{2};
 
     gwn::gwn_geometry_object<Real, Index> geometry;
-    gwn::gwn_status const upload_status = geometry.upload(
+    gwn::gwn_status const upload_status = gwn::gwn_upload_geometry(
+        geometry,
         cuda::std::span<Real const>(vx.data(), vx.size()),
         cuda::std::span<Real const>(vy.data(), vy.size()),
         cuda::std::span<Real const>(vz.data(), vz.size()),

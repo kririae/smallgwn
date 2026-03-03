@@ -31,7 +31,7 @@ TEST(smallgwn_unit_uint64_compile, upload_and_harnack_templates_instantiate) {
     cuda::std::span<Index const> i0{};
     cuda::std::span<Index const> i1{};
     cuda::std::span<Index const> i2{};
-    EXPECT_TRUE(geometry.upload(vx, vy, vz, i0, i1, i2).is_ok());
+    EXPECT_TRUE(gwn::gwn_upload_geometry(geometry, vx, vy, vz, i0, i1, i2).is_ok());
 
     gwn::gwn_bvh4_topology_accessor<Real, Index> bvh{};
     bvh.root_kind = gwn::gwn_bvh_child_kind::k_leaf;

@@ -113,7 +113,8 @@ gwn_status gwn_upload_from_eigen(
         }
     }
 
-    return object.upload(
+    return gwn_upload_geometry(
+        object,
         cuda::std::span<Real const>(x.get(), vertex_count_u),
         cuda::std::span<Real const>(y.get(), vertex_count_u),
         cuda::std::span<Real const>(z.get(), vertex_count_u),
