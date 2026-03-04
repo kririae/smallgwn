@@ -143,10 +143,10 @@ public:
             );
 
             throw_if_error(
-                gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<1, 4, Real, Index>(
+                gwn::gwn_bvh_facade_build_topology_aabb_moment_hploc<1, 4, Real, Index>(
                     geometry_, bvh_, aabb_, moments_
                 ),
-                "gwn_bvh_facade_build_topology_aabb_moment_lbvh"
+                "gwn_bvh_facade_build_topology_aabb_moment_hploc"
             );
             throw_if_error(
                 gwn::gwn_cuda_to_status(cudaDeviceSynchronize()), "cudaDeviceSynchronize"
