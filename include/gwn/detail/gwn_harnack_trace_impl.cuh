@@ -212,9 +212,9 @@ __device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_ray_impl(
         Real const dist = std::min(dist_lo, dist_hi);
         Real const grad_omega_mag = k_four_pi * grad_w_mag;
 
-        // R(x) = distance to the nearest triangle (face + edges + vertices).
-        // This subsumes singular-edge distance because every singular edge is
-        // geometrically a subset of at least one triangle.
+        // R(x) = distance to the nearest boundary edge. For closed meshes this
+        // is +infinity and Harnack-only tracing cannot recover interior-face
+        // crossings; hybrid ray+Harnack handles that case.
         //
         // Safe distance-query conditioning:
         // Let d(x) = dist(x, mesh). For any closed set, d is 1-Lipschitz:
@@ -237,9 +237,10 @@ __device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_ray_impl(
                 culling_band = band;
         }
 
-        Real const R = gwn_unsigned_distance_point_bvh_impl<Width, Real, Index, StackCapacity>(
-            geometry, bvh, aabb_tree, px, py, pz, culling_band
-        );
+        Real const R =
+            gwn_unsigned_boundary_edge_distance_point_bvh_impl<Width, Real, Index, StackCapacity>(
+                geometry, bvh, aabb_tree, px, py, pz, culling_band
+            );
         if (!(R >= Real(0)))
             break;
         prev_t_eval = t_eval;

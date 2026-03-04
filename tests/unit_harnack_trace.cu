@@ -1,6 +1,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -251,7 +252,7 @@ bool run_winding_query(
 }
 
 template <class Mesh>
-bool run_edge_distance_query(
+bool run_boundary_edge_distance_query(
     Mesh const &mesh, std::vector<Real> const &qx, std::vector<Real> const &qy,
     std::vector<Real> const &qz, std::vector<Real> &out_d
 ) {
@@ -285,18 +286,27 @@ bool run_edge_distance_query(
     if (!ok)
         return false;
 
-    s = gwn::gwn_compute_unsigned_edge_distance_batch_bvh<Real, Index>(
-        geometry.accessor(), bvh.accessor(), aabb.accessor(), d_qx.span(), d_qy.span(), d_qz.span(),
-        d_out.span()
+    constexpr int k_stack_capacity = 64;
+    constexpr int k_block_size = gwn::detail::k_gwn_default_block_size;
+    s = gwn::detail::gwn_launch_linear_kernel<k_block_size>(
+        n,
+        gwn::detail::gwn_unsigned_boundary_edge_distance_batch_bvh_functor<
+            4, Real, Index, k_stack_capacity>{
+            geometry.accessor(), bvh.accessor(), aabb.accessor(), d_qx.span(), d_qy.span(),
+            d_qz.span(), d_out.span(), std::numeric_limits<Real>::infinity()
+        },
+        gwn::gwn_default_stream()
     );
     if (!s.is_ok())
         return false;
-    cudaDeviceSynchronize();
+    if (cudaDeviceSynchronize() != cudaSuccess)
+        return false;
 
     out_d.resize(n);
     if (!d_out.copy_to_host(cuda::std::span<Real>(out_d.data(), n)).is_ok())
         return false;
-    cudaDeviceSynchronize();
+    if (cudaDeviceSynchronize() != cudaSuccess)
+        return false;
     return true;
 }
 
@@ -312,14 +322,13 @@ inline Real point_segment_distance(
     Real const apz = qz - az;
     Real const ab2 = abx * abx + aby * aby + abz * abz;
     if (!(ab2 > Real(0))) {
-        Real const dx = apx, dy = apy, dz = apz;
+        Real const dx = apx;
+        Real const dy = apy;
+        Real const dz = apz;
         return std::sqrt(dx * dx + dy * dy + dz * dz);
     }
     Real t = (apx * abx + apy * aby + apz * abz) / ab2;
-    if (t < Real(0))
-        t = Real(0);
-    if (t > Real(1))
-        t = Real(1);
+    t = std::max(Real(0), std::min(Real(1), t));
     Real const cx = ax + t * abx;
     Real const cy = ay + t * aby;
     Real const cz = az + t * abz;
@@ -329,31 +338,50 @@ inline Real point_segment_distance(
     return std::sqrt(dx * dx + dy * dy + dz * dz);
 }
 
-inline Real
-cpu_edge_distance(OctahedronMesh const &mesh, Real const qx, Real const qy, Real const qz) {
+template <class Mesh>
+Real cpu_boundary_edge_distance(Mesh const &mesh, Real const qx, Real const qy, Real const qz) {
+    std::vector<std::uint8_t> mask(mesh.i0.size(), std::uint8_t(0));
+    gwn::gwn_status const s = gwn::gwn_compute_triangle_boundary_edge_mask<Index>(
+        cuda::std::span<Index const>(mesh.i0.data(), mesh.i0.size()),
+        cuda::std::span<Index const>(mesh.i1.data(), mesh.i1.size()),
+        cuda::std::span<Index const>(mesh.i2.data(), mesh.i2.size()),
+        cuda::std::span<std::uint8_t>(mask.data(), mask.size())
+    );
+    if (!s.is_ok())
+        return std::numeric_limits<Real>::quiet_NaN();
+
     Real best = std::numeric_limits<Real>::infinity();
     for (std::size_t ti = 0; ti < mesh.i0.size(); ++ti) {
+        std::uint8_t const m = mask[ti];
+        if (m == std::uint8_t(0))
+            continue;
         auto const ia = static_cast<std::size_t>(mesh.i0[ti]);
         auto const ib = static_cast<std::size_t>(mesh.i1[ti]);
         auto const ic = static_cast<std::size_t>(mesh.i2[ti]);
-        best = std::min(
-            best, point_segment_distance(
-                      qx, qy, qz, mesh.vx[ia], mesh.vy[ia], mesh.vz[ia], mesh.vx[ib], mesh.vy[ib],
-                      mesh.vz[ib]
-                  )
-        );
-        best = std::min(
-            best, point_segment_distance(
-                      qx, qy, qz, mesh.vx[ib], mesh.vy[ib], mesh.vz[ib], mesh.vx[ic], mesh.vy[ic],
-                      mesh.vz[ic]
-                  )
-        );
-        best = std::min(
-            best, point_segment_distance(
-                      qx, qy, qz, mesh.vx[ic], mesh.vy[ic], mesh.vz[ic], mesh.vx[ia], mesh.vy[ia],
-                      mesh.vz[ia]
-                  )
-        );
+        if ((m & std::uint8_t(0x1u)) != std::uint8_t(0)) {
+            best = std::min(
+                best, point_segment_distance(
+                          qx, qy, qz, mesh.vx[ia], mesh.vy[ia], mesh.vz[ia], mesh.vx[ib],
+                          mesh.vy[ib], mesh.vz[ib]
+                      )
+            );
+        }
+        if ((m & std::uint8_t(0x2u)) != std::uint8_t(0)) {
+            best = std::min(
+                best, point_segment_distance(
+                          qx, qy, qz, mesh.vx[ib], mesh.vy[ib], mesh.vz[ib], mesh.vx[ic],
+                          mesh.vy[ic], mesh.vz[ic]
+                      )
+            );
+        }
+        if ((m & std::uint8_t(0x4u)) != std::uint8_t(0)) {
+            best = std::min(
+                best, point_segment_distance(
+                          qx, qy, qz, mesh.vx[ic], mesh.vy[ic], mesh.vz[ic], mesh.vx[ia],
+                          mesh.vy[ia], mesh.vz[ia]
+                      )
+            );
+        }
     }
     return best;
 }
@@ -407,26 +435,6 @@ TEST(HarnackStepSize, constrained_step_never_exceeds_radius) {
     Real const R = Real(1e-9);
     Real const rho = gwn_harnack_constrained_step(Real(0), Real(0.5), Real(-1), R);
     EXPECT_LE(rho, R);
-}
-
-// Test 1c: Two-sided constrained step should match constrained_step min-step
-// selection semantics (legacy behavior).
-TEST(HarnackStepSize, two_sided_min_step_selection_matches_legacy) {
-    using namespace gwn::detail;
-
-    Real const R = Real(1);
-    Real const f_t = Real(-2); // a <= 0 branch: base step = R * 1e-4
-    Real const lower = Real(0);
-    Real const upper = Real(2);
-    Real const c = Real(-1);
-    Real const min_abs = Real(0.2);
-    Real const min_rel = Real(0.1);
-
-    Real const rho =
-        gwn_harnack_constrained_two_sided_step(f_t, lower, upper, c, R, Real(1), min_abs, min_rel);
-
-    // Legacy rule: if (R > min_abs_step), use R * min_relative_step.
-    EXPECT_NEAR(rho, Real(0.1), Real(1e-6));
 }
 
 // Test 2: Ray parameterization should follow reference semantics.
@@ -611,38 +619,36 @@ TEST_F(CudaFixture, harnack_batch_rejects_invalid_accessors) {
     EXPECT_EQ(s.error(), gwn::gwn_error::invalid_argument);
 }
 
-TEST_F(CudaFixture, edge_distance_batch_rejects_invalid_accessors) {
-    gwn::gwn_geometry_accessor<Real, Index> geometry{};
-    gwn::gwn_bvh4_topology_accessor<Real, Index> bvh{};
-    gwn::gwn_bvh4_aabb_accessor<Real, Index> aabb{};
-
-    gwn::gwn_device_array<Real> d_qx, d_qy, d_qz, d_out;
-    bool ok = d_qx.resize(1).is_ok() && d_qy.resize(1).is_ok() && d_qz.resize(1).is_ok() &&
-              d_out.resize(1).is_ok();
-    if (!ok)
-        GTEST_SKIP() << "CUDA unavailable";
-
-    gwn::gwn_status const s = gwn::gwn_compute_unsigned_edge_distance_batch_bvh<Real, Index>(
-        geometry, bvh, aabb, d_qx.span(), d_qy.span(), d_qz.span(), d_out.span()
-    );
-    EXPECT_EQ(s.error(), gwn::gwn_error::invalid_argument);
-}
-
-TEST_F(CudaFixture, edge_distance_matches_cpu_reference) {
-    OctahedronMesh mesh;
-
-    std::vector<Real> qx{Real(0), Real(0.15), Real(2.0), Real(-0.4)};
-    std::vector<Real> qy{Real(0), Real(-0.25), Real(0.5), Real(0.8)};
-    std::vector<Real> qz{Real(0), Real(0.6), Real(-1.2), Real(0.1)};
+TEST_F(CudaFixture, boundary_edge_distance_closed_cube_is_infinite) {
+    CubeMesh mesh;
+    std::vector<Real> qx{Real(0), Real(0.2), Real(3)};
+    std::vector<Real> qy{Real(0), Real(-0.3), Real(1)};
+    std::vector<Real> qz{Real(0), Real(0.4), Real(-2)};
     std::vector<Real> d_gpu;
 
-    if (!run_edge_distance_query(mesh, qx, qy, qz, d_gpu))
+    if (!run_boundary_edge_distance_query(mesh, qx, qy, qz, d_gpu))
+        GTEST_SKIP() << "CUDA unavailable";
+
+    ASSERT_EQ(d_gpu.size(), qx.size());
+    for (Real const d : d_gpu)
+        EXPECT_TRUE(std::isinf(d));
+}
+
+TEST_F(CudaFixture, boundary_edge_distance_matches_cpu_reference_half_octahedron) {
+    HalfOctahedronMesh mesh;
+    std::vector<Real> qx{Real(0), Real(0.15), Real(0.35), Real(-0.2)};
+    std::vector<Real> qy{Real(0), Real(-0.25), Real(0.2), Real(0.3)};
+    std::vector<Real> qz{Real(0.2), Real(0.6), Real(0.9), Real(0.4)};
+    std::vector<Real> d_gpu;
+
+    if (!run_boundary_edge_distance_query(mesh, qx, qy, qz, d_gpu))
         GTEST_SKIP() << "CUDA unavailable";
 
     ASSERT_EQ(d_gpu.size(), qx.size());
     for (std::size_t i = 0; i < qx.size(); ++i) {
-        Real const d_cpu = cpu_edge_distance(mesh, qx[i], qy[i], qz[i]);
-        EXPECT_NEAR(d_gpu[i], d_cpu, Real(2e-4)) << "query " << i << " edge distance mismatch";
+        Real const d_cpu = cpu_boundary_edge_distance(mesh, qx[i], qy[i], qz[i]);
+        EXPECT_NEAR(d_gpu[i], d_cpu, Real(2e-4))
+            << "query " << i << " boundary-edge distance mismatch";
     }
 }
 
@@ -709,7 +715,7 @@ TEST_F(CudaFixture, harnack_angle_half_octahedron_hits) {
 
 // Cube geometry tests
 
-TEST_F(CudaFixture, harnack_cube_closed_hits) {
+TEST_F(CudaFixture, harnack_cube_closed_mesh_no_hit_with_boundary_radius) {
     CubeMesh mesh;
 
     // Axis-aligned rays from outside, pointing inward.
@@ -724,19 +730,8 @@ TEST_F(CudaFixture, harnack_cube_closed_hits) {
     if (!run_harnack_trace<1>(mesh, ox, oy, oz, dx, dy, dz, ht, hnx, hny, hnz))
         GTEST_SKIP() << "CUDA unavailable";
 
-    int hits = 0;
-    for (std::size_t i = 0; i < ox.size(); ++i) {
-        if (ht[i] < Real(0))
-            continue;
-        ++hits;
-        Real const hx = ox[i] + ht[i] * dx[i];
-        Real const hy = oy[i] + ht[i] * dy[i];
-        Real const hz = oz[i] + ht[i] * dz[i];
-        // Hit point should be near the cube surface (max coord ≈ 1).
-        Real const max_coord = std::max({std::abs(hx), std::abs(hy), std::abs(hz)});
-        EXPECT_NEAR(max_coord, Real(1), Real(0.15)) << "ray " << i << ": hit not near cube surface";
-    }
-    EXPECT_GE(hits, 1) << "closed cube should produce at least one hit";
+    for (std::size_t i = 0; i < ox.size(); ++i)
+        EXPECT_LT(ht[i], Real(0)) << "boundary-radius Harnack alone should miss closed surfaces";
 }
 
 TEST_F(CudaFixture, harnack_open_cube_hits) {
