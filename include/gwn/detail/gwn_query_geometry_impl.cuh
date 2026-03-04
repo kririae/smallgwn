@@ -51,7 +51,7 @@ __host__ __device__ inline Real gwn_point_segment_distance_squared_impl(
     if (!(ab_dot_ab > Real(0)))
         return gwn_query_squared_norm(ap); // degenerate segment
     Real t = gwn_query_dot(ap, ab) / ab_dot_ab;
-    t = std::max(Real(0), std::min(Real(1), t));
+    t = std::clamp(t, Real(0), Real(1));
     return gwn_query_squared_norm(p - (a + t * ab));
 }
 

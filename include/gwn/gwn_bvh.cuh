@@ -168,8 +168,8 @@ struct gwn_bvh_topology_tree_accessor {
     using index_type = Index;
     static constexpr int k_width = Width;
 
-    cuda::std::span<gwn_bvh_topology_node_soa<Width, Index> const> nodes{}; ///< Internal nodes.
-    cuda::std::span<Index const> primitive_indices{}; ///< Sorted primitive index buffer.
+    cuda::std::span<gwn_bvh_topology_node_soa<Width, Index>> nodes{}; ///< Internal nodes.
+    cuda::std::span<Index> primitive_indices{}; ///< Sorted primitive index buffer.
     gwn_bvh_child_kind root_kind = gwn_bvh_child_kind::k_invalid; ///< Root child kind.
     Index root_index = 0; ///< Root node index (internal) or begin offset (leaf).
     Index root_count = 0; ///< Primitive count at the root when it is a leaf.
@@ -217,7 +217,7 @@ struct gwn_bvh_aabb_tree_accessor {
     using index_type = Index;
     static constexpr int k_width = Width;
 
-    cuda::std::span<gwn_bvh_aabb_node_soa<Width, Real> const> nodes{};
+    cuda::std::span<gwn_bvh_aabb_node_soa<Width, Real>> nodes{};
 
     /// \brief Return \c true when no AABB node data is held.
     [[nodiscard]] __host__ __device__ constexpr bool empty() const noexcept {
@@ -255,7 +255,7 @@ struct gwn_bvh_moment_tree_accessor {
     static constexpr int k_width = Width;
     static constexpr int k_order = Order;
 
-    cuda::std::span<gwn_bvh_taylor_node_soa<Width, Order, Real> const> nodes{};
+    cuda::std::span<gwn_bvh_taylor_node_soa<Width, Order, Real>> nodes{};
 
     /// \brief Return \c true when no Taylor data is held.
     [[nodiscard]] __host__ __device__ constexpr bool empty() const noexcept {

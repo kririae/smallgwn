@@ -48,23 +48,19 @@ gwn_status gwn_bvh_refit_moment_impl(
                 return gwn_status::ok();
 
             using node_type = gwn_bvh_taylor_node_soa<Width, Order, Real>;
-            cuda::std::span<node_type const> staging_nodes{};
+            cuda::std::span<node_type> staging_nodes{};
             GWN_RETURN_ON_ERROR(gwn_allocate_span(staging_nodes, topology.nodes.size(), stream));
             auto cleanup_staging_nodes =
                 gwn_make_scope_exit([&]() noexcept { gwn_free_span(staging_nodes, stream); });
-            auto const staging_nodes_mutable = cuda::std::span<node_type>(
-                const_cast<node_type *>(staging_nodes.data()), staging_nodes.size()
-            );
             GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemsetAsync(
-                staging_nodes_mutable.data(), 0, staging_nodes_mutable.size() * sizeof(node_type),
-                stream
+                staging_nodes.data(), 0, staging_nodes.size() * sizeof(node_type), stream
             )));
 
             using traits = gwn_moment_refit_traits<Order, Width, Real, Index>;
             typename traits::output_context const output_context{
-                staging_nodes_mutable, cuda::std::span<gwn_bvh_aabb_node_soa<Width, Real> const>(
-                                           aabb_tree.nodes.data(), aabb_tree.nodes.size()
-                                       )
+                staging_nodes, cuda::std::span<gwn_bvh_aabb_node_soa<Width, Real> const>(
+                                   aabb_tree.nodes.data(), aabb_tree.nodes.size()
+                               )
             };
             GWN_RETURN_ON_ERROR((gwn_run_refit_pass<traits, Width, Real, Index>(
                 geometry, topology, output_context, stream

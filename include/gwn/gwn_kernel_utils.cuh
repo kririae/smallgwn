@@ -79,9 +79,10 @@ gwn_status gwn_launch_linear_kernel(
         );
     }
 
-    int const block_count = static_cast<int>(gwn_block_count_1d<BlockSize>(element_count));
+    auto const grid_dim = gwn_grid_dim_1d<BlockSize>(element_count);
+    auto const block_dim = gwn_block_dim_1d<BlockSize>();
     gwn_linear_kernel<BlockSize, Functor>
-        <<<block_count, BlockSize, 0, stream>>>(element_count, functor);
+        <<<grid_dim, block_dim, 0, stream>>>(element_count, functor);
     return gwn_check_last_kernel();
 }
 

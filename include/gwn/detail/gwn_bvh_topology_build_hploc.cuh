@@ -624,11 +624,11 @@ gwn_status gwn_bvh_topology_build_binary_hploc(
             "H-PLOC kernel primitive count exceeds linear launch range."
         );
     }
-    int const block_count =
-        static_cast<int>(gwn_block_count_1d<k_hploc_block_size>(primitive_count));
+    auto const grid_dim = gwn_grid_dim_1d<k_hploc_block_size>(primitive_count);
+    auto const block_dim = gwn_block_dim_1d<k_hploc_block_size>();
     gwn_build_binary_hploc_kernel<
         k_hploc_block_size, k_gwn_hploc_search_radius, k_gwn_hploc_merging_threshold, Real,
-        MortonCode, NodeIndex><<<block_count, k_hploc_block_size, 0, stream>>>(
+        MortonCode, NodeIndex><<<grid_dim, block_dim, 0, stream>>>(
         primitive_count_node_index, full_nodes.data(), cluster_indices.data(),
         boundary_parent.data(), cluster_count.data(), sorted_morton_codes.data(),
         failure_flag.data()
