@@ -609,22 +609,14 @@ gwn_status gwn_upload_accessor(
         Index singular_edge_count = Index(0);
         GWN_RETURN_ON_ERROR(
             gwn_compute_triangle_boundary_edge_mask_device_impl<Index>(
-                staging.tri_i0, staging.tri_i1, staging.tri_i2,
-                cuda::std::span<std::uint8_t>(
-                    gwn_mutable_data(staging.tri_boundary_edge_mask),
-                    staging.tri_boundary_edge_mask.size()
-                ),
+                staging.tri_i0, staging.tri_i1, staging.tri_i2, staging.tri_boundary_edge_mask,
                 &singular_edge_count, stream
             )
         );
 
         GWN_RETURN_ON_ERROR((gwn_compute_vertex_normals_device_impl<Real, Index>(
             staging.vertex_x, staging.vertex_y, staging.vertex_z, staging.tri_i0, staging.tri_i1,
-            staging.tri_i2,
-            cuda::std::span<Real>(gwn_mutable_data(staging.vertex_nx), staging.vertex_nx.size()),
-            cuda::std::span<Real>(gwn_mutable_data(staging.vertex_ny), staging.vertex_ny.size()),
-            cuda::std::span<Real>(gwn_mutable_data(staging.vertex_nz), staging.vertex_nz.size()),
-            stream
+            staging.tri_i2, staging.vertex_nx, staging.vertex_ny, staging.vertex_nz, stream
         )));
 
         staging.singular_edge_count = singular_edge_count;
