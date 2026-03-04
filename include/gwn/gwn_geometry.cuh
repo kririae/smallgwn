@@ -25,7 +25,7 @@ template <gwn_real_type Real, gwn_index_type Index = std::uint32_t> struct gwn_g
     cuda::std::span<Index> tri_i1{};
     cuda::std::span<Index> tri_i2{};
     cuda::std::span<std::uint8_t const> tri_boundary_edge_mask{};
-    std::size_t singular_edge_count{0};
+    Index singular_edge_count{0};
 
     __host__ __device__ constexpr std::size_t vertex_count() const noexcept {
         return vertex_x.size();
@@ -59,6 +59,13 @@ template <gwn_real_type Real, gwn_index_type Index = std::uint32_t> struct gwn_g
 };
 
 template <gwn_real_type Real, gwn_index_type Index> class gwn_geometry_object;
+
+namespace detail {
+template <gwn_real_type Real, gwn_index_type Index>
+void gwn_release_accessor(
+    gwn_geometry_accessor<Real, Index> &accessor, cudaStream_t stream
+) noexcept;
+} // namespace detail
 
 template <gwn_index_type Index>
 gwn_status gwn_compute_triangle_boundary_edge_mask(
@@ -96,9 +103,13 @@ public:
 
     ~gwn_geometry_object() { clear(); }
 
-    void clear() noexcept;
+    void clear() noexcept { detail::gwn_release_accessor(accessor_, stream()); }
 
-    void clear(cudaStream_t clear_stream) noexcept;
+    void clear(cudaStream_t clear_stream) noexcept {
+        cudaStream_t const release_stream = stream();
+        detail::gwn_release_accessor(accessor_, release_stream);
+        set_stream(clear_stream);
+    }
 
     [[nodiscard]] accessor_type &accessor() noexcept { return accessor_; }
     [[nodiscard]] accessor_type const &accessor() const noexcept { return accessor_; }
