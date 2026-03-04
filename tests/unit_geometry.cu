@@ -21,6 +21,8 @@ using gwn::tests::CudaFixture;
 TEST(smallgwn_unit_geometry, default_accessor_is_empty_and_valid) {
     gwn::gwn_geometry_accessor<Real, Index> accessor{};
     EXPECT_TRUE(accessor.is_valid());
+    EXPECT_FALSE(accessor.has_singular_edges());
+    EXPECT_EQ(accessor.singular_edge_count, 0u);
     EXPECT_EQ(accessor.vertex_count(), 0u);
     EXPECT_EQ(accessor.triangle_count(), 0u);
     EXPECT_EQ(accessor.tri_boundary_edge_mask.size(), 0u);
@@ -168,6 +170,8 @@ TEST_F(CudaFixture, upload_valid_single_triangle) {
     EXPECT_EQ(geometry.vertex_count(), 3u);
     EXPECT_EQ(geometry.triangle_count(), 1u);
     EXPECT_TRUE(geometry.accessor().is_valid());
+    EXPECT_TRUE(geometry.accessor().has_singular_edges());
+    EXPECT_EQ(geometry.accessor().singular_edge_count, 3u);
 
     std::vector<std::uint8_t> host_mask(1, 0);
     gwn::gwn_status const copy_status = gwn::detail::gwn_copy_d2h<std::uint8_t>(
@@ -177,6 +181,52 @@ TEST_F(CudaFixture, upload_valid_single_triangle) {
     ASSERT_TRUE(copy_status.is_ok()) << gwn::tests::status_to_debug_string(copy_status);
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
     EXPECT_EQ(host_mask[0], std::uint8_t(0x7u));
+}
+
+TEST_F(CudaFixture, upload_closed_tetra_has_zero_singular_edges) {
+    std::array<Real, 4> const vx{Real(0), Real(1), Real(0), Real(0)};
+    std::array<Real, 4> const vy{Real(0), Real(0), Real(1), Real(0)};
+    std::array<Real, 4> const vz{Real(0), Real(0), Real(0), Real(1)};
+    std::array<Index, 4> const i0{0, 0, 0, 1};
+    std::array<Index, 4> const i1{2, 1, 3, 2};
+    std::array<Index, 4> const i2{1, 3, 2, 3};
+
+    gwn::gwn_geometry_object<Real, Index> geometry;
+    gwn::gwn_status const status = gwn::gwn_upload_geometry(
+        geometry, cuda::std::span<Real const>(vx.data(), vx.size()),
+        cuda::std::span<Real const>(vy.data(), vy.size()),
+        cuda::std::span<Real const>(vz.data(), vz.size()),
+        cuda::std::span<Index const>(i0.data(), i0.size()),
+        cuda::std::span<Index const>(i1.data(), i1.size()),
+        cuda::std::span<Index const>(i2.data(), i2.size())
+    );
+    SMALLGWN_SKIP_IF_STATUS_CUDA_UNAVAILABLE(status);
+    ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
+    EXPECT_FALSE(geometry.accessor().has_singular_edges());
+    EXPECT_EQ(geometry.accessor().singular_edge_count, 0u);
+}
+
+TEST_F(CudaFixture, upload_open_tetra_has_nonzero_singular_edges) {
+    std::array<Real, 4> const vx{Real(0), Real(1), Real(0), Real(0)};
+    std::array<Real, 4> const vy{Real(0), Real(0), Real(1), Real(0)};
+    std::array<Real, 4> const vz{Real(0), Real(0), Real(0), Real(1)};
+    std::array<Index, 3> const i0{0, 0, 0};
+    std::array<Index, 3> const i1{2, 1, 3};
+    std::array<Index, 3> const i2{1, 3, 2};
+
+    gwn::gwn_geometry_object<Real, Index> geometry;
+    gwn::gwn_status const status = gwn::gwn_upload_geometry(
+        geometry, cuda::std::span<Real const>(vx.data(), vx.size()),
+        cuda::std::span<Real const>(vy.data(), vy.size()),
+        cuda::std::span<Real const>(vz.data(), vz.size()),
+        cuda::std::span<Index const>(i0.data(), i0.size()),
+        cuda::std::span<Index const>(i1.data(), i1.size()),
+        cuda::std::span<Index const>(i2.data(), i2.size())
+    );
+    SMALLGWN_SKIP_IF_STATUS_CUDA_UNAVAILABLE(status);
+    ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
+    EXPECT_TRUE(geometry.accessor().has_singular_edges());
+    EXPECT_GT(geometry.accessor().singular_edge_count, 0u);
 }
 
 // Upload, error paths: SoA length mismatch.
