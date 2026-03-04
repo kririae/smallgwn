@@ -33,6 +33,17 @@ struct TetraMesh {
     std::array<Index, 4> i2{1, 3, 2, 3};
 };
 
+struct DoubleSidedSingleTriangleMesh {
+    std::array<Real, 3> vx{Real(0), Real(1), Real(0)};
+    std::array<Real, 3> vy{Real(0), Real(0), Real(1)};
+    std::array<Real, 3> vz{Real(0), Real(0), Real(0)};
+
+    // Two opposite-winding copies of the same triangle.
+    std::array<Index, 2> i0{0, 0};
+    std::array<Index, 2> i1{1, 2};
+    std::array<Index, 2> i2{2, 1};
+};
+
 template <int Order, class Mesh>
 bool build_scene(
     Mesh const &mesh, gwn::gwn_geometry_object<Real, Index> &geometry,
@@ -159,6 +170,7 @@ template <int Order> struct hybrid_single_api_functor {
     cuda::std::span<Real> out_nx{};
     cuda::std::span<Real> out_ny{};
     cuda::std::span<Real> out_nz{};
+    cuda::std::span<Real> out_winding{};
     cuda::std::span<Index> out_pi{};
     cuda::std::span<std::uint8_t> out_hit_kind{};
     cuda::std::span<int> out_iterations{};
@@ -173,6 +185,8 @@ template <int Order> struct hybrid_single_api_functor {
         out_nx[i] = hit.normal_x;
         out_ny[i] = hit.normal_y;
         out_nz[i] = hit.normal_z;
+        if (!out_winding.empty())
+            out_winding[i] = hit.winding;
         out_pi[i] = hit.primitive_id;
         out_hit_kind[i] = static_cast<std::uint8_t>(hit.hit_kind);
         out_iterations[i] = hit.iterations;
@@ -186,7 +200,7 @@ bool run_hybrid_single_api(
     std::vector<Real> const &dz, gwn::gwn_hybrid_trace_arguments<Real> const &args,
     std::vector<Real> &out_t, std::vector<Real> &out_nx, std::vector<Real> &out_ny,
     std::vector<Real> &out_nz, std::vector<Index> &out_pi, std::vector<std::uint8_t> &out_hit_kind,
-    std::vector<int> &out_iterations
+    std::vector<int> &out_iterations, std::vector<Real> *out_winding = nullptr
 ) {
     gwn::gwn_geometry_object<Real, Index> geometry;
     gwn::gwn_bvh4_topology_object<Real, Index> bvh;
@@ -198,6 +212,7 @@ bool run_hybrid_single_api(
     std::size_t const n = ox.size();
     gwn::gwn_device_array<Real> d_ox, d_oy, d_oz, d_dx, d_dy, d_dz;
     gwn::gwn_device_array<Real> d_t, d_nx, d_ny, d_nz;
+    gwn::gwn_device_array<Real> d_winding;
     gwn::gwn_device_array<Index> d_pi;
     gwn::gwn_device_array<std::uint8_t> d_hit_kind;
     gwn::gwn_device_array<int> d_iterations;
@@ -207,6 +222,8 @@ bool run_hybrid_single_api(
               d_t.resize(n).is_ok() && d_nx.resize(n).is_ok() && d_ny.resize(n).is_ok() &&
               d_nz.resize(n).is_ok() && d_pi.resize(n).is_ok() && d_hit_kind.resize(n).is_ok() &&
               d_iterations.resize(n).is_ok();
+    if (out_winding != nullptr)
+        ok = ok && d_winding.resize(n).is_ok();
     ok = ok && d_ox.copy_from_host(cuda::std::span<Real const>(ox.data(), n)).is_ok() &&
          d_oy.copy_from_host(cuda::std::span<Real const>(oy.data(), n)).is_ok() &&
          d_oz.copy_from_host(cuda::std::span<Real const>(oz.data(), n)).is_ok() &&
@@ -235,6 +252,7 @@ bool run_hybrid_single_api(
                d_nx.span(),
                d_ny.span(),
                d_nz.span(),
+               (out_winding != nullptr) ? d_winding.span() : cuda::std::span<Real>{},
                d_pi.span(),
                d_hit_kind.span(),
                d_iterations.span(),
@@ -264,6 +282,10 @@ bool run_hybrid_single_api(
          d_pi.copy_to_host(cuda::std::span<Index>(out_pi.data(), n)).is_ok() &&
          d_hit_kind.copy_to_host(cuda::std::span<std::uint8_t>(out_hit_kind.data(), n)).is_ok() &&
          d_iterations.copy_to_host(cuda::std::span<int>(out_iterations.data(), n)).is_ok();
+    if (out_winding != nullptr) {
+        out_winding->resize(n);
+        ok = ok && d_winding.copy_to_host(cuda::std::span<Real>(out_winding->data(), n)).is_ok();
+    }
     if (!ok) {
         ADD_FAILURE() << "device-to-host copy failed";
         return false;
@@ -571,4 +593,92 @@ TEST_F(CudaFixture, hybrid_barycentric_vertex_normal_policy_differs_from_geometr
     EXPECT_LT(
         dot, Real(0.98)
     ) << "barycentric vertex normal should differ on non-planar closed mesh";
+}
+
+TEST_F(CudaFixture, hybrid_triangle_branch_does_not_populate_winding) {
+    CubeMesh mesh;
+
+    std::vector<Real> ox{Real(0)};
+    std::vector<Real> oy{Real(0)};
+    std::vector<Real> oz{Real(5)};
+    std::vector<Real> dx{Real(0)};
+    std::vector<Real> dy{Real(0)};
+    std::vector<Real> dz{Real(-1)};
+
+    gwn::gwn_hybrid_trace_arguments<Real> args{};
+    gwn::gwn_init_hybrid_trace_arguments(args);
+    args.triangle_normal_policy = gwn::gwn_hybrid_triangle_normal_policy::k_geometric;
+
+    std::vector<Real> t, nx, ny, nz, winding;
+    std::vector<Index> pi;
+    std::vector<std::uint8_t> kind;
+    std::vector<int> iterations;
+    if (!run_hybrid_single_api<1>(
+            mesh, ox, oy, oz, dx, dy, dz, args, t, nx, ny, nz, pi, kind, iterations, &winding
+        )) {
+        GTEST_SKIP() << "CUDA unavailable";
+    }
+
+    ASSERT_EQ(t.size(), 1u);
+    ASSERT_EQ(kind.size(), 1u);
+    ASSERT_EQ(winding.size(), 1u);
+    EXPECT_EQ(kind[0], static_cast<std::uint8_t>(gwn::gwn_hybrid_hit_kind::k_triangle));
+    EXPECT_NEAR(winding[0], Real(0), Real(1e-8));
+}
+
+TEST_F(
+    CudaFixture,
+    hybrid_barycentric_policy_returns_zero_normal_when_vertex_normal_interpolation_is_degenerate
+) {
+    DoubleSidedSingleTriangleMesh mesh;
+
+    std::vector<Real> ox{Real(0.2)};
+    std::vector<Real> oy{Real(0.2)};
+    std::vector<Real> oz{Real(1)};
+    std::vector<Real> dx{Real(0)};
+    std::vector<Real> dy{Real(0)};
+    std::vector<Real> dz{Real(-1)};
+
+    gwn::gwn_hybrid_trace_arguments<Real> geometric_args{};
+    gwn::gwn_init_hybrid_trace_arguments(geometric_args);
+    geometric_args.triangle_normal_policy = gwn::gwn_hybrid_triangle_normal_policy::k_geometric;
+
+    gwn::gwn_hybrid_trace_arguments<Real> barycentric_args{};
+    gwn::gwn_init_hybrid_trace_arguments(barycentric_args);
+    barycentric_args.triangle_normal_policy =
+        gwn::gwn_hybrid_triangle_normal_policy::k_barycentric_vertex;
+
+    std::vector<Real> t_geo, nx_geo, ny_geo, nz_geo;
+    std::vector<Index> pi_geo;
+    std::vector<std::uint8_t> kind_geo;
+    std::vector<int> iter_geo;
+    if (!run_hybrid_single_api<1>(
+            mesh, ox, oy, oz, dx, dy, dz, geometric_args, t_geo, nx_geo, ny_geo, nz_geo, pi_geo,
+            kind_geo, iter_geo
+        )) {
+        GTEST_SKIP() << "CUDA unavailable";
+    }
+
+    std::vector<Real> t_bary, nx_bary, ny_bary, nz_bary;
+    std::vector<Index> pi_bary;
+    std::vector<std::uint8_t> kind_bary;
+    std::vector<int> iter_bary;
+    if (!run_hybrid_single_api<1>(
+            mesh, ox, oy, oz, dx, dy, dz, barycentric_args, t_bary, nx_bary, ny_bary, nz_bary,
+            pi_bary, kind_bary, iter_bary
+        )) {
+        GTEST_SKIP() << "CUDA unavailable";
+    }
+
+    ASSERT_EQ(t_geo.size(), 1u);
+    ASSERT_EQ(t_bary.size(), 1u);
+    EXPECT_EQ(kind_geo[0], static_cast<std::uint8_t>(gwn::gwn_hybrid_hit_kind::k_triangle));
+    EXPECT_EQ(kind_bary[0], static_cast<std::uint8_t>(gwn::gwn_hybrid_hit_kind::k_triangle));
+    EXPECT_GE(t_geo[0], Real(0));
+    EXPECT_GE(t_bary[0], Real(0));
+
+    Real const geo_norm = norm3(nx_geo[0], ny_geo[0], nz_geo[0]);
+    Real const bary_norm = norm3(nx_bary[0], ny_bary[0], nz_bary[0]);
+    EXPECT_NEAR(geo_norm, Real(1), Real(1e-4));
+    EXPECT_NEAR(bary_norm, Real(0), Real(1e-7));
 }

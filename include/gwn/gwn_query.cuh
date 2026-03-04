@@ -186,8 +186,10 @@ using gwn_ray_first_hit_result = detail::gwn_ray_first_hit_result<Real, Index>;
 /// \brief Compute the nearest ray-triangle hit for a single ray
 ///        (\c __device__ only).
 ///
-/// Returns hit distance \c t and primitive id. Misses return
-/// \c t = -1 and \c primitive_id = gwn_invalid_index<Index>().
+/// Returns hit distance \c t, primitive id, and Embree-style barycentrics
+/// \c u/\c v (weights of triangle vertices v1/v2). Misses return
+/// \c t = -1, \c primitive_id = gwn_invalid_index<Index>(), and
+/// \c u = \c v = 0.
 /// Ray direction vectors do not need to be normalized.
 template <
     int Width, gwn_real_type Real, gwn_index_type Index,
