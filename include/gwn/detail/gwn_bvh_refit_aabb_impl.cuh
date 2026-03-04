@@ -39,16 +39,12 @@ gwn_status gwn_bvh_refit_aabb_impl(
 
             std::size_t const node_count = topology.nodes.size();
             GWN_RETURN_ON_ERROR(gwn_allocate_span(staging_aabb.nodes, node_count, stream));
-            auto const staging_nodes = cuda::std::span<gwn_bvh_aabb_node_soa<Width, Real>>(
-                const_cast<gwn_bvh_aabb_node_soa<Width, Real> *>(staging_aabb.nodes.data()),
-                node_count
-            );
             GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemsetAsync(
-                staging_nodes.data(), 0, node_count * sizeof(staging_nodes[0]), stream
+                staging_aabb.nodes.data(), 0, node_count * sizeof(staging_aabb.nodes[0]), stream
             )));
 
             using traits = gwn_aabb_refit_traits<Width, Real, Index>;
-            typename traits::output_context const output_context{staging_nodes};
+            typename traits::output_context const output_context{staging_aabb.nodes};
             return gwn_run_refit_pass<traits, Width, Real, Index>(
                 geometry, topology, output_context, stream
             );

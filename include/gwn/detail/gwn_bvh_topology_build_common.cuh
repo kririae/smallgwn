@@ -103,14 +103,14 @@ template <gwn_real_type Real>
 }
 
 template <gwn_real_type Real>
-gwn_status gwn_reduce_minmax_cub(
+gwn_status gwn_reduce_minmax(
     cuda::std::span<Real const> const values, gwn_device_array<Real> &min_result,
     gwn_device_array<Real> &max_result, gwn_device_array<std::uint8_t> &temp_storage,
     Real &host_min, Real &host_max, cudaStream_t const stream
 ) noexcept {
     if (values.empty())
         return gwn_bvh_invalid_argument(
-            k_gwn_bvh_phase_topology_preprocess, "CUB reduction input span is empty."
+            k_gwn_bvh_phase_topology_preprocess, "Reduction input span is empty."
         );
     auto const item_count = static_cast<std::uint64_t>(values.size());
     std::size_t min_temp_bytes = 0;
@@ -151,18 +151,6 @@ gwn_status gwn_reduce_minmax_cub(
         cudaMemcpyAsync(&host_max, max_result.data(), sizeof(Real), cudaMemcpyDeviceToHost, stream)
     ));
     return gwn_status::ok();
-}
-
-template <gwn_real_type Real>
-gwn_status gwn_reduce_minmax_cub(
-    cuda::std::span<Real> const values, gwn_device_array<Real> &min_result,
-    gwn_device_array<Real> &max_result, gwn_device_array<std::uint8_t> &temp_storage,
-    Real &host_min, Real &host_max, cudaStream_t const stream
-) noexcept {
-    return gwn_reduce_minmax_cub(
-        cuda::std::span<Real const>(values.data(), values.size()), min_result, max_result,
-        temp_storage, host_min, host_max, stream
-    );
 }
 
 template <gwn_real_type Real, gwn_index_type Index, class MortonCode>
@@ -260,13 +248,13 @@ gwn_status gwn_compute_scene_aabb(
     gwn_device_array<std::uint8_t> reduce_temp{};
     GWN_RETURN_ON_ERROR(axis_min.resize(1, stream));
     GWN_RETURN_ON_ERROR(axis_max.resize(1, stream));
-    GWN_RETURN_ON_ERROR(gwn_reduce_minmax_cub(
+    GWN_RETURN_ON_ERROR(gwn_reduce_minmax<Real>(
         geometry.vertex_x, axis_min, axis_max, reduce_temp, result.min_x, result.max_x, stream
     ));
-    GWN_RETURN_ON_ERROR(gwn_reduce_minmax_cub(
+    GWN_RETURN_ON_ERROR(gwn_reduce_minmax<Real>(
         geometry.vertex_y, axis_min, axis_max, reduce_temp, result.min_y, result.max_y, stream
     ));
-    GWN_RETURN_ON_ERROR(gwn_reduce_minmax_cub(
+    GWN_RETURN_ON_ERROR(gwn_reduce_minmax<Real>(
         geometry.vertex_z, axis_min, axis_max, reduce_temp, result.min_z, result.max_z, stream
     ));
     GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaStreamSynchronize(stream)));

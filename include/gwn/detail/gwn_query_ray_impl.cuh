@@ -34,52 +34,48 @@ template <gwn_real_type Real, gwn_index_type Index> struct gwn_ray_best_hit {
 };
 
 template <gwn_real_type Real> struct gwn_ray_dir_precompute {
-    Real inv_x{Real(0)};
-    Real inv_y{Real(0)};
-    Real inv_z{Real(0)};
-    bool dir_x_is_zero{true};
-    bool dir_y_is_zero{true};
-    bool dir_z_is_zero{true};
-    bool dir_x_is_neg{false};
-    bool dir_y_is_neg{false};
-    bool dir_z_is_neg{false};
+    Real inv[3]{Real(0), Real(0), Real(0)};
+    std::int8_t sign[3]{0, 0, 0}; // -1: negative, 0: zero, +1: positive
 };
+
+template <gwn_real_type Real>
+[[nodiscard]] __device__ inline std::int8_t gwn_ray_direction_sign_impl(Real const dir) noexcept {
+    if (dir > Real(0))
+        return 1;
+    if (dir < Real(0))
+        return -1;
+    return 0;
+}
 
 template <gwn_real_type Real>
 [[nodiscard]] __device__ inline gwn_ray_dir_precompute<Real>
 gwn_ray_make_dir_precompute_impl(Real const dir_x, Real const dir_y, Real const dir_z) noexcept {
     gwn_ray_dir_precompute<Real> dir{};
 
-    dir.dir_x_is_zero = (dir_x == Real(0));
-    dir.dir_y_is_zero = (dir_y == Real(0));
-    dir.dir_z_is_zero = (dir_z == Real(0));
+    dir.sign[0] = gwn_ray_direction_sign_impl(dir_x);
+    dir.sign[1] = gwn_ray_direction_sign_impl(dir_y);
+    dir.sign[2] = gwn_ray_direction_sign_impl(dir_z);
 
-    if (!dir.dir_x_is_zero) {
-        dir.inv_x = Real(1) / dir_x;
-        dir.dir_x_is_neg = dir.inv_x < Real(0);
-    }
-    if (!dir.dir_y_is_zero) {
-        dir.inv_y = Real(1) / dir_y;
-        dir.dir_y_is_neg = dir.inv_y < Real(0);
-    }
-    if (!dir.dir_z_is_zero) {
-        dir.inv_z = Real(1) / dir_z;
-        dir.dir_z_is_neg = dir.inv_z < Real(0);
-    }
+    if (dir.sign[0] != 0)
+        dir.inv[0] = Real(1) / dir_x;
+    if (dir.sign[1] != 0)
+        dir.inv[1] = Real(1) / dir_y;
+    if (dir.sign[2] != 0)
+        dir.inv[2] = Real(1) / dir_z;
 
     return dir;
 }
 
 template <gwn_real_type Real>
 __device__ inline bool gwn_ray_aabb_update_axis_interval_impl(
-    Real const origin, Real const lo, Real const hi, Real const inv_dir, bool const dir_is_zero,
-    bool const dir_is_neg, Real &t_near, Real &t_far
+    Real const origin, Real const lo, Real const hi, Real const inv_dir, std::int8_t const dir_sign,
+    Real &t_near, Real &t_far
 ) noexcept {
-    if (dir_is_zero)
+    if (dir_sign == 0)
         return origin >= lo && origin <= hi;
 
-    Real const near_plane = dir_is_neg ? hi : lo;
-    Real const far_plane = dir_is_neg ? lo : hi;
+    Real const near_plane = (dir_sign < 0) ? hi : lo;
+    Real const far_plane = (dir_sign < 0) ? lo : hi;
     Real const t0 = (near_plane - origin) * inv_dir;
     Real const t1 = (far_plane - origin) * inv_dir;
 
@@ -103,20 +99,17 @@ __device__ inline gwn_ray_aabb_interval<Real> gwn_ray_aabb_intersect_interval_im
     Real t_far = t_max;
 
     if (!gwn_ray_aabb_update_axis_interval_impl(
-            ray_ox, min_x, max_x, ray_dir.inv_x, ray_dir.dir_x_is_zero, ray_dir.dir_x_is_neg,
-            t_near, t_far
+            ray_ox, min_x, max_x, ray_dir.inv[0], ray_dir.sign[0], t_near, t_far
         )) {
         return result;
     }
     if (!gwn_ray_aabb_update_axis_interval_impl(
-            ray_oy, min_y, max_y, ray_dir.inv_y, ray_dir.dir_y_is_zero, ray_dir.dir_y_is_neg,
-            t_near, t_far
+            ray_oy, min_y, max_y, ray_dir.inv[1], ray_dir.sign[1], t_near, t_far
         )) {
         return result;
     }
     if (!gwn_ray_aabb_update_axis_interval_impl(
-            ray_oz, min_z, max_z, ray_dir.inv_z, ray_dir.dir_z_is_zero, ray_dir.dir_z_is_neg,
-            t_near, t_far
+            ray_oz, min_z, max_z, ray_dir.inv[2], ray_dir.sign[2], t_near, t_far
         )) {
         return result;
     }

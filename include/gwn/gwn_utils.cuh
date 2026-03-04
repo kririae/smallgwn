@@ -539,17 +539,7 @@ private:
 namespace detail {
 
 template <class T>
-[[nodiscard]] constexpr T *gwn_mutable_data(cuda::std::span<T const> const span) noexcept {
-    return const_cast<T *>(span.data());
-}
-
-template <class T>
     requires(!std::is_const_v<T>)
-[[nodiscard]] constexpr T *gwn_mutable_data(cuda::std::span<T> const span) noexcept {
-    return span.data();
-}
-
-template <class T>
 gwn_status gwn_allocate_span(
     cuda::std::span<T> &dst, std::size_t const count, cudaStream_t const stream
 ) noexcept {
@@ -559,7 +549,7 @@ gwn_status gwn_allocate_span(
         dst = {};
         return gwn_status::ok();
     }
-    if (count > (std::numeric_limits<std::size_t>::max() / sizeof(std::remove_const_t<T>))) {
+    if (count > (std::numeric_limits<std::size_t>::max() / sizeof(T))) {
         return gwn_status::invalid_argument(
             "gwn_allocate_span element count exceeds addressable byte range."
         );
@@ -576,11 +566,12 @@ gwn_status gwn_allocate_span(
 }
 
 template <class T>
+    requires(!std::is_const_v<T>)
 void gwn_free_span(cuda::std::span<T> &span_view, cudaStream_t const stream) noexcept {
     GWN_ASSERT(gwn_span_has_storage(span_view), "gwn_free_span requires valid span storage.");
 
     if (span_view.data() != nullptr) {
-        gwn_status const status = gwn_cuda_free(gwn_mutable_data(span_view), stream);
+        gwn_status const status = gwn_cuda_free(span_view.data(), stream);
         if (!status.is_ok())
             GWN_HANDLE_STATUS_FAIL(status);
         span_view = {};
@@ -604,8 +595,7 @@ gwn_status gwn_copy_h2d(
         return gwn_status::ok();
 
     return gwn_cuda_to_status(cudaMemcpyAsync(
-        gwn_mutable_data(dst_device), src_host.data(), src_host.size_bytes(),
-        cudaMemcpyHostToDevice, stream
+        dst_device.data(), src_host.data(), src_host.size_bytes(), cudaMemcpyHostToDevice, stream
     ));
 }
 
@@ -646,8 +636,8 @@ gwn_status gwn_copy_d2d(
         return gwn_status::ok();
 
     return gwn_cuda_to_status(cudaMemcpyAsync(
-        gwn_mutable_data(dst_device), src_device.data(), src_device.size_bytes(),
-        cudaMemcpyDeviceToDevice, stream
+        dst_device.data(), src_device.data(), src_device.size_bytes(), cudaMemcpyDeviceToDevice,
+        stream
     ));
 }
 
