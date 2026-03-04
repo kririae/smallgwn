@@ -1,7 +1,7 @@
 #pragma once
 
 /// \file gwn_query.cuh
-/// \brief Public query APIs for winding, gradients, ray hits, and Harnack tracing.
+/// \brief Public query APIs for winding, gradients, distances, ray hits, and Harnack tracing.
 ///
 /// This header exposes device point queries plus host batch-query launchers
 /// over uploaded geometry and BVH data.
@@ -14,6 +14,7 @@
 #include <limits>
 
 #include "detail/gwn_harnack_trace_impl.cuh"
+#include "detail/gwn_query_distance_impl.cuh"
 #include "detail/gwn_query_geometry_impl.cuh"
 #include "detail/gwn_query_gradient_impl.cuh"
 #include "detail/gwn_query_hybrid_impl.cuh"
@@ -59,38 +60,124 @@ inline gwn_status gwn_validate_ray_first_hit_batch_spans(
     return gwn_status::ok();
 }
 
-template <gwn_real_type Real, gwn_index_type Index>
-inline gwn_status gwn_validate_hybrid_trace_batch_spans(
-    cuda::std::span<Real const> const ray_origin_x, cuda::std::span<Real const> const ray_origin_y,
-    cuda::std::span<Real const> const ray_origin_z, cuda::std::span<Real const> const ray_dir_x,
-    cuda::std::span<Real const> const ray_dir_y, cuda::std::span<Real const> const ray_dir_z,
-    cuda::std::span<Real> const output_t, cuda::std::span<Real> const output_normal_x,
-    cuda::std::span<Real> const output_normal_y, cuda::std::span<Real> const output_normal_z,
-    cuda::std::span<Index> const output_primitive_id
+} // namespace detail
+
+/// \brief Compute unsigned point-to-triangle distance (\c __device__ only).
+template <
+    int Width, gwn_real_type Real, gwn_index_type Index,
+    int StackCapacity = k_gwn_default_traversal_stack_capacity>
+__device__ inline Real gwn_unsigned_distance_point_bvh(
+    gwn_geometry_accessor<Real, Index> const &geometry,
+    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
+    gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree, Real const qx, Real const qy,
+    Real const qz, Real const culling_band = std::numeric_limits<Real>::infinity()
 ) noexcept {
-    std::size_t const n = ray_origin_x.size();
-    if (ray_origin_y.size() != n || ray_origin_z.size() != n || ray_dir_x.size() != n ||
-        ray_dir_y.size() != n || ray_dir_z.size() != n || output_t.size() != n ||
-        output_normal_x.size() != n || output_normal_y.size() != n || output_normal_z.size() != n ||
-        output_primitive_id.size() != n) {
-        return gwn_status::invalid_argument("hybrid trace: mismatched span sizes");
-    }
-
-    if (!gwn_span_has_storage(ray_origin_x) || !gwn_span_has_storage(ray_origin_y) ||
-        !gwn_span_has_storage(ray_origin_z) || !gwn_span_has_storage(ray_dir_x) ||
-        !gwn_span_has_storage(ray_dir_y) || !gwn_span_has_storage(ray_dir_z) ||
-        !gwn_span_has_storage(output_t) || !gwn_span_has_storage(output_normal_x) ||
-        !gwn_span_has_storage(output_normal_y) || !gwn_span_has_storage(output_normal_z) ||
-        !gwn_span_has_storage(output_primitive_id)) {
-        return gwn_status::invalid_argument(
-            "hybrid trace: ray/output spans must use non-null storage when non-empty."
-        );
-    }
-
-    return gwn_status::ok();
+    return detail::gwn_unsigned_distance_point_bvh_impl<Width, Real, Index, StackCapacity>(
+        geometry, bvh, aabb_tree, qx, qy, qz, culling_band
+    );
 }
 
-} // namespace detail
+/// \brief Compute signed point-to-mesh distance using winding-number sign
+///        (\c __device__ only).
+template <
+    int Order, int Width, gwn_real_type Real, gwn_index_type Index,
+    int StackCapacity = k_gwn_default_traversal_stack_capacity>
+__device__ inline Real gwn_signed_distance_point_bvh(
+    gwn_geometry_accessor<Real, Index> const &geometry,
+    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
+    gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree,
+    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &data_tree, Real const qx,
+    Real const qy, Real const qz, Real const winding_number_threshold = Real(0.5),
+    Real const culling_band = std::numeric_limits<Real>::infinity(),
+    Real const accuracy_scale = Real(2)
+) noexcept {
+    static_assert(
+        Order == 0 || Order == 1 || Order == 2,
+        "gwn_signed_distance_point_bvh currently supports Order 0, 1, and 2."
+    );
+
+    return detail::gwn_signed_distance_point_bvh_impl<Order, Width, Real, Index, StackCapacity>(
+        geometry, bvh, aabb_tree, data_tree, qx, qy, qz, winding_number_threshold, culling_band,
+        accuracy_scale
+    );
+}
+
+/// \brief Compute unsigned point-to-boundary-edge distance (\c __device__ only).
+template <
+    int Width, gwn_real_type Real, gwn_index_type Index,
+    int StackCapacity = k_gwn_default_traversal_stack_capacity>
+__device__ inline Real gwn_unsigned_boundary_edge_distance_point_bvh(
+    gwn_geometry_accessor<Real, Index> const &geometry,
+    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
+    gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree, Real const qx, Real const qy,
+    Real const qz, Real const culling_band = std::numeric_limits<Real>::infinity()
+) noexcept {
+    return detail::gwn_unsigned_boundary_edge_distance_point_bvh_impl<
+        Width, Real, Index, StackCapacity>(geometry, bvh, aabb_tree, qx, qy, qz, culling_band);
+}
+
+/// \brief Compute point-to-boundary-edge distances for a batch.
+template <
+    int Width, gwn_real_type Real, gwn_index_type Index = std::uint32_t,
+    int StackCapacity = k_gwn_default_traversal_stack_capacity>
+gwn_status gwn_compute_unsigned_boundary_edge_distance_batch_bvh(
+    gwn_geometry_accessor<Real, Index> const &geometry,
+    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
+    gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree,
+    cuda::std::span<Real const> const query_x, cuda::std::span<Real const> const query_y,
+    cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output,
+    Real const culling_band = std::numeric_limits<Real>::infinity(),
+    cudaStream_t const stream = gwn_default_stream()
+) noexcept {
+    static_assert(StackCapacity > 0, "Traversal stack capacity must be positive.");
+
+    if (!geometry.is_valid())
+        return gwn_status::invalid_argument("Geometry accessor contains mismatched span lengths.");
+    if (!bvh.is_valid())
+        return gwn_status::invalid_argument("BVH accessor is invalid.");
+    if (!aabb_tree.is_valid_for(bvh))
+        return gwn_status::invalid_argument("BVH AABB tree is invalid for the given topology.");
+    if (query_x.size() != query_y.size() || query_x.size() != query_z.size())
+        return gwn_status::invalid_argument("Query SoA spans must have identical lengths.");
+    if (query_x.size() != output.size())
+        return gwn_status::invalid_argument("Output span size must match query count.");
+    if (!gwn_span_has_storage(query_x) || !gwn_span_has_storage(query_y) ||
+        !gwn_span_has_storage(query_z) || !gwn_span_has_storage(output)) {
+        return gwn_status::invalid_argument(
+            "Query/output spans must use non-null storage when non-empty."
+        );
+    }
+    if (output.empty())
+        return gwn_status::ok();
+
+    constexpr int k_block_size = detail::k_gwn_default_block_size;
+    return detail::gwn_launch_linear_kernel<k_block_size>(
+        output.size(),
+        detail::gwn_unsigned_boundary_edge_distance_batch_bvh_functor<
+            Width, Real, Index, StackCapacity>{
+            geometry, bvh, aabb_tree, query_x, query_y, query_z, output, culling_band
+        },
+        stream
+    );
+}
+
+/// \brief Width-4 convenience wrapper for batch boundary-edge distance queries.
+template <
+    gwn_real_type Real, gwn_index_type Index = std::uint32_t,
+    int StackCapacity = k_gwn_default_traversal_stack_capacity>
+gwn_status gwn_compute_unsigned_boundary_edge_distance_batch_bvh(
+    gwn_geometry_accessor<Real, Index> const &geometry,
+    gwn_bvh4_topology_accessor<Real, Index> const &bvh,
+    gwn_bvh4_aabb_accessor<Real, Index> const &aabb_tree, cuda::std::span<Real const> const query_x,
+    cuda::std::span<Real const> const query_y, cuda::std::span<Real const> const query_z,
+    cuda::std::span<Real> const output,
+    Real const culling_band = std::numeric_limits<Real>::infinity(),
+    cudaStream_t const stream = gwn_default_stream()
+) noexcept {
+    return gwn_compute_unsigned_boundary_edge_distance_batch_bvh<4, Real, Index, StackCapacity>(
+        geometry, bvh, aabb_tree, query_x, query_y, query_z, output, culling_band, stream
+    );
+}
 
 /// \brief First-hit result of a ray query against mesh triangles.
 template <gwn_real_type Real, gwn_index_type Index = std::uint32_t>
@@ -359,7 +446,7 @@ using gwn_hybrid_trace_arguments = detail::gwn_hybrid_trace_arguments<Real>;
 /// \brief Initialize \ref gwn_hybrid_trace_arguments with default values.
 template <gwn_real_type Real>
 inline void gwn_init_hybrid_trace_arguments(gwn_hybrid_trace_arguments<Real> &arguments) noexcept {
-    detail::gwn_init_hybrid_trace_arguments_impl(arguments);
+    arguments = gwn_hybrid_trace_arguments<Real>{};
 }
 
 /// \brief Trace a single ray through the winding-number level set using the
@@ -556,14 +643,25 @@ gwn_status gwn_compute_hybrid_trace_batch_bvh_taylor(
     if (!(arguments.t_max >= arguments.t_min))
         return gwn_status::invalid_argument("hybrid trace: requires arguments.t_max >= t_min.");
 
-    gwn_status const span_status = detail::gwn_validate_hybrid_trace_batch_spans<Real, Index>(
-        ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x, ray_dir_y, ray_dir_z, output_t,
-        output_normal_x, output_normal_y, output_normal_z, output_primitive_id
-    );
-    if (!span_status.is_ok())
-        return span_status;
-
     std::size_t const n = ray_origin_x.size();
+    if (ray_origin_y.size() != n || ray_origin_z.size() != n || ray_dir_x.size() != n ||
+        ray_dir_y.size() != n || ray_dir_z.size() != n || output_t.size() != n ||
+        output_normal_x.size() != n || output_normal_y.size() != n || output_normal_z.size() != n ||
+        output_primitive_id.size() != n) {
+        return gwn_status::invalid_argument("hybrid trace: mismatched span sizes");
+    }
+
+    if (!gwn_span_has_storage(ray_origin_x) || !gwn_span_has_storage(ray_origin_y) ||
+        !gwn_span_has_storage(ray_origin_z) || !gwn_span_has_storage(ray_dir_x) ||
+        !gwn_span_has_storage(ray_dir_y) || !gwn_span_has_storage(ray_dir_z) ||
+        !gwn_span_has_storage(output_t) || !gwn_span_has_storage(output_normal_x) ||
+        !gwn_span_has_storage(output_normal_y) || !gwn_span_has_storage(output_normal_z) ||
+        !gwn_span_has_storage(output_primitive_id)) {
+        return gwn_status::invalid_argument(
+            "hybrid trace: ray/output spans must use non-null storage when non-empty."
+        );
+    }
+
     if (n == 0)
         return gwn_status::ok();
 

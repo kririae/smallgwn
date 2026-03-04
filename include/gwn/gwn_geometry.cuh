@@ -68,12 +68,30 @@ void gwn_release_accessor(
 } // namespace detail
 
 template <gwn_index_type Index>
+/// \brief Compute per-triangle boundary-edge masks from triangle index SoA.
+///
+/// Each output mask uses 3 low bits:
+/// - bit 0: edge (i0, i1)
+/// - bit 1: edge (i1, i2)
+/// - bit 2: edge (i2, i0)
+///
+/// A bit is set when the corresponding edge is singular/boundary under the
+/// manifold-orientation test used by robust tracing.
 gwn_status gwn_compute_triangle_boundary_edge_mask(
     cuda::std::span<Index const> i0, cuda::std::span<Index const> i1,
     cuda::std::span<Index const> i2, cuda::std::span<std::uint8_t> out_mask
 ) noexcept;
 
 template <gwn_real_type Real, gwn_index_type Index>
+/// \brief Upload host geometry to device buffers and precompute geometry caches.
+///
+/// Upload performs:
+/// - triangle-index validation,
+/// - boundary-edge mask + singular-edge count preprocessing,
+/// - vertex-normal accumulation/normalization.
+///
+/// On success, \p object is atomically replaced with a fully initialized
+/// geometry accessor bound to \p stream.
 gwn_status gwn_upload_geometry(
     gwn_geometry_object<Real, Index> &object, cuda::std::span<Real const> x,
     cuda::std::span<Real const> y, cuda::std::span<Real const> z, cuda::std::span<Index const> i0,

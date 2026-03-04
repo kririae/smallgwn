@@ -287,6 +287,7 @@ gwn_status gwn_compute_triangle_boundary_edge_mask_device_impl(
             "Boundary-edge preprocessing supports at most INT_MAX generated edges."
         );
     }
+    int const edge_count_i32 = static_cast<int>(edge_count);
 
     gwn_device_array<Index> key_hi_in(stream);
     gwn_device_array<Index> key_hi_out(stream);
@@ -383,11 +384,10 @@ gwn_status gwn_compute_triangle_boundary_edge_mask_device_impl(
 
     if (out_singular_edge_count != nullptr) {
         std::size_t reduction_temp_bytes = 0;
-        int const item_count = static_cast<int>(edge_count);
         GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
             cub::DeviceReduce::Sum(
                 nullptr, reduction_temp_bytes, boundary_head_flags.data(),
-                singular_edge_count.data(), item_count, stream
+                singular_edge_count.data(), edge_count_i32, stream
             )
         ));
 
@@ -396,7 +396,7 @@ gwn_status gwn_compute_triangle_boundary_edge_mask_device_impl(
         GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
             cub::DeviceReduce::Sum(
                 reduction_temp_storage.data(), reduction_temp_bytes, boundary_head_flags.data(),
-                singular_edge_count.data(), item_count, stream
+                singular_edge_count.data(), edge_count_i32, stream
             )
         ));
 
@@ -469,7 +469,7 @@ template <gwn_real_type Real> struct gwn_normalize_vertex_normals_functor {
     cuda::std::span<Real> vertex_nz{};
 
     __device__ void operator()(std::size_t const vertex_id) const {
-        using std::sqrt;
+        using std::isfinite;
 
         Real const nx = vertex_nx[vertex_id];
         Real const ny = vertex_ny[vertex_id];
@@ -477,8 +477,12 @@ template <gwn_real_type Real> struct gwn_normalize_vertex_normals_functor {
         Real const norm2 = nx * nx + ny * ny + nz * nz;
         if (!(norm2 > Real(0)))
             return;
+        if (!isfinite(norm2))
+            return;
 
-        Real const inv_norm = Real(1) / sqrt(norm2);
+        Real const inv_norm = rsqrt(norm2);
+        if (!isfinite(inv_norm))
+            return;
         vertex_nx[vertex_id] *= inv_norm;
         vertex_ny[vertex_id] *= inv_norm;
         vertex_nz[vertex_id] *= inv_norm;
@@ -574,6 +578,10 @@ gwn_status gwn_upload_accessor(
             return gwn_status::invalid_argument("Vertex SoA spans must have identical lengths.");
         if (i0.size() != i1.size() || i0.size() != i2.size())
             return gwn_status::invalid_argument("Triangle SoA spans must have identical lengths.");
+        if (x.size() > static_cast<std::size_t>(std::numeric_limits<Index>::max()))
+            return gwn_status::invalid_argument("Vertex count exceeds index type capacity.");
+        if (i0.size() > static_cast<std::size_t>(std::numeric_limits<Index>::max()))
+            return gwn_status::invalid_argument("Triangle count exceeds index type capacity.");
 
         if (!gwn_span_has_storage(x) || !gwn_span_has_storage(y) || !gwn_span_has_storage(z) ||
             !gwn_span_has_storage(i0) || !gwn_span_has_storage(i1) || !gwn_span_has_storage(i2)) {
@@ -680,13 +688,10 @@ gwn_status gwn_upload_geometry(
     cuda::std::span<Index const> i1, cuda::std::span<Index const> i2, cudaStream_t const stream
 ) noexcept {
     return detail::gwn_try_translate_status("gwn_upload_geometry", [&]() -> gwn_status {
-        gwn_geometry_object<Real, Index> staging;
-        staging.set_stream(stream);
         GWN_RETURN_ON_ERROR(
-            detail::gwn_upload_accessor(staging.accessor_, x, y, z, i0, i1, i2, stream)
+            detail::gwn_upload_accessor(object.accessor_, x, y, z, i0, i1, i2, stream)
         );
-
-        swap(object, staging);
+        object.set_stream(stream);
         return gwn_status::ok();
     });
 }
