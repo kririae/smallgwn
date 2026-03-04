@@ -9,6 +9,7 @@
 
 #include <cuda_runtime.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 
@@ -29,6 +30,36 @@ template <gwn_real_type Real> using gwn_vec3 = detail::gwn_query_vec3<Real>;
 
 /// \brief Default capacity of the per-thread BVH traversal stack.
 inline constexpr int k_gwn_default_traversal_stack_capacity = 64;
+
+namespace detail {
+
+template <gwn_real_type Real, gwn_index_type Index>
+inline gwn_status gwn_validate_ray_first_hit_batch_spans(
+    cuda::std::span<Real const> const ray_origin_x, cuda::std::span<Real const> const ray_origin_y,
+    cuda::std::span<Real const> const ray_origin_z, cuda::std::span<Real const> const ray_dir_x,
+    cuda::std::span<Real const> const ray_dir_y, cuda::std::span<Real const> const ray_dir_z,
+    cuda::std::span<Real> const output_t, cuda::std::span<Index> const output_primitive_id
+) noexcept {
+    std::size_t const n = ray_origin_x.size();
+    if (ray_origin_y.size() != n || ray_origin_z.size() != n || ray_dir_x.size() != n ||
+        ray_dir_y.size() != n || ray_dir_z.size() != n || output_t.size() != n ||
+        output_primitive_id.size() != n) {
+        return gwn_status::invalid_argument("ray first-hit: mismatched span sizes");
+    }
+
+    if (!gwn_span_has_storage(ray_origin_x) || !gwn_span_has_storage(ray_origin_y) ||
+        !gwn_span_has_storage(ray_origin_z) || !gwn_span_has_storage(ray_dir_x) ||
+        !gwn_span_has_storage(ray_dir_y) || !gwn_span_has_storage(ray_dir_z) ||
+        !gwn_span_has_storage(output_t) || !gwn_span_has_storage(output_primitive_id)) {
+        return gwn_status::invalid_argument(
+            "ray first-hit: ray/output spans must use non-null storage when non-empty."
+        );
+    }
+
+    return gwn_status::ok();
+}
+
+} // namespace detail
 
 /// \brief Compute the unsigned distance from a query point to the closest
 ///        triangle using BVH + AABB-accelerated traversal.
@@ -122,10 +153,9 @@ gwn_status gwn_compute_unsigned_edge_distance_batch_bvh(
     constexpr int k_block_size = detail::k_gwn_default_block_size;
     return detail::gwn_launch_linear_kernel<k_block_size>(
         output.size(),
-        detail::gwn_make_unsigned_edge_distance_batch_bvh_functor<
-            Width, Real, Index, StackCapacity>(
+        detail::gwn_unsigned_edge_distance_batch_bvh_functor<Width, Real, Index, StackCapacity>{
             geometry, bvh, aabb_tree, query_x, query_y, query_z, output, culling_band
-        ),
+        },
         stream
     );
 }
@@ -157,6 +187,7 @@ using gwn_ray_first_hit_result = detail::gwn_ray_first_hit_result<Real, Index>;
 ///
 /// Returns hit distance \c t and primitive id. Misses return
 /// \c t = -1 and \c primitive_id = gwn_invalid_index<Index>().
+/// Ray direction vectors do not need to be normalized.
 template <
     int Width, gwn_real_type Real, gwn_index_type Index,
     int StackCapacity = k_gwn_default_traversal_stack_capacity>
@@ -201,32 +232,26 @@ gwn_status gwn_compute_ray_first_hit_batch_bvh(
     if (!aabb_tree.is_valid_for(bvh))
         return gwn_status::invalid_argument("BVH AABB tree is invalid for the given topology.");
 
-    std::size_t const n = ray_origin_x.size();
-    if (ray_origin_y.size() != n || ray_origin_z.size() != n || ray_dir_x.size() != n ||
-        ray_dir_y.size() != n || ray_dir_z.size() != n || output_t.size() != n ||
-        output_primitive_id.size() != n) {
-        return gwn_status::invalid_argument("ray first-hit: mismatched span sizes");
-    }
-    if (!gwn_span_has_storage(ray_origin_x) || !gwn_span_has_storage(ray_origin_y) ||
-        !gwn_span_has_storage(ray_origin_z) || !gwn_span_has_storage(ray_dir_x) ||
-        !gwn_span_has_storage(ray_dir_y) || !gwn_span_has_storage(ray_dir_z) ||
-        !gwn_span_has_storage(output_t) || !gwn_span_has_storage(output_primitive_id)) {
-        return gwn_status::invalid_argument(
-            "Ray/output spans must use non-null storage when non-empty."
-        );
-    }
+    gwn_status const span_status = detail::gwn_validate_ray_first_hit_batch_spans<Real, Index>(
+        ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x, ray_dir_y, ray_dir_z, output_t,
+        output_primitive_id
+    );
+    if (!span_status.is_ok())
+        return span_status;
+
     if (!(t_max >= t_min))
         return gwn_status::invalid_argument("ray first-hit: requires t_max >= t_min.");
+    std::size_t const n = ray_origin_x.size();
     if (n == 0)
         return gwn_status::ok();
 
     constexpr int k_block_size = detail::k_gwn_default_block_size;
     return detail::gwn_launch_linear_kernel<k_block_size>(
         n,
-        detail::gwn_make_ray_first_hit_batch_bvh_functor<Width, Real, Index, StackCapacity>(
+        detail::gwn_ray_first_hit_batch_bvh_functor<Width, Real, Index, StackCapacity>{
             geometry, bvh, aabb_tree, ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x,
             ray_dir_y, ray_dir_z, output_t, output_primitive_id, t_min, t_max
-        ),
+        },
         stream
     );
 }
@@ -293,10 +318,10 @@ gwn_status gwn_compute_winding_number_batch_bvh_taylor(
     constexpr int k_block_size = detail::k_gwn_default_block_size;
     return detail::gwn_launch_linear_kernel<k_block_size>(
         output.size(),
-        detail::gwn_make_winding_number_batch_bvh_taylor_functor<
-            Order, Width, Real, Index, StackCapacity>(
+        detail::gwn_winding_number_batch_bvh_taylor_functor<
+            Order, Width, Real, Index, StackCapacity>{
             geometry, bvh, data_tree, query_x, query_y, query_z, output, accuracy_scale
-        ),
+        },
         stream
     );
 }
@@ -370,11 +395,11 @@ gwn_status gwn_compute_winding_gradient_batch_bvh_taylor(
     constexpr int k_block_size = detail::k_gwn_default_block_size;
     return detail::gwn_launch_linear_kernel<k_block_size>(
         output_x.size(),
-        detail::gwn_make_winding_gradient_batch_bvh_taylor_functor<
-            Order, Width, Real, Index, StackCapacity>(
+        detail::gwn_winding_gradient_batch_bvh_taylor_functor<
+            Order, Width, Real, Index, StackCapacity>{
             geometry, bvh, data_tree, query_x, query_y, query_z, output_x, output_y, output_z,
             accuracy_scale
-        ),
+        },
         stream
     );
 }

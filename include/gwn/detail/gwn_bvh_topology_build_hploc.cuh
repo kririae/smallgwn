@@ -540,6 +540,14 @@ gwn_status gwn_bvh_topology_build_binary_hploc(
         GWN_RETURN_ON_ERROR(binary_internal_bounds.clear(stream));
         return gwn_status::ok();
     }
+    if constexpr (std::is_same_v<MortonCode, std::uint32_t>) {
+        if (primitive_count > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
+            return gwn_bvh_invalid_argument(
+                k_gwn_bvh_phase_topology_binary_hploc,
+                "H-PLOC with 32-bit Morton codes supports at most UINT32_MAX primitives."
+            );
+        }
+    }
     if (sorted_morton_codes.size() != primitive_count ||
         sorted_primitive_aabbs.size() != primitive_count)
         return gwn_bvh_internal_error(
@@ -610,7 +618,14 @@ gwn_status gwn_bvh_topology_build_binary_hploc(
         gwn_cuda_to_status(cudaMemsetAsync(failure_flag.data(), 0, sizeof(unsigned int), stream))
     );
 
-    int const block_count = gwn_block_count_1d<k_hploc_block_size>(primitive_count);
+    if (primitive_count > gwn_max_linear_kernel_elements_1d<k_hploc_block_size>()) {
+        return gwn_bvh_invalid_argument(
+            k_gwn_bvh_phase_topology_binary_hploc,
+            "H-PLOC kernel primitive count exceeds linear launch range."
+        );
+    }
+    int const block_count =
+        static_cast<int>(gwn_block_count_1d<k_hploc_block_size>(primitive_count));
     gwn_build_binary_hploc_kernel<
         k_hploc_block_size, k_gwn_hploc_search_radius, k_gwn_hploc_merging_threshold, Real,
         MortonCode, NodeIndex><<<block_count, k_hploc_block_size, 0, stream>>>(

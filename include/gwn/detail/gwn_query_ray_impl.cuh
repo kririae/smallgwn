@@ -27,11 +27,73 @@ template <gwn_real_type Real> struct gwn_ray_aabb_interval {
     Real t_far{Real(0)};
 };
 
+template <gwn_real_type Real, gwn_index_type Index> struct gwn_ray_best_hit {
+    Real t{Real(-1)};
+    Index primitive_id{gwn_invalid_index<Index>()};
+    bool found{false};
+};
+
+template <gwn_real_type Real> struct gwn_ray_dir_precompute {
+    Real inv_x{Real(0)};
+    Real inv_y{Real(0)};
+    Real inv_z{Real(0)};
+    bool dir_x_is_zero{true};
+    bool dir_y_is_zero{true};
+    bool dir_z_is_zero{true};
+    bool dir_x_is_neg{false};
+    bool dir_y_is_neg{false};
+    bool dir_z_is_neg{false};
+};
+
+template <gwn_real_type Real>
+[[nodiscard]] __device__ inline gwn_ray_dir_precompute<Real>
+gwn_ray_make_dir_precompute_impl(Real const dir_x, Real const dir_y, Real const dir_z) noexcept {
+    gwn_ray_dir_precompute<Real> dir{};
+
+    dir.dir_x_is_zero = (dir_x == Real(0));
+    dir.dir_y_is_zero = (dir_y == Real(0));
+    dir.dir_z_is_zero = (dir_z == Real(0));
+
+    if (!dir.dir_x_is_zero) {
+        dir.inv_x = Real(1) / dir_x;
+        dir.dir_x_is_neg = dir.inv_x < Real(0);
+    }
+    if (!dir.dir_y_is_zero) {
+        dir.inv_y = Real(1) / dir_y;
+        dir.dir_y_is_neg = dir.inv_y < Real(0);
+    }
+    if (!dir.dir_z_is_zero) {
+        dir.inv_z = Real(1) / dir_z;
+        dir.dir_z_is_neg = dir.inv_z < Real(0);
+    }
+
+    return dir;
+}
+
+template <gwn_real_type Real>
+__device__ inline bool gwn_ray_aabb_update_axis_interval_impl(
+    Real const origin, Real const lo, Real const hi, Real const inv_dir, bool const dir_is_zero,
+    bool const dir_is_neg, Real &t_near, Real &t_far
+) noexcept {
+    if (dir_is_zero)
+        return origin >= lo && origin <= hi;
+
+    Real const near_plane = dir_is_neg ? hi : lo;
+    Real const far_plane = dir_is_neg ? lo : hi;
+    Real const t0 = (near_plane - origin) * inv_dir;
+    Real const t1 = (far_plane - origin) * inv_dir;
+
+    t_near = std::max(t_near, t0);
+    t_far = std::min(t_far, t1);
+    return t_near <= t_far;
+}
+
 template <gwn_real_type Real>
 __device__ inline gwn_ray_aabb_interval<Real> gwn_ray_aabb_intersect_interval_impl(
-    Real const ray_ox, Real const ray_oy, Real const ray_oz, Real const ray_dx, Real const ray_dy,
-    Real const ray_dz, Real const min_x, Real const min_y, Real const min_z, Real const max_x,
-    Real const max_y, Real const max_z, Real const t_min, Real const t_max
+    Real const ray_ox, Real const ray_oy, Real const ray_oz,
+    gwn_ray_dir_precompute<Real> const &ray_dir, Real const min_x, Real const min_y,
+    Real const min_z, Real const max_x, Real const max_y, Real const max_z, Real const t_min,
+    Real const t_max
 ) noexcept {
     gwn_ray_aabb_interval<Real> result{};
     if (!(t_max >= t_min))
@@ -40,33 +102,26 @@ __device__ inline gwn_ray_aabb_interval<Real> gwn_ray_aabb_intersect_interval_im
     Real t_near = t_min;
     Real t_far = t_max;
 
-    auto update_axis = [&](Real const origin, Real const direction, Real const lo,
-                           Real const hi) -> bool {
-        if (direction == Real(0))
-            return origin >= lo && origin <= hi;
-
-        Real const inv_dir = Real(1) / direction;
-        Real t0 = (lo - origin) * inv_dir;
-        Real t1 = (hi - origin) * inv_dir;
-        if (t0 > t1) {
-            Real const tmp = t0;
-            t0 = t1;
-            t1 = tmp;
-        }
-
-        t_near = std::max(t_near, t0);
-        t_far = std::min(t_far, t1);
-        return t_near <= t_far;
-    };
-
-    if (!update_axis(ray_ox, ray_dx, min_x, max_x))
+    if (!gwn_ray_aabb_update_axis_interval_impl(
+            ray_ox, min_x, max_x, ray_dir.inv_x, ray_dir.dir_x_is_zero, ray_dir.dir_x_is_neg,
+            t_near, t_far
+        )) {
         return result;
-    if (!update_axis(ray_oy, ray_dy, min_y, max_y))
+    }
+    if (!gwn_ray_aabb_update_axis_interval_impl(
+            ray_oy, min_y, max_y, ray_dir.inv_y, ray_dir.dir_y_is_zero, ray_dir.dir_y_is_neg,
+            t_near, t_far
+        )) {
         return result;
-    if (!update_axis(ray_oz, ray_dz, min_z, max_z))
+    }
+    if (!gwn_ray_aabb_update_axis_interval_impl(
+            ray_oz, min_z, max_z, ray_dir.inv_z, ray_dir.dir_z_is_zero, ray_dir.dir_z_is_neg,
+            t_near, t_far
+        )) {
         return result;
+    }
 
-    if (!(t_far >= t_near))
+    if (t_far < t_near)
         return result;
 
     result.hit = true;
@@ -82,22 +137,27 @@ template <gwn_real_type Real>
     // Embree reference: common/math/vec3.h::stable_triangle_normal
     using std::abs;
 
-    Real const ab_x = a.z * b.y;
-    Real const ab_y = a.x * b.z;
-    Real const ab_z = a.y * b.x;
-    Real const bc_x = b.z * c.y;
-    Real const bc_y = b.x * c.z;
-    Real const bc_z = b.y * c.x;
+    Real const ab_mul_x = a.z * b.y;
+    Real const ab_mul_y = a.x * b.z;
+    Real const ab_mul_z = a.y * b.x;
+    Real const bc_mul_x = b.z * c.y;
+    Real const bc_mul_y = b.x * c.z;
+    Real const bc_mul_z = b.y * c.x;
 
-    gwn_query_vec3<Real> const cross_ab(a.y * b.z - ab_x, a.z * b.x - ab_y, a.x * b.y - ab_z);
-    gwn_query_vec3<Real> const cross_bc(b.y * c.z - bc_x, b.z * c.x - bc_y, b.x * c.y - bc_z);
+    gwn_query_vec3<Real> const cross_ab(
+        a.y * b.z - ab_mul_x, a.z * b.x - ab_mul_y, a.x * b.y - ab_mul_z
+    );
+    gwn_query_vec3<Real> const cross_bc(
+        b.y * c.z - bc_mul_x, b.z * c.x - bc_mul_y, b.x * c.y - bc_mul_z
+    );
 
+    // Select component-wise stable candidates as in Embree's stable normal routine.
     gwn_query_vec3<Real> normal = cross_bc;
-    if (abs(ab_x) < abs(bc_x))
+    if (abs(ab_mul_x) < abs(bc_mul_x))
         normal.x = cross_ab.x;
-    if (abs(ab_y) < abs(bc_y))
+    if (abs(ab_mul_y) < abs(bc_mul_y))
         normal.y = cross_ab.y;
-    if (abs(ab_z) < abs(bc_z))
+    if (abs(ab_mul_z) < abs(bc_mul_z))
         normal.z = cross_ab.z;
     return normal;
 }
@@ -110,10 +170,12 @@ __device__ inline bool gwn_ray_triangle_intersect_robust_impl(
 ) noexcept {
     // Embree reference:
     // kernels/geometry/triangle_intersector_pluecker.h (Apache-2.0)
+    // 1) Rebase vertices at ray origin.
     gwn_query_vec3<Real> const p0 = v0 - origin;
     gwn_query_vec3<Real> const p1 = v1 - origin;
     gwn_query_vec3<Real> const p2 = v2 - origin;
 
+    // 2) Robust edge-function test in Pluecker space.
     gwn_query_vec3<Real> const e0 = p2 - p0;
     gwn_query_vec3<Real> const e1 = p0 - p1;
     gwn_query_vec3<Real> const e2 = p1 - p2;
@@ -130,6 +192,7 @@ __device__ inline bool gwn_ray_triangle_intersect_robust_impl(
     if (!(min_edge >= -edge_eps || max_edge <= edge_eps))
         return false;
 
+    // 3) Solve hit distance against stable geometric normal.
     gwn_query_vec3<Real> const ng = gwn_stable_triangle_normal_impl(e0, e1, e2);
     Real const den = Real(2) * gwn_query_dot(ng, direction);
     if (den == Real(0))
@@ -145,10 +208,9 @@ __device__ inline bool gwn_ray_triangle_intersect_robust_impl(
 }
 
 template <gwn_real_type Real, gwn_index_type Index>
-__device__ inline bool gwn_ray_triangle_intersect_from_primitive_impl(
+__device__ inline bool gwn_ray_load_triangle_vertices_from_primitive_impl(
     gwn_geometry_accessor<Real, Index> const &geometry, Index const primitive_id,
-    gwn_query_vec3<Real> const &origin, gwn_query_vec3<Real> const &direction, Real const t_min,
-    Real const t_max, Real &t_out
+    gwn_query_vec3<Real> &a, gwn_query_vec3<Real> &b, gwn_query_vec3<Real> &c
 ) noexcept {
     if (!gwn_index_in_bounds(primitive_id, geometry.triangle_count()))
         return false;
@@ -166,74 +228,89 @@ __device__ inline bool gwn_ray_triangle_intersect_from_primitive_impl(
     auto const a_idx = static_cast<std::size_t>(ia);
     auto const b_idx = static_cast<std::size_t>(ib);
     auto const c_idx = static_cast<std::size_t>(ic);
-    gwn_query_vec3<Real> const a(
+    a = gwn_query_vec3<Real>(
         geometry.vertex_x[a_idx], geometry.vertex_y[a_idx], geometry.vertex_z[a_idx]
     );
-    gwn_query_vec3<Real> const b(
+    b = gwn_query_vec3<Real>(
         geometry.vertex_x[b_idx], geometry.vertex_y[b_idx], geometry.vertex_z[b_idx]
     );
-    gwn_query_vec3<Real> const c(
+    c = gwn_query_vec3<Real>(
         geometry.vertex_x[c_idx], geometry.vertex_y[c_idx], geometry.vertex_z[c_idx]
     );
 
-    return gwn_ray_triangle_intersect_robust_impl(origin, direction, a, b, c, t_min, t_max, t_out);
+    return true;
 }
 
-template <gwn_real_type Real>
-__device__ inline void gwn_swap_children_if_greater_entry_t_impl(
-    Real &lhs_t_near, Real &rhs_t_near, int &lhs_slot, int &rhs_slot, std::uint8_t &lhs_kind,
-    std::uint8_t &rhs_kind
+template <gwn_real_type Real, gwn_index_type Index>
+__device__ inline bool gwn_ray_triangle_intersect_from_primitive_impl(
+    gwn_geometry_accessor<Real, Index> const &geometry, Index const primitive_id,
+    gwn_query_vec3<Real> const &origin, gwn_query_vec3<Real> const &direction, Real const t_min,
+    Real const t_max, Real &t_out
 ) noexcept {
-    if (!(lhs_t_near > rhs_t_near))
-        return;
-
-    using std::swap;
-    swap(lhs_t_near, rhs_t_near);
-    swap(lhs_slot, rhs_slot);
-    swap(lhs_kind, rhs_kind);
+    gwn_query_vec3<Real> a{};
+    gwn_query_vec3<Real> b{};
+    gwn_query_vec3<Real> c{};
+    if (!gwn_ray_load_triangle_vertices_from_primitive_impl(geometry, primitive_id, a, b, c))
+        return false;
+    return gwn_ray_triangle_intersect_robust_impl(origin, direction, a, b, c, t_min, t_max, t_out);
 }
 
 template <int Width, gwn_real_type Real>
 __device__ inline void gwn_sort_children_by_entry_t_impl(
     Real (&child_entry_t)[Width], int (&child_slot_order)[Width], std::uint8_t (&child_kind)[Width]
 ) noexcept {
+    auto cmp_swap = [&](int const lhs, int const rhs) {
+        if (!(child_entry_t[lhs] > child_entry_t[rhs]))
+            return;
+        using std::swap;
+        swap(child_entry_t[lhs], child_entry_t[rhs]);
+        swap(child_slot_order[lhs], child_slot_order[rhs]);
+        swap(child_kind[lhs], child_kind[rhs]);
+    };
+
     if constexpr (Width == 2) {
-        gwn_swap_children_if_greater_entry_t_impl(
-            child_entry_t[0], child_entry_t[1], child_slot_order[0], child_slot_order[1],
-            child_kind[0], child_kind[1]
-        );
+        cmp_swap(0, 1);
     } else if constexpr (Width == 4) {
-        gwn_swap_children_if_greater_entry_t_impl(
-            child_entry_t[0], child_entry_t[1], child_slot_order[0], child_slot_order[1],
-            child_kind[0], child_kind[1]
-        );
-        gwn_swap_children_if_greater_entry_t_impl(
-            child_entry_t[2], child_entry_t[3], child_slot_order[2], child_slot_order[3],
-            child_kind[2], child_kind[3]
-        );
-        gwn_swap_children_if_greater_entry_t_impl(
-            child_entry_t[0], child_entry_t[2], child_slot_order[0], child_slot_order[2],
-            child_kind[0], child_kind[2]
-        );
-        gwn_swap_children_if_greater_entry_t_impl(
-            child_entry_t[1], child_entry_t[3], child_slot_order[1], child_slot_order[3],
-            child_kind[1], child_kind[3]
-        );
-        gwn_swap_children_if_greater_entry_t_impl(
-            child_entry_t[1], child_entry_t[2], child_slot_order[1], child_slot_order[2],
-            child_kind[1], child_kind[2]
-        );
+        cmp_swap(0, 1);
+        cmp_swap(2, 3);
+        cmp_swap(0, 2);
+        cmp_swap(1, 3);
+        cmp_swap(1, 2);
     } else {
         GWN_PRAGMA_UNROLL
         for (int pass = 0; pass < Width; ++pass) {
             int const start = pass & 1;
             GWN_PRAGMA_UNROLL
-            for (int i = start; (i + 1) < Width; i += 2) {
-                gwn_swap_children_if_greater_entry_t_impl(
-                    child_entry_t[i], child_entry_t[i + 1], child_slot_order[i],
-                    child_slot_order[i + 1], child_kind[i], child_kind[i + 1]
-                );
-            }
+            for (int i = start; (i + 1) < Width; i += 2)
+                cmp_swap(i, i + 1);
+        }
+    }
+}
+
+template <int Width, gwn_real_type Real, gwn_index_type Index>
+__device__ inline void gwn_ray_visit_leaf_primitive_range_impl(
+    gwn_geometry_accessor<Real, Index> const &geometry,
+    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh, gwn_query_vec3<Real> const &origin,
+    gwn_query_vec3<Real> const &direction, Real const t_min, Index const begin, Index const count,
+    gwn_ray_best_hit<Real, Index> &best
+) noexcept {
+    for (Index off = 0; off < count; ++off) {
+        Index const sorted_index = begin + off;
+        if (!gwn_index_in_bounds(sorted_index, bvh.primitive_indices.size()))
+            continue;
+
+        Index const primitive_id = bvh.primitive_indices[static_cast<std::size_t>(sorted_index)];
+        Real t_hit = Real(0);
+        if (!gwn_ray_triangle_intersect_from_primitive_impl<Real, Index>(
+                geometry, primitive_id, origin, direction, t_min, best.t, t_hit
+            )) {
+            continue;
+        }
+
+        if (!best.found || t_hit < best.t) {
+            best.t = t_hit;
+            best.primitive_id = primitive_id;
+            best.found = true;
         }
     }
 }
@@ -261,37 +338,20 @@ __device__ inline gwn_ray_first_hit_result<Real, Index> gwn_ray_first_hit_bvh_im
 
     gwn_query_vec3<Real> const origin(ray_ox, ray_oy, ray_oz);
     gwn_query_vec3<Real> const direction(ray_dx, ray_dy, ray_dz);
+    auto const ray_dir_precomp = gwn_ray_make_dir_precompute_impl(ray_dx, ray_dy, ray_dz);
 
-    Real best_t = t_max;
-    Index best_pi = gwn_invalid_index<Index>();
-    bool found = false;
-
-    auto test_leaf = [&](Index const begin, Index const count) {
-        for (Index off = 0; off < count; ++off) {
-            Index const si = begin + off;
-            if (!gwn_index_in_bounds(si, bvh.primitive_indices.size()))
-                continue;
-            Index const pi = bvh.primitive_indices[static_cast<std::size_t>(si)];
-            Real t_hit = Real(0);
-            if (!gwn_ray_triangle_intersect_from_primitive_impl<Real, Index>(
-                    geometry, pi, origin, direction, t_min, best_t, t_hit
-                )) {
-                continue;
-            }
-
-            if (!found || t_hit < best_t) {
-                best_t = t_hit;
-                best_pi = pi;
-                found = true;
-            }
-        }
-    };
+    gwn_ray_best_hit<Real, Index> best{};
+    best.t = t_max;
+    best.primitive_id = gwn_invalid_index<Index>();
+    best.found = false;
 
     if (bvh.root_kind == gwn_bvh_child_kind::k_leaf) {
-        test_leaf(bvh.root_index, bvh.root_count);
-        if (found) {
-            result.t = best_t;
-            result.primitive_id = best_pi;
+        gwn_ray_visit_leaf_primitive_range_impl<Width, Real, Index>(
+            geometry, bvh, origin, direction, t_min, bvh.root_index, bvh.root_count, best
+        );
+        if (best.found) {
+            result.t = best.t;
+            result.primitive_id = best.primitive_id;
         }
         return result;
     }
@@ -339,15 +399,13 @@ __device__ inline gwn_ray_first_hit_result<Real, Index> gwn_ray_first_hit_bvh_im
                 continue;
 
             auto const interval = gwn_ray_aabb_intersect_interval_impl<Real>(
-                ray_ox, ray_oy, ray_oz, ray_dx, ray_dy, ray_dz, aabb_node.child_min_x[s],
+                ray_ox, ray_oy, ray_oz, ray_dir_precomp, aabb_node.child_min_x[s],
                 aabb_node.child_min_y[s], aabb_node.child_min_z[s], aabb_node.child_max_x[s],
-                aabb_node.child_max_y[s], aabb_node.child_max_z[s], t_min, best_t
+                aabb_node.child_max_y[s], aabb_node.child_max_z[s], t_min, best.t
             );
             if (!interval.hit)
                 continue;
 
-            if (child_count >= Width)
-                continue;
             child_slot_order[child_count] = s;
             child_entry_t[child_count] = interval.t_near;
             child_kind[child_count] = topo_node.child_kind[s];
@@ -361,18 +419,23 @@ __device__ inline gwn_ray_first_hit_result<Real, Index> gwn_ray_first_hit_bvh_im
         for (int i = 0; i < Width; ++i) {
             if (static_cast<gwn_bvh_child_kind>(child_kind[i]) != gwn_bvh_child_kind::k_leaf)
                 continue;
-            if (child_entry_t[i] > best_t)
+            if (child_entry_t[i] > best.t)
                 continue;
 
             int const s = child_slot_order[i];
-            test_leaf(topo_node.child_index[s], topo_node.child_count[s]);
+            gwn_ray_visit_leaf_primitive_range_impl<Width, Real, Index>(
+                geometry, bvh, origin, direction, t_min, topo_node.child_index[s],
+                topo_node.child_count[s], best
+            );
         }
 
+        // Push internal children in reverse near-to-far order so the nearest
+        // node is popped first by the LIFO stack.
         GWN_PRAGMA_UNROLL
         for (int i = Width - 1; i >= 0; --i) {
             if (static_cast<gwn_bvh_child_kind>(child_kind[i]) != gwn_bvh_child_kind::k_internal)
                 continue;
-            if (child_entry_t[i] > best_t)
+            if (child_entry_t[i] > best.t)
                 continue;
 
             if (stack_size >= StackCapacity)
@@ -381,9 +444,9 @@ __device__ inline gwn_ray_first_hit_result<Real, Index> gwn_ray_first_hit_bvh_im
         }
     }
 
-    if (found) {
-        result.t = best_t;
-        result.primitive_id = best_pi;
+    if (best.found) {
+        result.t = best.t;
+        result.primitive_id = best.primitive_id;
     }
     return result;
 }
@@ -399,8 +462,8 @@ struct gwn_ray_first_hit_batch_bvh_functor {
     cuda::std::span<Real const> ray_dir_x{};
     cuda::std::span<Real const> ray_dir_y{};
     cuda::std::span<Real const> ray_dir_z{};
-    cuda::std::span<Real> output_t{};
-    cuda::std::span<Index> output_primitive_id{};
+    cuda::std::span<Real> out_t{};
+    cuda::std::span<Index> out_primitive_id{};
     Real t_min{};
     Real t_max{};
 
@@ -410,28 +473,10 @@ struct gwn_ray_first_hit_batch_bvh_functor {
             ray_origin_z[ray_id], ray_dir_x[ray_id], ray_dir_y[ray_id], ray_dir_z[ray_id], t_min,
             t_max
         );
-        output_t[ray_id] = hit.t;
-        output_primitive_id[ray_id] = hit.primitive_id;
+        out_t[ray_id] = hit.t;
+        out_primitive_id[ray_id] = hit.primitive_id;
     }
 };
-
-template <int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity>
-[[nodiscard]] inline gwn_ray_first_hit_batch_bvh_functor<Width, Real, Index, StackCapacity>
-gwn_make_ray_first_hit_batch_bvh_functor(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
-    gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree,
-    cuda::std::span<Real const> const ray_origin_x, cuda::std::span<Real const> const ray_origin_y,
-    cuda::std::span<Real const> const ray_origin_z, cuda::std::span<Real const> const ray_dir_x,
-    cuda::std::span<Real const> const ray_dir_y, cuda::std::span<Real const> const ray_dir_z,
-    cuda::std::span<Real> const output_t, cuda::std::span<Index> const output_primitive_id,
-    Real const t_min, Real const t_max
-) {
-    return gwn_ray_first_hit_batch_bvh_functor<Width, Real, Index, StackCapacity>{
-        geometry,  bvh,       aabb_tree, ray_origin_x,        ray_origin_y, ray_origin_z, ray_dir_x,
-        ray_dir_y, ray_dir_z, output_t,  output_primitive_id, t_min,        t_max
-    };
-}
 
 } // namespace detail
 } // namespace gwn

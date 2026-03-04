@@ -184,7 +184,13 @@ gwn_status gwn_bvh_topology_build_collapse_binary_wide(
         binary_nodes, binary_internal_bounds,   slots.span(),         wide_nodes_scratch.span(),
         tail.data(),  wide_node_counter.data(), block_counter.data(), error_flag.data()
     };
-    int const block_count = gwn_block_count_1d<k_block_size>(primitive_count);
+    if (primitive_count > gwn_max_linear_kernel_elements_1d<k_block_size>()) {
+        return gwn_bvh_invalid_argument(
+            k_gwn_bvh_phase_topology_collapse,
+            "Collapse kernel primitive count exceeds linear launch range."
+        );
+    }
+    int const block_count = static_cast<int>(gwn_block_count_1d<k_block_size>(primitive_count));
     gwn_collapse_convert_kernel<k_block_size, Width, Real, Index>
         <<<block_count, k_block_size, 0, stream>>>(params);
     GWN_RETURN_ON_ERROR(gwn_check_last_kernel());
@@ -214,8 +220,12 @@ gwn_status gwn_bvh_topology_build_collapse_binary_wide(
 
     std::size_t const actual_wide_count = static_cast<std::size_t>(host_wide_node_count);
     GWN_RETURN_ON_ERROR(gwn_allocate_span(staging_topology.nodes, actual_wide_count, stream));
+    auto const staging_nodes = cuda::std::span<gwn_bvh_topology_node_soa<Width, Index>>(
+        const_cast<gwn_bvh_topology_node_soa<Width, Index> *>(staging_topology.nodes.data()),
+        actual_wide_count
+    );
     GWN_RETURN_ON_ERROR(gwn_copy_d2d(
-        staging_topology.nodes,
+        staging_nodes,
         cuda::std::span<gwn_bvh_topology_node_soa<Width, Index> const>(
             wide_nodes_scratch.data(), actual_wide_count
         ),

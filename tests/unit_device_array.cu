@@ -1,9 +1,11 @@
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 #include <gtest/gtest.h>
 
+#include <gwn/gwn_kernel_utils.cuh>
 #include <gwn/gwn_utils.cuh>
 
 #include "test_fixtures.hpp"
@@ -11,6 +13,14 @@
 // gwn_device_array unit tests, RAII, stream binding, resize semantics.
 
 using gwn::tests::CudaStreamFixture;
+
+namespace {
+
+struct noop_linear_functor {
+    __device__ void operator()(std::size_t const) const {}
+};
+
+} // namespace
 
 TEST_F(CudaStreamFixture, default_constructed_is_empty) {
     gwn::gwn_device_array<float> buffer;
@@ -212,7 +222,7 @@ TEST(smallgwn_unit_device_array_null_storage, cuda_malloc_null_output_pointer) {
 TEST(smallgwn_unit_device_array_null_storage, copy_h2d_null_destination) {
     float const source[1] = {1.0f};
     gwn::gwn_status const status = gwn::detail::gwn_copy_h2d<float>(
-        cuda::std::span<float const>(static_cast<float const *>(nullptr), 1),
+        cuda::std::span<float>(static_cast<float *>(nullptr), 1),
         cuda::std::span<float const>(source, 1), gwn::gwn_default_stream()
     );
     ASSERT_FALSE(status.is_ok());
@@ -220,9 +230,9 @@ TEST(smallgwn_unit_device_array_null_storage, copy_h2d_null_destination) {
 }
 
 TEST(smallgwn_unit_device_array_null_storage, copy_h2d_null_source) {
-    float const destination_storage[1] = {0.0f};
+    float destination_storage[1] = {0.0f};
     gwn::gwn_status const status = gwn::detail::gwn_copy_h2d<float>(
-        cuda::std::span<float const>(destination_storage, 1),
+        cuda::std::span<float>(destination_storage, 1),
         cuda::std::span<float const>(static_cast<float const *>(nullptr), 1),
         gwn::gwn_default_stream()
     );
@@ -254,7 +264,7 @@ TEST(smallgwn_unit_device_array_null_storage, copy_d2h_null_destination) {
 TEST(smallgwn_unit_device_array_null_storage, copy_d2d_null_source) {
     float destination_storage[1] = {0.0f};
     gwn::gwn_status const status = gwn::detail::gwn_copy_d2d<float>(
-        cuda::std::span<float const>(destination_storage, 1),
+        cuda::std::span<float>(destination_storage, 1),
         cuda::std::span<float const>(static_cast<float const *>(nullptr), 1),
         gwn::gwn_default_stream()
     );
@@ -265,9 +275,23 @@ TEST(smallgwn_unit_device_array_null_storage, copy_d2d_null_source) {
 TEST(smallgwn_unit_device_array_null_storage, copy_d2d_null_destination) {
     float const source_storage[1] = {0.0f};
     gwn::gwn_status const status = gwn::detail::gwn_copy_d2d<float>(
-        cuda::std::span<float const>(static_cast<float const *>(nullptr), 1),
+        cuda::std::span<float>(static_cast<float *>(nullptr), 1),
         cuda::std::span<float const>(source_storage, 1), gwn::gwn_default_stream()
     );
     ASSERT_FALSE(status.is_ok());
+    EXPECT_EQ(status.error(), gwn::gwn_error::invalid_argument);
+}
+
+TEST_F(CudaStreamFixture, launch_linear_kernel_rejects_count_beyond_supported_range) {
+    constexpr int k_block_size = gwn::detail::k_gwn_default_block_size;
+    constexpr std::size_t k_too_many_elements =
+        static_cast<std::size_t>(std::numeric_limits<int>::max()) *
+            static_cast<std::size_t>(k_block_size) +
+        1u;
+
+    gwn::gwn_status const status = gwn::detail::gwn_launch_linear_kernel<k_block_size>(
+        k_too_many_elements, noop_linear_functor{}, gwn::gwn_default_stream()
+    );
+    EXPECT_FALSE(status.is_ok());
     EXPECT_EQ(status.error(), gwn::gwn_error::invalid_argument);
 }

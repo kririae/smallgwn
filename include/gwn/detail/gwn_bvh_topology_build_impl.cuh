@@ -73,8 +73,11 @@ gwn_status gwn_bvh_topology_build_from_binary_impl(
             GWN_RETURN_ON_ERROR(
                 gwn_allocate_span(staging_topology.primitive_indices, primitive_count, stream)
             );
+            auto const staging_primitive_indices = cuda::std::span<Index>(
+                const_cast<Index *>(staging_topology.primitive_indices.data()), primitive_count
+            );
             GWN_RETURN_ON_ERROR(gwn_copy_d2d(
-                staging_topology.primitive_indices,
+                staging_primitive_indices,
                 cuda::std::span<Index const>(
                     preprocess.sorted_primitive_indices.data(),
                     preprocess.sorted_primitive_indices.size()

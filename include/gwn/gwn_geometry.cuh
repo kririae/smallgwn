@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <utility>
 
 #include "gwn_utils.cuh"
@@ -15,13 +16,13 @@ template <gwn_real_type Real, gwn_index_type Index = std::uint32_t> struct gwn_g
     using real_type = Real;
     using index_type = Index;
 
-    cuda::std::span<Real const> vertex_x{};
-    cuda::std::span<Real const> vertex_y{};
-    cuda::std::span<Real const> vertex_z{};
+    cuda::std::span<Real> vertex_x{};
+    cuda::std::span<Real> vertex_y{};
+    cuda::std::span<Real> vertex_z{};
 
-    cuda::std::span<Index const> tri_i0{};
-    cuda::std::span<Index const> tri_i1{};
-    cuda::std::span<Index const> tri_i2{};
+    cuda::std::span<Index> tri_i0{};
+    cuda::std::span<Index> tri_i1{};
+    cuda::std::span<Index> tri_i2{};
 
     __host__ __device__ constexpr std::size_t vertex_count() const noexcept {
         return vertex_x.size();
@@ -105,6 +106,11 @@ gwn_status gwn_upload_accessor(
             "Geometry spans must use non-null storage when non-empty."
         );
     }
+    std::size_t const max_indexable = static_cast<std::size_t>(std::numeric_limits<Index>::max());
+    if (x.size() > max_indexable)
+        return gwn_status::invalid_argument("Vertex count exceeds index type capacity.");
+    if (i0.size() > max_indexable)
+        return gwn_status::invalid_argument("Triangle count exceeds index type capacity.");
     GWN_RETURN_ON_ERROR(gwn_validate_triangle_indices<Index>(i0, i1, i2, x.size()));
 
     gwn_geometry_accessor<Real, Index> staging{};
@@ -164,6 +170,7 @@ public:
         set_stream(clear_stream);
     }
 
+    [[nodiscard]] accessor_type &accessor() noexcept { return accessor_; }
     [[nodiscard]] accessor_type const &accessor() const noexcept { return accessor_; }
     [[nodiscard]] std::size_t vertex_count() const noexcept { return accessor_.vertex_count(); }
     [[nodiscard]] std::size_t triangle_count() const noexcept { return accessor_.triangle_count(); }
@@ -193,7 +200,9 @@ gwn_status gwn_upload_geometry(
 ) noexcept {
     gwn_geometry_object<Real, Index> staging;
     staging.set_stream(stream);
-    GWN_RETURN_ON_ERROR(detail::gwn_upload_accessor(staging.accessor_, x, y, z, i0, i1, i2, stream));
+    GWN_RETURN_ON_ERROR(
+        detail::gwn_upload_accessor(staging.accessor_, x, y, z, i0, i1, i2, stream)
+    );
 
     swap(object, staging);
     return gwn_status::ok();

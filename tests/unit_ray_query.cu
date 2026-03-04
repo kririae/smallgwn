@@ -384,6 +384,48 @@ TEST_F(CudaFixture, ray_first_hit_single_triangle_basic_cases) {
     EXPECT_EQ(pi[5], invalid);
 }
 
+TEST_F(CudaFixture, ray_first_hit_handles_near_zero_direction_components) {
+    SingleTriangleMesh mesh;
+    std::vector<Real> ox{Real(0.25)};
+    std::vector<Real> oy{Real(0.25)};
+    std::vector<Real> oz{Real(1.0)};
+    std::vector<Real> dx{Real(1e-8)};
+    std::vector<Real> dy{Real(-1e-8)};
+    std::vector<Real> dz{Real(-1.0)};
+
+    std::vector<Real> t;
+    std::vector<Index> pi;
+    if (!run_ray_first_hit_query(mesh, ox, oy, oz, dx, dy, dz, t, pi))
+        GTEST_SKIP() << "CUDA unavailable";
+
+    ASSERT_EQ(t.size(), 1u);
+    ASSERT_EQ(pi.size(), 1u);
+    EXPECT_NEAR(t[0], Real(1), Real(1e-5));
+    EXPECT_EQ(pi[0], Index(0));
+}
+
+TEST_F(CudaFixture, ray_first_hit_coplanar_and_near_coplanar_behavior) {
+    SingleTriangleMesh mesh;
+    std::vector<Real> ox{Real(0.25), Real(0.25)};
+    std::vector<Real> oy{Real(0.25), Real(0.25)};
+    std::vector<Real> oz{Real(0.0), Real(1e-6)};
+    std::vector<Real> dx{Real(1.0), Real(0.0)};
+    std::vector<Real> dy{Real(0.0), Real(0.0)};
+    std::vector<Real> dz{Real(0.0), Real(-1.0)};
+
+    std::vector<Real> t;
+    std::vector<Index> pi;
+    if (!run_ray_first_hit_query(mesh, ox, oy, oz, dx, dy, dz, t, pi))
+        GTEST_SKIP() << "CUDA unavailable";
+
+    ASSERT_EQ(t.size(), 2u);
+    ASSERT_EQ(pi.size(), 2u);
+    EXPECT_LT(t[0], Real(0)) << "coplanar ray should miss for first-hit query";
+    EXPECT_EQ(pi[0], gwn::gwn_invalid_index<Index>());
+    EXPECT_NEAR(t[1], Real(1e-6), Real(1e-7));
+    EXPECT_EQ(pi[1], Index(0));
+}
+
 TEST_F(CudaFixture, ray_first_hit_respects_t_interval) {
     SingleTriangleMesh mesh;
     std::vector<Real> ox{Real(0.25)};
@@ -408,6 +450,25 @@ TEST_F(CudaFixture, ray_first_hit_respects_t_interval) {
     if (!run_ray_first_hit_query(mesh, ox, oy, oz, dx, dy, dz, t, pi, Real(0), Real(0.9)))
         GTEST_SKIP() << "CUDA unavailable";
     EXPECT_LT(t[0], Real(0));
+}
+
+TEST_F(CudaFixture, ray_first_hit_accepts_exact_t_interval_boundary) {
+    SingleTriangleMesh mesh;
+    std::vector<Real> ox{Real(0.25)};
+    std::vector<Real> oy{Real(0.25)};
+    std::vector<Real> oz{Real(1.0)};
+    std::vector<Real> dx{Real(0)};
+    std::vector<Real> dy{Real(0)};
+    std::vector<Real> dz{Real(-1)};
+
+    std::vector<Real> t;
+    std::vector<Index> pi;
+    if (!run_ray_first_hit_query(mesh, ox, oy, oz, dx, dy, dz, t, pi, Real(1), Real(1)))
+        GTEST_SKIP() << "CUDA unavailable";
+    ASSERT_EQ(t.size(), 1u);
+    ASSERT_EQ(pi.size(), 1u);
+    EXPECT_NEAR(t[0], Real(1), Real(1e-6));
+    EXPECT_EQ(pi[0], Index(0));
 }
 
 TEST_F(CudaFixture, ray_first_hit_returns_nearest_triangle) {

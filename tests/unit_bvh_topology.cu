@@ -1,10 +1,12 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 #include <gtest/gtest.h>
 
+#include <gwn/detail/gwn_bvh_topology_build_hploc.cuh>
 #include <gwn/gwn.cuh>
 
 #include "test_fixtures.hpp"
@@ -31,8 +33,7 @@ std::optional<gwn::gwn_geometry_object<Real, Index>> upload_mesh(
 ) {
     gwn::gwn_geometry_object<Real, Index> geometry;
     gwn::gwn_status const status = gwn::gwn_upload_geometry(
-        geometry,
-        cuda::std::span<Real const>(vx.data(), vx.size()),
+        geometry, cuda::std::span<Real const>(vx.data(), vx.size()),
         cuda::std::span<Real const>(vy.data(), vy.size()),
         cuda::std::span<Real const>(vz.data(), vz.size()),
         cuda::std::span<Index const>(i0.data(), i0.size()),
@@ -259,6 +260,48 @@ TEST_F(CudaFixture, zero_area_triangle_build_succeeds) {
     gwn::gwn_status const status = gwn::gwn_bvh_topology_build_lbvh<4, Real, Index>(geometry, bvh);
     ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
     ASSERT_TRUE(bvh.has_data());
+}
+
+TEST_F(CudaFixture, hploc_uint32_morton_rejects_primitive_count_above_uint32_max) {
+    using BigIndex = std::uint64_t;
+    using MortonCode = std::uint32_t;
+
+    constexpr std::size_t k_too_many_primitives =
+        static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max()) + 1u;
+
+    gwn::gwn_device_array<BigIndex> sorted_primitive_indices;
+    gwn::gwn_device_array<MortonCode> sorted_morton_codes;
+    gwn::gwn_device_array<gwn::gwn_aabb<Real>> sorted_primitive_aabbs;
+
+    gwn::gwn_status status = sorted_primitive_indices.resize(1);
+    SMALLGWN_SKIP_IF_STATUS_CUDA_UNAVAILABLE(status);
+    ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
+    ASSERT_TRUE(sorted_morton_codes.resize(1).is_ok());
+    ASSERT_TRUE(sorted_primitive_aabbs.resize(1).is_ok());
+
+    cuda::std::span<BigIndex const> const primitive_indices_span(
+        sorted_primitive_indices.data(), k_too_many_primitives
+    );
+    // Keep these intentionally tiny: before the guard fix, the function exits
+    // with preprocess size mismatch (fast, no giant allocations). After fix,
+    // primitive-count guard should trigger first.
+    cuda::std::span<MortonCode const> const morton_codes_span(sorted_morton_codes.data(), 1);
+    cuda::std::span<gwn::gwn_aabb<Real> const> const primitive_aabbs_span(
+        sorted_primitive_aabbs.data(), 1
+    );
+
+    gwn::gwn_device_array<gwn::detail::gwn_binary_node<BigIndex>> binary_nodes;
+    gwn::gwn_device_array<BigIndex> binary_internal_parent;
+    gwn::gwn_device_array<gwn::gwn_aabb<Real>> binary_internal_bounds;
+    BigIndex root_internal_index = gwn::gwn_invalid_index<BigIndex>();
+
+    status = gwn::detail::gwn_bvh_topology_build_binary_hploc<Real, BigIndex, MortonCode>(
+        primitive_indices_span, morton_codes_span, primitive_aabbs_span, binary_nodes,
+        binary_internal_parent, binary_internal_bounds, root_internal_index
+    );
+    SMALLGWN_SKIP_IF_STATUS_CUDA_UNAVAILABLE(status);
+    EXPECT_FALSE(status.is_ok());
+    EXPECT_EQ(status.error(), gwn::gwn_error::invalid_argument);
 }
 
 // Rebuild replaces previous BVH.

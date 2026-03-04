@@ -457,33 +457,17 @@ struct gwn_winding_number_batch_bvh_taylor_functor {
     cuda::std::span<Real const> query_x{};
     cuda::std::span<Real const> query_y{};
     cuda::std::span<Real const> query_z{};
-    cuda::std::span<Real> output{};
+    cuda::std::span<Real> out_winding{};
     Real accuracy_scale{};
 
     __device__ void operator()(std::size_t const query_id) const {
-        output[query_id] =
+        out_winding[query_id] =
             gwn_winding_number_point_bvh_taylor_impl<Order, Width, Real, Index, StackCapacity>(
                 geometry, bvh, data_tree, query_x[query_id], query_y[query_id], query_z[query_id],
                 accuracy_scale
             );
     }
 };
-
-template <int Order, int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity>
-[[nodiscard]] inline gwn_winding_number_batch_bvh_taylor_functor<
-    Order, Width, Real, Index, StackCapacity>
-gwn_make_winding_number_batch_bvh_taylor_functor(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
-    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &data_tree,
-    cuda::std::span<Real const> const query_x, cuda::std::span<Real const> const query_y,
-    cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output,
-    Real const accuracy_scale
-) {
-    return gwn_winding_number_batch_bvh_taylor_functor<Order, Width, Real, Index, StackCapacity>{
-        geometry, bvh, data_tree, query_x, query_y, query_z, output, accuracy_scale
-    };
-}
 
 } // namespace detail
 } // namespace gwn
