@@ -1,5 +1,6 @@
 #include <array>
 #include <type_traits>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -22,6 +23,77 @@ TEST(smallgwn_unit_geometry, default_accessor_is_empty_and_valid) {
     EXPECT_TRUE(accessor.is_valid());
     EXPECT_EQ(accessor.vertex_count(), 0u);
     EXPECT_EQ(accessor.triangle_count(), 0u);
+    EXPECT_EQ(accessor.tri_boundary_edge_mask.size(), 0u);
+}
+
+TEST(smallgwn_unit_geometry, boundary_edge_mask_single_triangle_all_bits_set) {
+    std::array<Index, 1> const i0{0};
+    std::array<Index, 1> const i1{1};
+    std::array<Index, 1> const i2{2};
+    std::array<std::uint8_t, 1> mask{0};
+
+    gwn::gwn_status const s = gwn::gwn_compute_triangle_boundary_edge_mask<Index>(
+        cuda::std::span<Index const>(i0.data(), i0.size()),
+        cuda::std::span<Index const>(i1.data(), i1.size()),
+        cuda::std::span<Index const>(i2.data(), i2.size()),
+        cuda::std::span<std::uint8_t>(mask.data(), mask.size())
+    );
+    ASSERT_TRUE(s.is_ok()) << gwn::tests::status_to_debug_string(s);
+    EXPECT_EQ(mask[0], std::uint8_t(0x7u));
+}
+
+TEST(smallgwn_unit_geometry, boundary_edge_mask_consistent_shared_edge_is_not_boundary) {
+    // Tri 0: (0,1,2)
+    // Tri 1: (2,1,3) -- shared edge is (1,2)/(2,1), so interior.
+    std::array<Index, 2> const i0{0, 2};
+    std::array<Index, 2> const i1{1, 1};
+    std::array<Index, 2> const i2{2, 3};
+    std::array<std::uint8_t, 2> mask{0, 0};
+
+    gwn::gwn_status const s = gwn::gwn_compute_triangle_boundary_edge_mask<Index>(
+        cuda::std::span<Index const>(i0.data(), i0.size()),
+        cuda::std::span<Index const>(i1.data(), i1.size()),
+        cuda::std::span<Index const>(i2.data(), i2.size()),
+        cuda::std::span<std::uint8_t>(mask.data(), mask.size())
+    );
+    ASSERT_TRUE(s.is_ok()) << gwn::tests::status_to_debug_string(s);
+    EXPECT_EQ(mask[0], std::uint8_t(0x5u));
+    EXPECT_EQ(mask[1], std::uint8_t(0x6u));
+}
+
+TEST(smallgwn_unit_geometry, boundary_edge_mask_inconsistent_shared_edge_marks_boundary) {
+    // Tri 0: (0,1,2)
+    // Tri 1: (0,1,3) -- shared edge (0,1) has same orientation in both triangles.
+    std::array<Index, 2> const i0{0, 0};
+    std::array<Index, 2> const i1{1, 1};
+    std::array<Index, 2> const i2{2, 3};
+    std::array<std::uint8_t, 2> mask{0, 0};
+
+    gwn::gwn_status const s = gwn::gwn_compute_triangle_boundary_edge_mask<Index>(
+        cuda::std::span<Index const>(i0.data(), i0.size()),
+        cuda::std::span<Index const>(i1.data(), i1.size()),
+        cuda::std::span<Index const>(i2.data(), i2.size()),
+        cuda::std::span<std::uint8_t>(mask.data(), mask.size())
+    );
+    ASSERT_TRUE(s.is_ok()) << gwn::tests::status_to_debug_string(s);
+    EXPECT_EQ(mask[0], std::uint8_t(0x7u));
+    EXPECT_EQ(mask[1], std::uint8_t(0x7u));
+}
+
+TEST(smallgwn_unit_geometry, boundary_edge_mask_rejects_mismatched_output_size) {
+    std::array<Index, 2> const i0{0, 0};
+    std::array<Index, 2> const i1{1, 1};
+    std::array<Index, 2> const i2{2, 3};
+    std::array<std::uint8_t, 1> mask{0};
+
+    gwn::gwn_status const s = gwn::gwn_compute_triangle_boundary_edge_mask<Index>(
+        cuda::std::span<Index const>(i0.data(), i0.size()),
+        cuda::std::span<Index const>(i1.data(), i1.size()),
+        cuda::std::span<Index const>(i2.data(), i2.size()),
+        cuda::std::span<std::uint8_t>(mask.data(), mask.size())
+    );
+    EXPECT_FALSE(s.is_ok());
+    EXPECT_EQ(s.error(), gwn::gwn_error::invalid_argument);
 }
 
 TEST(smallgwn_unit_geometry, accessor_spans_are_mutable_by_default) {
@@ -77,6 +149,15 @@ TEST_F(CudaFixture, upload_valid_single_triangle) {
     EXPECT_EQ(geometry.vertex_count(), 3u);
     EXPECT_EQ(geometry.triangle_count(), 1u);
     EXPECT_TRUE(geometry.accessor().is_valid());
+
+    std::vector<std::uint8_t> host_mask(1, 0);
+    gwn::gwn_status const copy_status = gwn::detail::gwn_copy_d2h<std::uint8_t>(
+        cuda::std::span<std::uint8_t>(host_mask.data(), host_mask.size()),
+        geometry.accessor().tri_boundary_edge_mask, gwn::gwn_default_stream()
+    );
+    ASSERT_TRUE(copy_status.is_ok()) << gwn::tests::status_to_debug_string(copy_status);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    EXPECT_EQ(host_mask[0], std::uint8_t(0x7u));
 }
 
 // Upload, error paths: SoA length mismatch.
