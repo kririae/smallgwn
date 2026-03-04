@@ -4,14 +4,11 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <limits>
-#include <type_traits>
 
 #include "../gwn_bvh.cuh"
 #include "../gwn_geometry.cuh"
 #include "gwn_harnack_trace_impl.cuh"
 #include "gwn_query_ray_impl.cuh"
-#include "gwn_query_winding_impl.cuh"
 
 namespace gwn {
 namespace detail {
@@ -120,54 +117,6 @@ __device__ inline bool gwn_triangle_vertices_and_indices_from_primitive_impl(
     return true;
 }
 
-template <gwn_real_type Real>
-__device__ inline bool gwn_triangle_barycentric_coordinates_impl(
-    gwn_query_vec3<Real> const &p, gwn_query_vec3<Real> const &a, gwn_query_vec3<Real> const &b,
-    gwn_query_vec3<Real> const &c, Real &w0, Real &w1, Real &w2
-) noexcept {
-    using std::isfinite;
-
-    gwn_query_vec3<Real> const v0 = b - a;
-    gwn_query_vec3<Real> const v1 = c - a;
-    gwn_query_vec3<Real> const v2 = p - a;
-
-    Real const d00 = gwn_query_dot(v0, v0);
-    Real const d01 = gwn_query_dot(v0, v1);
-    Real const d11 = gwn_query_dot(v1, v1);
-    Real const d20 = gwn_query_dot(v2, v0);
-    Real const d21 = gwn_query_dot(v2, v1);
-
-    Real const denom = d00 * d11 - d01 * d01;
-    if (!(denom > Real(0)))
-        return false;
-
-    Real const inv_denom = Real(1) / denom;
-    w1 = (d11 * d20 - d01 * d21) * inv_denom;
-    w2 = (d00 * d21 - d01 * d20) * inv_denom;
-    w0 = Real(1) - w1 - w2;
-
-    if (!isfinite(w0) || !isfinite(w1) || !isfinite(w2))
-        return false;
-
-    Real constexpr k_tol = Real(64) * std::numeric_limits<Real>::epsilon();
-    if (w0 < -k_tol || w1 < -k_tol || w2 < -k_tol)
-        return false;
-
-    w0 = std::max(Real(0), w0);
-    w1 = std::max(Real(0), w1);
-    w2 = std::max(Real(0), w2);
-
-    Real const sum = w0 + w1 + w2;
-    if (!(sum > Real(0)))
-        return false;
-
-    Real const inv_sum = Real(1) / sum;
-    w0 *= inv_sum;
-    w1 *= inv_sum;
-    w2 *= inv_sum;
-    return true;
-}
-
 template <gwn_real_type Real, gwn_index_type Index>
 __device__ inline bool gwn_triangle_geometric_normal_from_primitive_impl(
     gwn_geometry_accessor<Real, Index> const &geometry, Index const primitive_id,
@@ -191,8 +140,8 @@ __device__ inline bool gwn_triangle_geometric_normal_from_primitive_impl(
 
 template <gwn_real_type Real, gwn_index_type Index>
 __device__ inline bool gwn_triangle_barycentric_vertex_normal_from_primitive_impl(
-    gwn_geometry_accessor<Real, Index> const &geometry, Index const primitive_id,
-    gwn_query_vec3<Real> const &point, gwn_query_vec3<Real> &normal_out
+    gwn_geometry_accessor<Real, Index> const &geometry, Index const primitive_id, Real const hit_u,
+    Real const hit_v, gwn_query_vec3<Real> &normal_out
 ) noexcept {
     if (geometry.vertex_nx.size() != geometry.vertex_count())
         return false;
@@ -201,22 +150,10 @@ __device__ inline bool gwn_triangle_barycentric_vertex_normal_from_primitive_imp
     if (geometry.vertex_nz.size() != geometry.vertex_count())
         return false;
 
-    gwn_query_vec3<Real> a{};
-    gwn_query_vec3<Real> b{};
-    gwn_query_vec3<Real> c{};
     Index ia{};
     Index ib{};
     Index ic{};
-    if (!gwn_triangle_vertices_and_indices_from_primitive_impl<Real, Index>(
-            geometry, primitive_id, a, b, c, ia, ib, ic
-        )) {
-        return false;
-    }
-
-    Real w0 = Real(0);
-    Real w1 = Real(0);
-    Real w2 = Real(0);
-    if (!gwn_triangle_barycentric_coordinates_impl(point, a, b, c, w0, w1, w2))
+    if (!gwn_triangle_indices_from_primitive_impl<Real, Index>(geometry, primitive_id, ia, ib, ic))
         return false;
 
     std::size_t const a_index = static_cast<std::size_t>(ia);
@@ -232,6 +169,9 @@ __device__ inline bool gwn_triangle_barycentric_vertex_normal_from_primitive_imp
         geometry.vertex_nx[c_index], geometry.vertex_ny[c_index], geometry.vertex_nz[c_index]
     );
 
+    Real const w1 = hit_u;
+    Real const w2 = hit_v;
+    Real const w0 = Real(1) - w1 - w2;
     normal_out = na * w0 + nb * w1 + nc * w2;
     return gwn_try_normalize_impl(normal_out);
 }
@@ -322,39 +262,22 @@ __device__ inline gwn_hybrid_trace_result<Real, Index> gwn_hybrid_trace_ray_impl
     result.primitive_id = mesh_hit.primitive_id;
     result.hit_kind = gwn_hybrid_hit_kind::k_triangle;
     result.iterations = fill_hit.iterations;
-
-    Real const px = ray_ox + result.t * ray_dx;
-    Real const py = ray_oy + result.t * ray_dy;
-    Real const pz = ray_oz + result.t * ray_dz;
-    auto const wg =
-        gwn_winding_and_gradient_point_bvh_taylor_impl<Order, Width, Real, Index, StackCapacity>(
-            geometry, bvh, moment_tree, px, py, pz, arguments.accuracy_scale
-        );
-    result.winding = wg.winding;
+    result.winding = Real(0);
 
     gwn_query_vec3<Real> normal(Real(0), Real(0), Real(0));
-    gwn_query_vec3<Real> const hit_point(px, py, pz);
-    if (arguments.triangle_normal_policy ==
-        gwn_hybrid_triangle_normal_policy::k_barycentric_vertex) {
-        if (!gwn_triangle_barycentric_vertex_normal_from_primitive_impl<Real, Index>(
-                geometry, mesh_hit.primitive_id, hit_point, normal
-            )) {
-            if (!gwn_triangle_geometric_normal_from_primitive_impl<Real, Index>(
-                    geometry, mesh_hit.primitive_id, normal
-                )) {
-                normal = wg.gradient;
-                gwn_try_normalize_impl(normal);
-            }
-        }
-    } else if (!gwn_triangle_geometric_normal_from_primitive_impl<Real, Index>(
-                   geometry, mesh_hit.primitive_id, normal
-               )) {
-        normal = wg.gradient;
-        gwn_try_normalize_impl(normal);
-    }
+    bool normal_ok = false;
+    if (arguments.triangle_normal_policy == gwn_hybrid_triangle_normal_policy::k_barycentric_vertex)
+        normal_ok = gwn_triangle_barycentric_vertex_normal_from_primitive_impl<Real, Index>(
+            geometry, mesh_hit.primitive_id, mesh_hit.u, mesh_hit.v, normal
+        );
+    else if (arguments.triangle_normal_policy == gwn_hybrid_triangle_normal_policy::k_geometric)
+        normal_ok = gwn_triangle_geometric_normal_from_primitive_impl<Real, Index>(
+            geometry, mesh_hit.primitive_id, normal
+        );
 
-    if (!gwn_try_normalize_impl(normal))
+    if (!normal_ok)
         normal = gwn_query_vec3<Real>(Real(0), Real(0), Real(0));
+
     result.normal_x = normal.x;
     result.normal_y = normal.y;
     result.normal_z = normal.z;

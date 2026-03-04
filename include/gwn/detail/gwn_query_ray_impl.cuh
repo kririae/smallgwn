@@ -17,6 +17,8 @@ namespace detail {
 template <gwn_real_type Real, gwn_index_type Index> struct gwn_ray_first_hit_result {
     Real t{Real(-1)};
     Index primitive_id{gwn_invalid_index<Index>()};
+    Real u{Real(0)};
+    Real v{Real(0)};
 
     __host__ __device__ constexpr bool hit() const noexcept { return t >= Real(0); }
 };
@@ -30,6 +32,8 @@ template <gwn_real_type Real> struct gwn_ray_aabb_interval {
 template <gwn_real_type Real, gwn_index_type Index> struct gwn_ray_best_hit {
     Real t{Real(-1)};
     Index primitive_id{gwn_invalid_index<Index>()};
+    Real u{Real(0)};
+    Real v{Real(0)};
     bool found{false};
 };
 
@@ -159,7 +163,7 @@ template <gwn_real_type Real>
 __device__ inline bool gwn_ray_triangle_intersect_robust_impl(
     gwn_query_vec3<Real> const &origin, gwn_query_vec3<Real> const &direction,
     gwn_query_vec3<Real> const &v0, gwn_query_vec3<Real> const &v1, gwn_query_vec3<Real> const &v2,
-    Real const t_min, Real const t_max, Real &t_out
+    Real const t_min, Real const t_max, Real &t_out, Real &u_out, Real &v_out
 ) noexcept {
     // Embree reference:
     // kernels/geometry/triangle_intersector_pluecker.h (Apache-2.0)
@@ -196,6 +200,13 @@ __device__ inline bool gwn_ray_triangle_intersect_robust_impl(
     if (t < t_min || t > t_max)
         return false;
 
+    // Embree-style UV mapping for triangle (v0,v1,v2): u->v1 weight, v->v2 weight.
+    // Match Embree's guarded reciprocal path for near-zero UVW.
+    Real inv_uvw = Real(0);
+    if (abs(uvw) >= Real(1e-18))
+        inv_uvw = Real(1) / uvw;
+    u_out = std::min(u * inv_uvw, Real(1));
+    v_out = std::min(v * inv_uvw, Real(1));
     t_out = t;
     return true;
 }
@@ -238,14 +249,16 @@ template <gwn_real_type Real, gwn_index_type Index>
 __device__ inline bool gwn_ray_triangle_intersect_from_primitive_impl(
     gwn_geometry_accessor<Real, Index> const &geometry, Index const primitive_id,
     gwn_query_vec3<Real> const &origin, gwn_query_vec3<Real> const &direction, Real const t_min,
-    Real const t_max, Real &t_out
+    Real const t_max, Real &t_out, Real &u_out, Real &v_out
 ) noexcept {
     gwn_query_vec3<Real> a{};
     gwn_query_vec3<Real> b{};
     gwn_query_vec3<Real> c{};
     if (!gwn_ray_load_triangle_vertices_from_primitive_impl(geometry, primitive_id, a, b, c))
         return false;
-    return gwn_ray_triangle_intersect_robust_impl(origin, direction, a, b, c, t_min, t_max, t_out);
+    return gwn_ray_triangle_intersect_robust_impl(
+        origin, direction, a, b, c, t_min, t_max, t_out, u_out, v_out
+    );
 }
 
 template <int Width, gwn_real_type Real>
@@ -294,8 +307,10 @@ __device__ inline void gwn_ray_visit_leaf_primitive_range_impl(
 
         Index const primitive_id = bvh.primitive_indices[static_cast<std::size_t>(sorted_index)];
         Real t_hit = Real(0);
+        Real u_hit = Real(0);
+        Real v_hit = Real(0);
         if (!gwn_ray_triangle_intersect_from_primitive_impl<Real, Index>(
-                geometry, primitive_id, origin, direction, t_min, best.t, t_hit
+                geometry, primitive_id, origin, direction, t_min, best.t, t_hit, u_hit, v_hit
             )) {
             continue;
         }
@@ -303,6 +318,8 @@ __device__ inline void gwn_ray_visit_leaf_primitive_range_impl(
         if (!best.found || t_hit < best.t) {
             best.t = t_hit;
             best.primitive_id = primitive_id;
+            best.u = u_hit;
+            best.v = v_hit;
             best.found = true;
         }
     }
@@ -345,6 +362,8 @@ __device__ inline gwn_ray_first_hit_result<Real, Index> gwn_ray_first_hit_bvh_im
         if (best.found) {
             result.t = best.t;
             result.primitive_id = best.primitive_id;
+            result.u = best.u;
+            result.v = best.v;
         }
         return result;
     }
@@ -440,6 +459,8 @@ __device__ inline gwn_ray_first_hit_result<Real, Index> gwn_ray_first_hit_bvh_im
     if (best.found) {
         result.t = best.t;
         result.primitive_id = best.primitive_id;
+        result.u = best.u;
+        result.v = best.v;
     }
     return result;
 }

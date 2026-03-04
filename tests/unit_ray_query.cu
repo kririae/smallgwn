@@ -79,6 +79,32 @@ struct single_ray_api_functor {
     }
 };
 
+struct single_ray_api_uv_functor {
+    gwn::gwn_geometry_accessor<Real, Index> geometry{};
+    gwn::gwn_bvh4_topology_accessor<Real, Index> bvh{};
+    gwn::gwn_bvh4_aabb_accessor<Real, Index> aabb{};
+    cuda::std::span<Real const> ox{};
+    cuda::std::span<Real const> oy{};
+    cuda::std::span<Real const> oz{};
+    cuda::std::span<Real const> dx{};
+    cuda::std::span<Real const> dy{};
+    cuda::std::span<Real const> dz{};
+    cuda::std::span<Real> out_t{};
+    cuda::std::span<Index> out_pi{};
+    cuda::std::span<Real> out_u{};
+    cuda::std::span<Real> out_v{};
+
+    __device__ void operator()(std::size_t const i) const {
+        auto const hit = gwn::gwn_ray_first_hit_bvh<4, Real, Index>(
+            geometry, bvh, aabb, ox[i], oy[i], oz[i], dx[i], dy[i], dz[i]
+        );
+        out_t[i] = hit.t;
+        out_pi[i] = hit.primitive_id;
+        out_u[i] = hit.u;
+        out_v[i] = hit.v;
+    }
+};
+
 template <class Mesh>
 bool run_ray_first_hit_query(
     Mesh const &mesh, std::vector<Real> const &ox, std::vector<Real> const &oy,
@@ -230,6 +256,93 @@ bool run_ray_first_hit_query_single_api(
     }
     if (cudaDeviceSynchronize() != cudaSuccess) {
         ADD_FAILURE() << "CUDA synchronize failed after result copy";
+        return false;
+    }
+
+    return true;
+}
+
+template <class Mesh>
+bool run_ray_first_hit_query_single_api_with_uv(
+    Mesh const &mesh, std::vector<Real> const &ox, std::vector<Real> const &oy,
+    std::vector<Real> const &oz, std::vector<Real> const &dx, std::vector<Real> const &dy,
+    std::vector<Real> const &dz, std::vector<Real> &out_t, std::vector<Index> &out_pi,
+    std::vector<Real> &out_u, std::vector<Real> &out_v
+) {
+    gwn::gwn_geometry_object<Real, Index> geometry;
+    gwn::gwn_status s = gwn::gwn_upload_geometry(
+        geometry, cuda::std::span<Real const>(mesh.vx.data(), mesh.vx.size()),
+        cuda::std::span<Real const>(mesh.vy.data(), mesh.vy.size()),
+        cuda::std::span<Real const>(mesh.vz.data(), mesh.vz.size()),
+        cuda::std::span<Index const>(mesh.i0.data(), mesh.i0.size()),
+        cuda::std::span<Index const>(mesh.i1.data(), mesh.i1.size()),
+        cuda::std::span<Index const>(mesh.i2.data(), mesh.i2.size())
+    );
+    if (s.error() == gwn::gwn_error::cuda_runtime_error)
+        return false;
+    if (!s.is_ok()) {
+        ADD_FAILURE() << "geometry upload: " << gwn::tests::status_to_debug_string(s);
+        return false;
+    }
+
+    gwn::gwn_bvh4_topology_object<Real, Index> bvh;
+    gwn::gwn_bvh4_aabb_object<Real, Index> aabb;
+    s = gwn::gwn_bvh_facade_build_topology_aabb_lbvh<4, Real, Index>(geometry, bvh, aabb);
+    if (!s.is_ok()) {
+        ADD_FAILURE() << "BVH build: " << gwn::tests::status_to_debug_string(s);
+        return false;
+    }
+
+    std::size_t const n = ox.size();
+    gwn::gwn_device_array<Real> d_ox, d_oy, d_oz, d_dx, d_dy, d_dz, d_t, d_u, d_v;
+    gwn::gwn_device_array<Index> d_pi;
+    bool ok = d_ox.resize(n).is_ok() && d_oy.resize(n).is_ok() && d_oz.resize(n).is_ok() &&
+              d_dx.resize(n).is_ok() && d_dy.resize(n).is_ok() && d_dz.resize(n).is_ok() &&
+              d_t.resize(n).is_ok() && d_pi.resize(n).is_ok() && d_u.resize(n).is_ok() &&
+              d_v.resize(n).is_ok();
+    ok = ok && d_ox.copy_from_host(cuda::std::span<Real const>(ox.data(), n)).is_ok() &&
+         d_oy.copy_from_host(cuda::std::span<Real const>(oy.data(), n)).is_ok() &&
+         d_oz.copy_from_host(cuda::std::span<Real const>(oz.data(), n)).is_ok() &&
+         d_dx.copy_from_host(cuda::std::span<Real const>(dx.data(), n)).is_ok() &&
+         d_dy.copy_from_host(cuda::std::span<Real const>(dy.data(), n)).is_ok() &&
+         d_dz.copy_from_host(cuda::std::span<Real const>(dz.data(), n)).is_ok();
+    if (!ok) {
+        ADD_FAILURE() << "device allocation/upload failed";
+        return false;
+    }
+
+    constexpr int k_block_size = gwn::detail::k_gwn_default_block_size;
+    s = gwn::detail::gwn_launch_linear_kernel<k_block_size>(
+        n, single_ray_api_uv_functor{
+               geometry.accessor(), bvh.accessor(), aabb.accessor(), d_ox.span(), d_oy.span(),
+               d_oz.span(), d_dx.span(), d_dy.span(), d_dz.span(), d_t.span(), d_pi.span(),
+               d_u.span(), d_v.span()
+           }
+    );
+    if (!s.is_ok()) {
+        ADD_FAILURE() << "ray first-hit single API uv query: "
+                      << gwn::tests::status_to_debug_string(s);
+        return false;
+    }
+    if (cudaDeviceSynchronize() != cudaSuccess) {
+        ADD_FAILURE() << "CUDA synchronize failed after single API uv query";
+        return false;
+    }
+
+    out_t.resize(n);
+    out_pi.resize(n);
+    out_u.resize(n);
+    out_v.resize(n);
+    ok = d_t.copy_to_host(cuda::std::span<Real>(out_t.data(), n)).is_ok() &&
+         d_pi.copy_to_host(cuda::std::span<Index>(out_pi.data(), n)).is_ok() &&
+         d_u.copy_to_host(cuda::std::span<Real>(out_u.data(), n)).is_ok() &&
+         d_v.copy_to_host(cuda::std::span<Real>(out_v.data(), n)).is_ok();
+    if (!ok) {
+        ADD_FAILURE() << "device-to-host copy failed";
+        return false;
+    }
+    if (cudaDeviceSynchronize() != cudaSuccess) {
+        ADD_FAILURE() << "CUDA synchronize failed after uv result copy";
         return false;
     }
 
@@ -699,6 +812,33 @@ TEST_F(CudaFixture, ray_first_hit_single_api_matches_batch_api) {
         EXPECT_NEAR(t_single[i], t_batch[i], Real(1e-6)) << "t mismatch at ray " << i;
         EXPECT_EQ(pi_single[i], pi_batch[i]) << "primitive id mismatch at ray " << i;
     }
+}
+
+TEST_F(CudaFixture, ray_first_hit_single_api_reports_embree_style_uv_barycentrics) {
+    SingleTriangleMesh mesh;
+    std::vector<Real> ox{Real(0.2)};
+    std::vector<Real> oy{Real(0.3)};
+    std::vector<Real> oz{Real(1.0)};
+    std::vector<Real> dx{Real(0)};
+    std::vector<Real> dy{Real(0)};
+    std::vector<Real> dz{Real(-1)};
+
+    std::vector<Real> t;
+    std::vector<Index> pi;
+    std::vector<Real> u;
+    std::vector<Real> v;
+    if (!run_ray_first_hit_query_single_api_with_uv(mesh, ox, oy, oz, dx, dy, dz, t, pi, u, v))
+        GTEST_SKIP() << "CUDA unavailable";
+
+    ASSERT_EQ(t.size(), 1u);
+    ASSERT_EQ(pi.size(), 1u);
+    ASSERT_EQ(u.size(), 1u);
+    ASSERT_EQ(v.size(), 1u);
+    EXPECT_EQ(pi[0], Index(0));
+    EXPECT_NEAR(t[0], Real(1), Real(1e-6));
+    EXPECT_NEAR(u[0], Real(0.2), Real(1e-5));
+    EXPECT_NEAR(v[0], Real(0.3), Real(1e-5));
+    EXPECT_NEAR(u[0] + v[0], Real(0.5), Real(1e-5));
 }
 
 TEST_F(CudaFixture, ray_first_hit_benchmark_mix_contains_hits_and_misses) {
