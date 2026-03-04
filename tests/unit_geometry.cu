@@ -1,5 +1,6 @@
 #include <array>
 #include <type_traits>
+#include <limits>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -103,6 +104,90 @@ TEST(smallgwn_unit_geometry, boundary_edge_mask_non_manifold_shared_edge_marks_b
     EXPECT_EQ(mask[0], std::uint8_t(0x7u));
     EXPECT_EQ(mask[1], std::uint8_t(0x7u));
     EXPECT_EQ(mask[2], std::uint8_t(0x7u));
+}
+
+TEST_F(CudaFixture, boundary_edge_mask_reports_expected_singular_edge_count) {
+    // Tri 0: (0,1,2)
+    // Tri 1: (1,0,3)
+    // Tri 2: (0,1,4)
+    // Shared geometric edge (0,1) has 3 incident triangles => singular.
+    // Remaining six edges are boundary because they appear once.
+    // Total singular edges = 7.
+    std::array<Index, 3> const i0_host{0, 1, 0};
+    std::array<Index, 3> const i1_host{1, 0, 1};
+    std::array<Index, 3> const i2_host{2, 3, 4};
+
+    gwn::gwn_device_array<Index> i0_dev;
+    gwn::gwn_device_array<Index> i1_dev;
+    gwn::gwn_device_array<Index> i2_dev;
+    gwn::gwn_device_array<std::uint8_t> mask_dev;
+
+    gwn::gwn_status status = i0_dev.copy_from_host(
+        cuda::std::span<Index const>(i0_host.data(), i0_host.size()), gwn::gwn_default_stream()
+    );
+    SMALLGWN_SKIP_IF_STATUS_CUDA_UNAVAILABLE(status);
+    ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
+    ASSERT_TRUE((i1_dev.copy_from_host(
+                     cuda::std::span<Index const>(i1_host.data(), i1_host.size()),
+                     gwn::gwn_default_stream()
+                 ))
+                    .is_ok());
+    ASSERT_TRUE((i2_dev.copy_from_host(
+                     cuda::std::span<Index const>(i2_host.data(), i2_host.size()),
+                     gwn::gwn_default_stream()
+                 ))
+                    .is_ok());
+    ASSERT_TRUE(mask_dev.resize(i0_host.size(), gwn::gwn_default_stream()).is_ok());
+
+    Index singular_edge_count = Index(0);
+    status = gwn::detail::gwn_compute_triangle_boundary_edge_mask_device_impl<Index>(
+        i0_dev.span(), i1_dev.span(), i2_dev.span(), mask_dev.span(), &singular_edge_count,
+        gwn::gwn_default_stream()
+    );
+    SMALLGWN_SKIP_IF_STATUS_CUDA_UNAVAILABLE(status);
+    ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
+
+    std::array<std::uint8_t, 3> host_mask{0, 0, 0};
+    status = mask_dev.copy_to_host(
+        cuda::std::span<std::uint8_t>(host_mask.data(), host_mask.size()), gwn::gwn_default_stream()
+    );
+    ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    EXPECT_EQ(host_mask[0], std::uint8_t(0x7u));
+    EXPECT_EQ(host_mask[1], std::uint8_t(0x7u));
+    EXPECT_EQ(host_mask[2], std::uint8_t(0x7u));
+    EXPECT_EQ(singular_edge_count, Index(7));
+}
+
+TEST_F(CudaFixture, boundary_edge_mask_rejects_edge_count_above_int_max) {
+    constexpr std::size_t k_triangle_count =
+        (static_cast<std::size_t>(std::numeric_limits<int>::max()) / 3u) + 1u;
+
+    gwn::gwn_device_array<Index> i0_dev;
+    gwn::gwn_device_array<Index> i1_dev;
+    gwn::gwn_device_array<Index> i2_dev;
+    gwn::gwn_device_array<std::uint8_t> mask_dev;
+
+    gwn::gwn_status status = i0_dev.resize(1, gwn::gwn_default_stream());
+    SMALLGWN_SKIP_IF_STATUS_CUDA_UNAVAILABLE(status);
+    ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
+    ASSERT_TRUE(i1_dev.resize(1, gwn::gwn_default_stream()).is_ok());
+    ASSERT_TRUE(i2_dev.resize(1, gwn::gwn_default_stream()).is_ok());
+    ASSERT_TRUE(mask_dev.resize(1, gwn::gwn_default_stream()).is_ok());
+
+    cuda::std::span<Index const> const i0_span(i0_dev.data(), k_triangle_count);
+    cuda::std::span<Index const> const i1_span(i1_dev.data(), k_triangle_count);
+    cuda::std::span<Index const> const i2_span(i2_dev.data(), k_triangle_count);
+    cuda::std::span<std::uint8_t> const mask_span(mask_dev.data(), k_triangle_count);
+
+    Index singular_edge_count = Index(0);
+    status = gwn::detail::gwn_compute_triangle_boundary_edge_mask_device_impl<Index>(
+        i0_span, i1_span, i2_span, mask_span, &singular_edge_count, gwn::gwn_default_stream()
+    );
+    SMALLGWN_SKIP_IF_STATUS_CUDA_UNAVAILABLE(status);
+    EXPECT_FALSE(status.is_ok());
+    EXPECT_EQ(status.error(), gwn::gwn_error::invalid_argument);
 }
 
 TEST(smallgwn_unit_geometry, boundary_edge_mask_rejects_mismatched_output_size) {
