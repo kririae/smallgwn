@@ -16,6 +16,7 @@
 #include "detail/gwn_harnack_trace_impl.cuh"
 #include "detail/gwn_query_geometry_impl.cuh"
 #include "detail/gwn_query_gradient_impl.cuh"
+#include "detail/gwn_query_hybrid_impl.cuh"
 #include "detail/gwn_query_ray_impl.cuh"
 #include "detail/gwn_query_winding_impl.cuh"
 #include "gwn_bvh.cuh"
@@ -52,6 +53,37 @@ inline gwn_status gwn_validate_ray_first_hit_batch_spans(
         !gwn_span_has_storage(output_t) || !gwn_span_has_storage(output_primitive_id)) {
         return gwn_status::invalid_argument(
             "ray first-hit: ray/output spans must use non-null storage when non-empty."
+        );
+    }
+
+    return gwn_status::ok();
+}
+
+template <gwn_real_type Real, gwn_index_type Index>
+inline gwn_status gwn_validate_hybrid_trace_batch_spans(
+    cuda::std::span<Real const> const ray_origin_x, cuda::std::span<Real const> const ray_origin_y,
+    cuda::std::span<Real const> const ray_origin_z, cuda::std::span<Real const> const ray_dir_x,
+    cuda::std::span<Real const> const ray_dir_y, cuda::std::span<Real const> const ray_dir_z,
+    cuda::std::span<Real> const output_t, cuda::std::span<Real> const output_normal_x,
+    cuda::std::span<Real> const output_normal_y, cuda::std::span<Real> const output_normal_z,
+    cuda::std::span<Index> const output_primitive_id
+) noexcept {
+    std::size_t const n = ray_origin_x.size();
+    if (ray_origin_y.size() != n || ray_origin_z.size() != n || ray_dir_x.size() != n ||
+        ray_dir_y.size() != n || ray_dir_z.size() != n || output_t.size() != n ||
+        output_normal_x.size() != n || output_normal_y.size() != n || output_normal_z.size() != n ||
+        output_primitive_id.size() != n) {
+        return gwn_status::invalid_argument("hybrid trace: mismatched span sizes");
+    }
+
+    if (!gwn_span_has_storage(ray_origin_x) || !gwn_span_has_storage(ray_origin_y) ||
+        !gwn_span_has_storage(ray_origin_z) || !gwn_span_has_storage(ray_dir_x) ||
+        !gwn_span_has_storage(ray_dir_y) || !gwn_span_has_storage(ray_dir_z) ||
+        !gwn_span_has_storage(output_t) || !gwn_span_has_storage(output_normal_x) ||
+        !gwn_span_has_storage(output_normal_y) || !gwn_span_has_storage(output_normal_z) ||
+        !gwn_span_has_storage(output_primitive_id)) {
+        return gwn_status::invalid_argument(
+            "hybrid trace: ray/output spans must use non-null storage when non-empty."
         );
     }
 
@@ -310,6 +342,26 @@ gwn_status gwn_compute_winding_gradient_batch_bvh_taylor(
 template <gwn_real_type Real>
 using gwn_harnack_trace_result = detail::gwn_harnack_trace_result<Real>;
 
+/// \brief Hybrid trace result type.
+template <gwn_real_type Real, gwn_index_type Index = std::uint32_t>
+using gwn_hybrid_trace_result = detail::gwn_hybrid_trace_result<Real, Index>;
+
+/// \brief Hybrid hit classification.
+using gwn_hybrid_hit_kind = detail::gwn_hybrid_hit_kind;
+
+/// \brief Hybrid triangle-hit normal policy.
+using gwn_hybrid_triangle_normal_policy = detail::gwn_hybrid_triangle_normal_policy;
+
+/// \brief Embree-style hybrid trace arguments.
+template <gwn_real_type Real>
+using gwn_hybrid_trace_arguments = detail::gwn_hybrid_trace_arguments<Real>;
+
+/// \brief Initialize \ref gwn_hybrid_trace_arguments with default values.
+template <gwn_real_type Real>
+inline void gwn_init_hybrid_trace_arguments(gwn_hybrid_trace_arguments<Real> &arguments) noexcept {
+    detail::gwn_init_hybrid_trace_arguments_impl(arguments);
+}
+
 /// \brief Trace a single ray through the winding-number level set using the
 ///        Harnack inequality for guaranteed step safety (\c __device__ only).
 ///
@@ -439,6 +491,126 @@ gwn_status gwn_compute_harnack_trace_batch_bvh_taylor(
         geometry, bvh, aabb_tree, moment_tree, ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x,
         ray_dir_y, ray_dir_z, output_t, output_normal_x, output_normal_y, output_normal_z,
         target_winding, epsilon, max_iterations, t_max, accuracy_scale, stream
+    );
+}
+
+/// \brief Trace a single ray using hybrid first-hit:
+///        ray-triangle first-hit + conditioned Harnack fill.
+///
+/// The routine always invokes ray-triangle first-hit first. If the mesh is
+/// globally closed (\c geometry.singular_edge_count == 0), Harnack fill is
+/// skipped.
+template <
+    int Order, int Width, gwn_real_type Real, gwn_index_type Index,
+    int StackCapacity = k_gwn_default_traversal_stack_capacity>
+__device__ inline gwn_hybrid_trace_result<Real, Index> gwn_hybrid_trace_ray_bvh_taylor(
+    gwn_geometry_accessor<Real, Index> const &geometry,
+    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
+    gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree,
+    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &moment_tree, Real const ray_ox,
+    Real const ray_oy, Real const ray_oz, Real const ray_dx, Real const ray_dy, Real const ray_dz,
+    gwn_hybrid_trace_arguments<Real> const &arguments = gwn_hybrid_trace_arguments<Real>{}
+) noexcept {
+    static_assert(
+        Order == 0 || Order == 1 || Order == 2,
+        "gwn_hybrid_trace_ray_bvh_taylor currently supports Order 0, 1, and 2."
+    );
+    return detail::gwn_hybrid_trace_ray_impl<Order, Width, Real, Index, StackCapacity>(
+        geometry, bvh, aabb_tree, moment_tree, ray_ox, ray_oy, ray_oz, ray_dx, ray_dy, ray_dz,
+        arguments
+    );
+}
+
+/// \brief Batch hybrid trace (ray-triangle first-hit + conditioned Harnack).
+template <
+    int Order, int Width, gwn_real_type Real, gwn_index_type Index = std::uint32_t,
+    int StackCapacity = k_gwn_default_traversal_stack_capacity>
+gwn_status gwn_compute_hybrid_trace_batch_bvh_taylor(
+    gwn_geometry_accessor<Real, Index> const &geometry,
+    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
+    gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree,
+    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &moment_tree,
+    cuda::std::span<Real const> const ray_origin_x, cuda::std::span<Real const> const ray_origin_y,
+    cuda::std::span<Real const> const ray_origin_z, cuda::std::span<Real const> const ray_dir_x,
+    cuda::std::span<Real const> const ray_dir_y, cuda::std::span<Real const> const ray_dir_z,
+    cuda::std::span<Real> const output_t, cuda::std::span<Real> const output_normal_x,
+    cuda::std::span<Real> const output_normal_y, cuda::std::span<Real> const output_normal_z,
+    cuda::std::span<Index> const output_primitive_id,
+    gwn_hybrid_trace_arguments<Real> const &arguments = gwn_hybrid_trace_arguments<Real>{},
+    cudaStream_t const stream = gwn_default_stream()
+) noexcept {
+    static_assert(
+        Order == 0 || Order == 1 || Order == 2,
+        "gwn_compute_hybrid_trace_batch_bvh_taylor currently supports Order 0, 1, and 2."
+    );
+    static_assert(StackCapacity > 0, "Traversal stack capacity must be positive.");
+
+    if (!geometry.is_valid())
+        return gwn_status::invalid_argument("Geometry accessor contains mismatched span lengths.");
+    if (!bvh.is_valid())
+        return gwn_status::invalid_argument("BVH accessor is invalid.");
+    if (!aabb_tree.is_valid_for(bvh))
+        return gwn_status::invalid_argument("BVH AABB tree is invalid for the given topology.");
+    if (!moment_tree.is_valid_for(bvh))
+        return gwn_status::invalid_argument("BVH data tree is invalid for the given topology.");
+    if (!(arguments.t_max >= arguments.t_min))
+        return gwn_status::invalid_argument("hybrid trace: requires arguments.t_max >= t_min.");
+
+    gwn_status const span_status = detail::gwn_validate_hybrid_trace_batch_spans<Real, Index>(
+        ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x, ray_dir_y, ray_dir_z, output_t,
+        output_normal_x, output_normal_y, output_normal_z, output_primitive_id
+    );
+    if (!span_status.is_ok())
+        return span_status;
+
+    std::size_t const n = ray_origin_x.size();
+    if (n == 0)
+        return gwn_status::ok();
+
+    detail::gwn_hybrid_trace_batch_functor<Order, Width, Real, Index, StackCapacity> functor{};
+    functor.geometry = geometry;
+    functor.bvh = bvh;
+    functor.aabb_tree = aabb_tree;
+    functor.moment_tree = moment_tree;
+    functor.ray_origin_x = ray_origin_x;
+    functor.ray_origin_y = ray_origin_y;
+    functor.ray_origin_z = ray_origin_z;
+    functor.ray_dir_x = ray_dir_x;
+    functor.ray_dir_y = ray_dir_y;
+    functor.ray_dir_z = ray_dir_z;
+    functor.output_t = output_t;
+    functor.output_normal_x = output_normal_x;
+    functor.output_normal_y = output_normal_y;
+    functor.output_normal_z = output_normal_z;
+    functor.output_primitive_id = output_primitive_id;
+    functor.arguments = arguments;
+
+    constexpr int k_block_size = detail::k_gwn_default_block_size;
+    return detail::gwn_launch_linear_kernel<k_block_size>(n, functor, stream);
+}
+
+/// \brief Width-4 convenience wrapper for batch hybrid trace.
+template <
+    int Order, gwn_real_type Real, gwn_index_type Index = std::uint32_t,
+    int StackCapacity = k_gwn_default_traversal_stack_capacity>
+gwn_status gwn_compute_hybrid_trace_batch_bvh_taylor(
+    gwn_geometry_accessor<Real, Index> const &geometry,
+    gwn_bvh4_topology_accessor<Real, Index> const &bvh,
+    gwn_bvh4_aabb_accessor<Real, Index> const &aabb_tree,
+    gwn_bvh4_moment_accessor<Order, Real, Index> const &moment_tree,
+    cuda::std::span<Real const> const ray_origin_x, cuda::std::span<Real const> const ray_origin_y,
+    cuda::std::span<Real const> const ray_origin_z, cuda::std::span<Real const> const ray_dir_x,
+    cuda::std::span<Real const> const ray_dir_y, cuda::std::span<Real const> const ray_dir_z,
+    cuda::std::span<Real> const output_t, cuda::std::span<Real> const output_normal_x,
+    cuda::std::span<Real> const output_normal_y, cuda::std::span<Real> const output_normal_z,
+    cuda::std::span<Index> const output_primitive_id,
+    gwn_hybrid_trace_arguments<Real> const &arguments = gwn_hybrid_trace_arguments<Real>{},
+    cudaStream_t const stream = gwn_default_stream()
+) noexcept {
+    return gwn_compute_hybrid_trace_batch_bvh_taylor<Order, 4, Real, Index, StackCapacity>(
+        geometry, bvh, aabb_tree, moment_tree, ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x,
+        ray_dir_y, ray_dir_z, output_t, output_normal_x, output_normal_y, output_normal_z,
+        output_primitive_id, arguments, stream
     );
 }
 

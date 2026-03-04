@@ -48,10 +48,11 @@ __device__ inline void gwn_sort_children_by_dist2_impl(
 }
 
 /// \brief Result of a closest-triangle-normal query.
-template <gwn_real_type Real> struct gwn_closest_triangle_normal_result {
+template <gwn_real_type Real, gwn_index_type Index> struct gwn_closest_triangle_normal_result {
     Real normal_x{Real(0)};
     Real normal_y{Real(0)};
     Real normal_z{Real(0)};
+    Index primitive_id{gwn_invalid_index<Index>()};
 };
 
 template <gwn_real_type Real, gwn_index_type Index>
@@ -91,7 +92,7 @@ __device__ inline void gwn_visit_leaf_primitive_range_for_closest_triangle_impl(
 /// Traverses BVH nodes by lower-bound box distance, tracks the closest
 /// primitive ID, and returns its unit face normal.
 template <int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity>
-__device__ inline gwn_closest_triangle_normal_result<Real>
+__device__ inline gwn_closest_triangle_normal_result<Real, Index>
 gwn_closest_triangle_normal_point_bvh_impl(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
@@ -101,7 +102,7 @@ gwn_closest_triangle_normal_point_bvh_impl(
     static_assert(Width >= 2, "BVH width must be at least 2.");
     static_assert(StackCapacity > 0, "Traversal stack capacity must be positive.");
 
-    gwn_closest_triangle_normal_result<Real> result;
+    gwn_closest_triangle_normal_result<Real, Index> result;
     if (!geometry.is_valid() || !bvh.is_valid() || !aabb_tree.is_valid_for(bvh))
         return result;
 
@@ -235,6 +236,7 @@ gwn_closest_triangle_normal_point_bvh_impl(
     result.normal_x = n.x * inv_n;
     result.normal_y = n.y * inv_n;
     result.normal_z = n.z * inv_n;
+    result.primitive_id = best_primitive_id;
     return result;
 }
 
