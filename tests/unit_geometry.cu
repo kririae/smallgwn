@@ -22,7 +22,7 @@ TEST(smallgwn_unit_geometry, default_accessor_is_empty_and_valid) {
     gwn::gwn_geometry_accessor<Real, Index> accessor{};
     EXPECT_TRUE(accessor.is_valid());
     EXPECT_FALSE(accessor.has_singular_edges());
-    EXPECT_EQ(accessor.singular_edge_count, std::size_t(0));
+    EXPECT_EQ(accessor.singular_edge_count, Index(0));
     EXPECT_EQ(accessor.vertex_count(), 0u);
     EXPECT_EQ(accessor.triangle_count(), 0u);
     EXPECT_EQ(accessor.tri_boundary_edge_mask.size(), 0u);
@@ -175,7 +175,7 @@ TEST_F(CudaFixture, upload_valid_single_triangle) {
     EXPECT_EQ(geometry.triangle_count(), 1u);
     EXPECT_TRUE(geometry.accessor().is_valid());
     EXPECT_TRUE(geometry.accessor().has_singular_edges());
-    EXPECT_EQ(geometry.accessor().singular_edge_count, std::size_t(3));
+    EXPECT_EQ(geometry.accessor().singular_edge_count, Index(3));
 
     std::vector<std::uint8_t> host_mask(1, 0);
     gwn::gwn_status const copy_status = gwn::detail::gwn_copy_d2h<std::uint8_t>(
@@ -207,7 +207,7 @@ TEST_F(CudaFixture, upload_closed_tetra_has_zero_singular_edges) {
     SMALLGWN_SKIP_IF_STATUS_CUDA_UNAVAILABLE(status);
     ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
     EXPECT_FALSE(geometry.accessor().has_singular_edges());
-    EXPECT_EQ(geometry.accessor().singular_edge_count, std::size_t(0));
+    EXPECT_EQ(geometry.accessor().singular_edge_count, Index(0));
 }
 
 TEST_F(CudaFixture, upload_open_tetra_has_nonzero_singular_edges) {
@@ -230,7 +230,7 @@ TEST_F(CudaFixture, upload_open_tetra_has_nonzero_singular_edges) {
     SMALLGWN_SKIP_IF_STATUS_CUDA_UNAVAILABLE(status);
     ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
     EXPECT_TRUE(geometry.accessor().has_singular_edges());
-    EXPECT_GT(geometry.accessor().singular_edge_count, std::size_t(0));
+    EXPECT_GT(geometry.accessor().singular_edge_count, Index(0));
 }
 
 // Upload, error paths: SoA length mismatch.

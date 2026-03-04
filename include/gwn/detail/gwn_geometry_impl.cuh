@@ -12,6 +12,7 @@
 #include <cub/cub.cuh>
 
 #include "../gwn_kernel_utils.cuh"
+#include "gwn_bvh_status_helpers.cuh"
 
 namespace gwn {
 namespace detail {
@@ -30,7 +31,7 @@ void gwn_release_accessor(
         accessor.vertex_nz, accessor.vertex_ny, accessor.vertex_nx, accessor.vertex_z,
         accessor.vertex_y, accessor.vertex_x
     );
-    accessor.singular_edge_count = 0;
+    accessor.singular_edge_count = Index(0);
 }
 
 template <gwn_index_type Index> struct gwn_boundary_edge_payload_hi {
@@ -253,8 +254,7 @@ template <gwn_index_type Index>
 gwn_status gwn_compute_triangle_boundary_edge_mask_device_impl(
     cuda::std::span<Index const> const i0, cuda::std::span<Index const> const i1,
     cuda::std::span<Index const> const i2, cuda::std::span<std::uint8_t const> const out_mask,
-    std::size_t *const out_singular_edge_count = nullptr,
-    cudaStream_t const stream = gwn_default_stream()
+    Index *const out_singular_edge_count = nullptr, cudaStream_t const stream = gwn_default_stream()
 ) noexcept {
     std::size_t const triangle_count = i0.size();
     if (i1.size() != triangle_count || i2.size() != triangle_count)
@@ -273,7 +273,7 @@ gwn_status gwn_compute_triangle_boundary_edge_mask_device_impl(
 
     if (triangle_count == 0) {
         if (out_singular_edge_count != nullptr)
-            *out_singular_edge_count = 0;
+            *out_singular_edge_count = Index(0);
         return gwn_status::ok();
     }
 
@@ -380,18 +380,13 @@ gwn_status gwn_compute_triangle_boundary_edge_mask_device_impl(
         GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaStreamSynchronize(stream)));
 
         if (host_singular_edge_count >
-            static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+            static_cast<std::uint64_t>(std::numeric_limits<Index>::max())) {
             return gwn_status::internal_error("Singular-edge count overflow.");
         }
-        *out_singular_edge_count = static_cast<std::size_t>(host_singular_edge_count);
+        *out_singular_edge_count = static_cast<Index>(host_singular_edge_count);
     }
 
     return gwn_status::ok();
-}
-
-template <gwn_real_type Real>
-__device__ inline void gwn_atomic_add_real(Real *const address, Real const value) noexcept {
-    atomicAdd(address, value);
 }
 
 template <gwn_real_type Real, gwn_index_type Index> struct gwn_accumulate_vertex_normals_functor {
@@ -431,15 +426,15 @@ template <gwn_real_type Real, gwn_index_type Index> struct gwn_accumulate_vertex
         Real const ny = ab_z * ac_x - ab_x * ac_z;
         Real const nz = ab_x * ac_y - ab_y * ac_x;
 
-        gwn_atomic_add_real(vertex_nx + ia, nx);
-        gwn_atomic_add_real(vertex_ny + ia, ny);
-        gwn_atomic_add_real(vertex_nz + ia, nz);
-        gwn_atomic_add_real(vertex_nx + ib, nx);
-        gwn_atomic_add_real(vertex_ny + ib, ny);
-        gwn_atomic_add_real(vertex_nz + ib, nz);
-        gwn_atomic_add_real(vertex_nx + ic, nx);
-        gwn_atomic_add_real(vertex_ny + ic, ny);
-        gwn_atomic_add_real(vertex_nz + ic, nz);
+        atomicAdd(vertex_nx + ia, nx);
+        atomicAdd(vertex_ny + ia, ny);
+        atomicAdd(vertex_nz + ia, nz);
+        atomicAdd(vertex_nx + ib, nx);
+        atomicAdd(vertex_ny + ib, ny);
+        atomicAdd(vertex_nz + ib, nz);
+        atomicAdd(vertex_nx + ic, nx);
+        atomicAdd(vertex_ny + ic, ny);
+        atomicAdd(vertex_nz + ic, nz);
     }
 };
 
@@ -545,119 +540,112 @@ gwn_status gwn_upload_accessor(
     cuda::std::span<Index const> const i0, cuda::std::span<Index const> const i1,
     cuda::std::span<Index const> const i2, cudaStream_t const stream
 ) {
-    if (x.size() != y.size() || x.size() != z.size())
-        return gwn_status::invalid_argument("Vertex SoA spans must have identical lengths.");
-    if (i0.size() != i1.size() || i0.size() != i2.size())
-        return gwn_status::invalid_argument("Triangle SoA spans must have identical lengths.");
+    auto const release = [&](gwn_geometry_accessor<Real, Index> &target, cudaStream_t s) noexcept {
+        gwn_release_accessor(target, s);
+    };
 
-    if (!gwn_span_has_storage(x) || !gwn_span_has_storage(y) || !gwn_span_has_storage(z) ||
-        !gwn_span_has_storage(i0) || !gwn_span_has_storage(i1) || !gwn_span_has_storage(i2)) {
-        return gwn_status::invalid_argument(
-            "Geometry spans must use non-null storage when non-empty."
+    auto const build = [&](gwn_geometry_accessor<Real, Index> &staging) -> gwn_status {
+        if (x.size() != y.size() || x.size() != z.size())
+            return gwn_status::invalid_argument("Vertex SoA spans must have identical lengths.");
+        if (i0.size() != i1.size() || i0.size() != i2.size())
+            return gwn_status::invalid_argument("Triangle SoA spans must have identical lengths.");
+
+        if (!gwn_span_has_storage(x) || !gwn_span_has_storage(y) || !gwn_span_has_storage(z) ||
+            !gwn_span_has_storage(i0) || !gwn_span_has_storage(i1) || !gwn_span_has_storage(i2)) {
+            return gwn_status::invalid_argument(
+                "Geometry spans must use non-null storage when non-empty."
+            );
+        }
+
+        GWN_RETURN_ON_ERROR(gwn_allocate_span(staging.vertex_x, x.size(), stream));
+        GWN_RETURN_ON_ERROR(gwn_allocate_span(staging.vertex_y, y.size(), stream));
+        GWN_RETURN_ON_ERROR(gwn_allocate_span(staging.vertex_z, z.size(), stream));
+        GWN_RETURN_ON_ERROR(gwn_allocate_span(staging.vertex_nx, x.size(), stream));
+        GWN_RETURN_ON_ERROR(gwn_allocate_span(staging.vertex_ny, y.size(), stream));
+        GWN_RETURN_ON_ERROR(gwn_allocate_span(staging.vertex_nz, z.size(), stream));
+        GWN_RETURN_ON_ERROR(gwn_allocate_span(staging.tri_i0, i0.size(), stream));
+        GWN_RETURN_ON_ERROR(gwn_allocate_span(staging.tri_i1, i1.size(), stream));
+        GWN_RETURN_ON_ERROR(gwn_allocate_span(staging.tri_i2, i2.size(), stream));
+        GWN_RETURN_ON_ERROR(gwn_allocate_span(staging.tri_boundary_edge_mask, i0.size(), stream));
+
+        GWN_RETURN_ON_ERROR(gwn_copy_h2d(staging.vertex_x, x, stream));
+        GWN_RETURN_ON_ERROR(gwn_copy_h2d(staging.vertex_y, y, stream));
+        GWN_RETURN_ON_ERROR(gwn_copy_h2d(staging.vertex_z, z, stream));
+        GWN_RETURN_ON_ERROR(gwn_copy_h2d(staging.tri_i0, i0, stream));
+        GWN_RETURN_ON_ERROR(gwn_copy_h2d(staging.tri_i1, i1, stream));
+        GWN_RETURN_ON_ERROR(gwn_copy_h2d(staging.tri_i2, i2, stream));
+
+        GWN_RETURN_ON_ERROR(
+            gwn_validate_triangle_indices_device_impl<Index>(
+                staging.tri_i0, staging.tri_i1, staging.tri_i2, x.size(), stream
+            )
         );
-    }
 
-    gwn_geometry_accessor<Real, Index> staging{};
-    auto cleanup_staging =
-        gwn_make_scope_exit([&]() noexcept { gwn_release_accessor(staging, stream); });
+        Index singular_edge_count = Index(0);
+        GWN_RETURN_ON_ERROR(
+            gwn_compute_triangle_boundary_edge_mask_device_impl<Index>(
+                staging.tri_i0, staging.tri_i1, staging.tri_i2, staging.tri_boundary_edge_mask,
+                &singular_edge_count, stream
+            )
+        );
 
-    GWN_RETURN_ON_ERROR(gwn_allocate_span(staging.vertex_x, x.size(), stream));
-    GWN_RETURN_ON_ERROR(gwn_allocate_span(staging.vertex_y, y.size(), stream));
-    GWN_RETURN_ON_ERROR(gwn_allocate_span(staging.vertex_z, z.size(), stream));
-    GWN_RETURN_ON_ERROR(gwn_allocate_span(staging.vertex_nx, x.size(), stream));
-    GWN_RETURN_ON_ERROR(gwn_allocate_span(staging.vertex_ny, y.size(), stream));
-    GWN_RETURN_ON_ERROR(gwn_allocate_span(staging.vertex_nz, z.size(), stream));
-    GWN_RETURN_ON_ERROR(gwn_allocate_span(staging.tri_i0, i0.size(), stream));
-    GWN_RETURN_ON_ERROR(gwn_allocate_span(staging.tri_i1, i1.size(), stream));
-    GWN_RETURN_ON_ERROR(gwn_allocate_span(staging.tri_i2, i2.size(), stream));
-    GWN_RETURN_ON_ERROR(gwn_allocate_span(staging.tri_boundary_edge_mask, i0.size(), stream));
+        GWN_RETURN_ON_ERROR((gwn_compute_vertex_normals_device_impl<Real, Index>(
+            staging.vertex_x, staging.vertex_y, staging.vertex_z, staging.tri_i0, staging.tri_i1,
+            staging.tri_i2, staging.vertex_nx, staging.vertex_ny, staging.vertex_nz, stream
+        )));
 
-    GWN_RETURN_ON_ERROR(gwn_copy_h2d(staging.vertex_x, x, stream));
-    GWN_RETURN_ON_ERROR(gwn_copy_h2d(staging.vertex_y, y, stream));
-    GWN_RETURN_ON_ERROR(gwn_copy_h2d(staging.vertex_z, z, stream));
-    GWN_RETURN_ON_ERROR(gwn_copy_h2d(staging.tri_i0, i0, stream));
-    GWN_RETURN_ON_ERROR(gwn_copy_h2d(staging.tri_i1, i1, stream));
-    GWN_RETURN_ON_ERROR(gwn_copy_h2d(staging.tri_i2, i2, stream));
+        staging.singular_edge_count = singular_edge_count;
+        return gwn_status::ok();
+    };
 
-    GWN_RETURN_ON_ERROR(
-        gwn_validate_triangle_indices_device_impl<Index>(
-            staging.tri_i0, staging.tri_i1, staging.tri_i2, x.size(), stream
-        )
-    );
-
-    std::size_t singular_edge_count = 0;
-    GWN_RETURN_ON_ERROR(
-        gwn_compute_triangle_boundary_edge_mask_device_impl<Index>(
-            staging.tri_i0, staging.tri_i1, staging.tri_i2, staging.tri_boundary_edge_mask,
-            &singular_edge_count, stream
-        )
-    );
-
-    GWN_RETURN_ON_ERROR((gwn_compute_vertex_normals_device_impl<Real, Index>(
-        staging.vertex_x, staging.vertex_y, staging.vertex_z, staging.tri_i0, staging.tri_i1,
-        staging.tri_i2, staging.vertex_nx, staging.vertex_ny, staging.vertex_nz, stream
-    )));
-
-    gwn_release_accessor(accessor, stream);
-    accessor = staging;
-    accessor.singular_edge_count = singular_edge_count;
-    cleanup_staging.release();
-    return gwn_status::ok();
+    return gwn_replace_accessor_with_staging(accessor, release, build, stream);
 }
 
 } // namespace detail
-
-template <gwn_real_type Real, gwn_index_type Index>
-void gwn_geometry_object<Real, Index>::clear() noexcept {
-    detail::gwn_release_accessor(accessor_, stream());
-}
-
-template <gwn_real_type Real, gwn_index_type Index>
-void gwn_geometry_object<Real, Index>::clear(cudaStream_t const clear_stream) noexcept {
-    cudaStream_t const release_stream = stream();
-    detail::gwn_release_accessor(accessor_, release_stream);
-    set_stream(clear_stream);
-}
 
 template <gwn_index_type Index>
 gwn_status gwn_compute_triangle_boundary_edge_mask(
     cuda::std::span<Index const> i0, cuda::std::span<Index const> i1,
     cuda::std::span<Index const> i2, cuda::std::span<std::uint8_t> out_mask
 ) noexcept {
-    std::size_t const triangle_count = i0.size();
-    if (i1.size() != triangle_count || i2.size() != triangle_count)
-        return gwn_status::invalid_argument("Triangle SoA spans must have identical lengths.");
-    if (out_mask.size() != triangle_count) {
-        return gwn_status::invalid_argument(
-            "Boundary-edge mask output size must match triangle count."
+    return detail::gwn_try_translate_status(
+        "gwn_compute_triangle_boundary_edge_mask", [&]() -> gwn_status {
+        std::size_t const triangle_count = i0.size();
+        if (i1.size() != triangle_count || i2.size() != triangle_count)
+            return gwn_status::invalid_argument("Triangle SoA spans must have identical lengths.");
+        if (out_mask.size() != triangle_count) {
+            return gwn_status::invalid_argument(
+                "Boundary-edge mask output size must match triangle count."
+            );
+        }
+        if (!gwn_span_has_storage(i0) || !gwn_span_has_storage(i1) || !gwn_span_has_storage(i2) ||
+            !gwn_span_has_storage(out_mask)) {
+            return gwn_status::invalid_argument(
+                "Boundary-edge mask spans must use non-null storage when non-empty."
+            );
+        }
+
+        gwn_device_array<Index> d_i0;
+        gwn_device_array<Index> d_i1;
+        gwn_device_array<Index> d_i2;
+        gwn_device_array<std::uint8_t> d_mask;
+
+        cudaStream_t const stream = gwn_default_stream();
+        GWN_RETURN_ON_ERROR(d_i0.copy_from_host(i0, stream));
+        GWN_RETURN_ON_ERROR(d_i1.copy_from_host(i1, stream));
+        GWN_RETURN_ON_ERROR(d_i2.copy_from_host(i2, stream));
+        GWN_RETURN_ON_ERROR(d_mask.resize(out_mask.size(), stream));
+
+        GWN_RETURN_ON_ERROR(
+            detail::gwn_compute_triangle_boundary_edge_mask_device_impl<Index>(
+                d_i0.span(), d_i1.span(), d_i2.span(), d_mask.span(), nullptr, stream
+            )
         );
+
+        GWN_RETURN_ON_ERROR(d_mask.copy_to_host(out_mask, stream));
+        return gwn_cuda_to_status(cudaStreamSynchronize(stream));
     }
-    if (!gwn_span_has_storage(i0) || !gwn_span_has_storage(i1) || !gwn_span_has_storage(i2) ||
-        !gwn_span_has_storage(out_mask)) {
-        return gwn_status::invalid_argument(
-            "Boundary-edge mask spans must use non-null storage when non-empty."
-        );
-    }
-
-    gwn_device_array<Index> d_i0;
-    gwn_device_array<Index> d_i1;
-    gwn_device_array<Index> d_i2;
-    gwn_device_array<std::uint8_t> d_mask;
-
-    cudaStream_t const stream = gwn_default_stream();
-    GWN_RETURN_ON_ERROR(d_i0.copy_from_host(i0, stream));
-    GWN_RETURN_ON_ERROR(d_i1.copy_from_host(i1, stream));
-    GWN_RETURN_ON_ERROR(d_i2.copy_from_host(i2, stream));
-    GWN_RETURN_ON_ERROR(d_mask.resize(out_mask.size(), stream));
-
-    GWN_RETURN_ON_ERROR(
-        detail::gwn_compute_triangle_boundary_edge_mask_device_impl<Index>(
-            d_i0.span(), d_i1.span(), d_i2.span(), d_mask.span(), nullptr, stream
-        )
     );
-
-    GWN_RETURN_ON_ERROR(d_mask.copy_to_host(out_mask, stream));
-    return gwn_cuda_to_status(cudaStreamSynchronize(stream));
 }
 
 template <gwn_real_type Real, gwn_index_type Index>
@@ -666,14 +654,16 @@ gwn_status gwn_upload_geometry(
     cuda::std::span<Real const> y, cuda::std::span<Real const> z, cuda::std::span<Index const> i0,
     cuda::std::span<Index const> i1, cuda::std::span<Index const> i2, cudaStream_t const stream
 ) noexcept {
-    gwn_geometry_object<Real, Index> staging;
-    staging.set_stream(stream);
-    GWN_RETURN_ON_ERROR(
-        detail::gwn_upload_accessor(staging.accessor_, x, y, z, i0, i1, i2, stream)
-    );
+    return detail::gwn_try_translate_status("gwn_upload_geometry", [&]() -> gwn_status {
+        gwn_geometry_object<Real, Index> staging;
+        staging.set_stream(stream);
+        GWN_RETURN_ON_ERROR(
+            detail::gwn_upload_accessor(staging.accessor_, x, y, z, i0, i1, i2, stream)
+        );
 
-    swap(object, staging);
-    return gwn_status::ok();
+        swap(object, staging);
+        return gwn_status::ok();
+    });
 }
 
 } // namespace gwn
