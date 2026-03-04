@@ -24,7 +24,7 @@ template <gwn_real_type Real, gwn_index_type Index = std::uint32_t> struct gwn_g
     cuda::std::span<Index> tri_i0{};
     cuda::std::span<Index> tri_i1{};
     cuda::std::span<Index> tri_i2{};
-    cuda::std::span<std::uint8_t const> tri_boundary_edge_mask{};
+    cuda::std::span<std::uint8_t> tri_boundary_edge_mask{};
     Index singular_edge_count{0};
 
     __host__ __device__ constexpr std::size_t vertex_count() const noexcept {
