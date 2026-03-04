@@ -248,15 +248,21 @@ gwn_status gwn_compute_scene_aabb(
     gwn_device_array<std::uint8_t> reduce_temp{};
     GWN_RETURN_ON_ERROR(axis_min.resize(1, stream));
     GWN_RETURN_ON_ERROR(axis_max.resize(1, stream));
-    GWN_RETURN_ON_ERROR(gwn_reduce_minmax<Real>(
-        geometry.vertex_x, axis_min, axis_max, reduce_temp, result.min_x, result.max_x, stream
-    ));
-    GWN_RETURN_ON_ERROR(gwn_reduce_minmax<Real>(
-        geometry.vertex_y, axis_min, axis_max, reduce_temp, result.min_y, result.max_y, stream
-    ));
-    GWN_RETURN_ON_ERROR(gwn_reduce_minmax<Real>(
-        geometry.vertex_z, axis_min, axis_max, reduce_temp, result.min_z, result.max_z, stream
-    ));
+    GWN_RETURN_ON_ERROR(
+        gwn_reduce_minmax<Real>(
+            geometry.vertex_x, axis_min, axis_max, reduce_temp, result.min_x, result.max_x, stream
+        )
+    );
+    GWN_RETURN_ON_ERROR(
+        gwn_reduce_minmax<Real>(
+            geometry.vertex_y, axis_min, axis_max, reduce_temp, result.min_y, result.max_y, stream
+        )
+    );
+    GWN_RETURN_ON_ERROR(
+        gwn_reduce_minmax<Real>(
+            geometry.vertex_z, axis_min, axis_max, reduce_temp, result.min_z, result.max_z, stream
+        )
+    );
     GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaStreamSynchronize(stream)));
 
     GWN_ASSERT(isfinite(result.min_x) && isfinite(result.max_x), "scene AABB x not finite");

@@ -55,19 +55,18 @@ TEST(smallgwn_unit_uint64_compile, upload_and_harnack_templates_instantiate) {
     cuda::std::span<Real> out_nz{};
 
     EXPECT_TRUE((gwn::gwn_compute_harnack_trace_batch_bvh_taylor<0, Real, Index>(
-        geometry.accessor(), bvh, aabb, m0, ray_ox, ray_oy, ray_oz, ray_dx, ray_dy, ray_dz,
-        out_t, out_nx, out_ny, out_nz
-    ))
+                     geometry.accessor(), bvh, aabb, m0, ray_ox, ray_oy, ray_oz, ray_dx, ray_dy,
+                     ray_dz, out_t, out_nx, out_ny, out_nz
+                 ))
                     .is_ok());
     EXPECT_TRUE((gwn::gwn_compute_harnack_trace_batch_bvh_taylor<1, Real, Index>(
-        geometry.accessor(), bvh, aabb, m1, ray_ox, ray_oy, ray_oz, ray_dx, ray_dy, ray_dz,
-        out_t, out_nx, out_ny, out_nz
-    ))
+                     geometry.accessor(), bvh, aabb, m1, ray_ox, ray_oy, ray_oz, ray_dx, ray_dy,
+                     ray_dz, out_t, out_nx, out_ny, out_nz
+                 ))
                     .is_ok());
     EXPECT_TRUE((gwn::gwn_compute_harnack_trace_batch_bvh_taylor<2, Real, Index>(
-        geometry.accessor(), bvh, aabb, m2, ray_ox, ray_oy, ray_oz, ray_dx, ray_dy, ray_dz,
-        out_t, out_nx, out_ny, out_nz
-    ))
+                     geometry.accessor(), bvh, aabb, m2, ray_ox, ray_oy, ray_oz, ray_dx, ray_dy,
+                     ray_dz, out_t, out_nx, out_ny, out_nz
+                 ))
                     .is_ok());
-
 }

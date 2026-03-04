@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <limits>
@@ -18,7 +19,7 @@ namespace detail {
 // Harnack trace result, returned per ray.
 
 template <gwn_real_type Real> struct gwn_harnack_trace_result {
-    Real t{Real(-1)};       ///< Ray parameter at hit (negative ⟹ no hit).
+    Real t{Real(-1)};       ///< Ray parameter at hit.
     Real winding{Real(0)};  ///< Winding number at the hit point.
     Real normal_x{Real(0)}; ///< Surface normal x (unit gradient direction).
     Real normal_y{Real(0)};
@@ -27,16 +28,6 @@ template <gwn_real_type Real> struct gwn_harnack_trace_result {
 
     __host__ __device__ constexpr bool hit() const noexcept { return t >= Real(0); }
 };
-
-// Harnack step size (pure math).
-//
-// Given current function value f_t, target f_star, lower bound c (such that
-// f − c > 0 on B_R), and ball radius R, returns the maximum safe step ρ
-// guaranteed by the Harnack inequality in 3D.
-//
-// Formula (harmonic.tex §3.1.2):
-//   a = (f_t − c) / (f* − c)
-//   ρ = (R/2) |a + 2 − √(a² + 8a)|
 
 template <gwn_real_type Real>
 __host__ __device__ inline Real
@@ -58,13 +49,7 @@ gwn_harnack_step_size(Real const f_t, Real const f_star, Real const c, Real cons
 
     Real rho = (R / Real(2)) * abs(a + Real(2) - sqrt(disc));
 
-    // Clamp to [0, R].
-    if (rho < Real(0))
-        rho = Real(0);
-    if (rho > R)
-        rho = R;
-
-    return rho;
+    return std::clamp(rho, Real(0), R);
 }
 
 // Apply runtime stepping guards used by the tracer:
@@ -83,18 +68,13 @@ __host__ __device__ inline Real gwn_harnack_constrained_step(
 
     Real rho = gwn_harnack_step_size(f_t, f_star, c, R);
     rho *= overstep_factor;
-    if (rho > R)
-        rho = R;
+    rho = std::min(rho, R);
 
     Real const min_step = (R > min_abs_step) ? (R * min_relative_step) : min_abs_step;
     if (rho < min_step)
         rho = min_step;
 
-    // Final safety clamp is required: min-step can otherwise push rho > R.
-    if (rho > R)
-        rho = R;
-    if (rho < Real(0))
-        rho = Real(0);
+    rho = std::clamp(rho, Real(0), R);
     return rho;
 }
 
@@ -121,31 +101,20 @@ __host__ __device__ inline Real gwn_harnack_constrained_two_sided_step(
 
     Real const rho_lo = gwn_harnack_step_size(f_t, lower_levelset, c, R);
     Real const rho_hi = gwn_harnack_step_size(f_t, upper_levelset, c, R);
-    Real rho = (rho_lo < rho_hi) ? rho_lo : rho_hi;
+    Real rho = std::min(rho_lo, rho_hi);
 
     rho *= overstep_factor;
-    if (rho > R)
-        rho = R;
+    rho = std::min(rho, R);
 
     Real const min_step = (R > min_abs_step) ? (R * min_relative_step) : min_abs_step;
     if (rho < min_step)
         rho = min_step;
 
-    if (rho > R)
-        rho = R;
-    if (rho < Real(0))
-        rho = Real(0);
+    rho = std::clamp(rho, Real(0), R);
     return rho;
 }
 
 // Per-ray Harnack trace (angle-valued, Algorithm 2).
-//
-// Uses:
-//   • wrapped angle representative in [0, 4π) around target phase
-//   • safe-ball radius R = distance to nearest triangle
-//   • two-sided Harnack step bound against fixed wrapped bounds {0, 4π}
-//   • overstepping with backoff (paper §3.1.4 / reference implementation)
-
 template <int Order, int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity>
 __device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_ray_impl(
     gwn_geometry_accessor<Real, Index> const &geometry,
@@ -195,10 +164,8 @@ __device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_ray_impl(
             Real const py = ray_oy + t_ * ray_dy;
             Real const pz = ray_oz + t_ * ray_dz;
             auto const cn =
-                gwn_closest_triangle_normal_point_bvh_impl<
-                    Width, Real, Index, StackCapacity>(
-                    geometry, bvh, aabb_tree, px, py, pz,
-                    std::numeric_limits<Real>::infinity()
+                gwn_closest_triangle_normal_point_bvh_impl<Width, Real, Index, StackCapacity>(
+                    geometry, bvh, aabb_tree, px, py, pz, std::numeric_limits<Real>::infinity()
                 );
             n.x = cn.normal_x;
             n.y = cn.normal_y;
@@ -242,7 +209,7 @@ __device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_ray_impl(
         Real const upper_levelset = k_four_pi;
         Real const dist_lo = val - lower_levelset;
         Real const dist_hi = upper_levelset - val;
-        Real const dist = (dist_lo < dist_hi) ? dist_lo : dist_hi;
+        Real const dist = std::min(dist_lo, dist_hi);
         Real const grad_omega_mag = k_four_pi * grad_w_mag;
 
         // R(x) = distance to the nearest triangle (face + edges + vertices).
@@ -293,12 +260,10 @@ __device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_ray_impl(
             if (dist < epsilon * grad_omega_mag || R < epsilon) {
                 gwn_query_vec3<Real> shade_normal = grad_w;
                 if (R < epsilon) {
-                    auto const cn =
-                        gwn_closest_triangle_normal_point_bvh_impl<
-                            Width, Real, Index, StackCapacity>(
-                            geometry, bvh, aabb_tree, px, py, pz,
-                            std::numeric_limits<Real>::infinity()
-                        );
+                    auto const cn = gwn_closest_triangle_normal_point_bvh_impl<
+                        Width, Real, Index, StackCapacity>(
+                        geometry, bvh, aabb_tree, px, py, pz, std::numeric_limits<Real>::infinity()
+                    );
                     shade_normal.x = cn.normal_x;
                     shade_normal.y = cn.normal_y;
                     shade_normal.z = cn.normal_z;

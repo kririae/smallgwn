@@ -198,33 +198,32 @@ struct IterRecord {
 }
 
 void print_help(char const *argv0) {
-    std::cout
-        << "Usage: " << argv0 << " [options]\n"
-        << "Options:\n"
-        << "  --width <int>            Image width (default: 915)\n"
-        << "  --height <int>           Image height (default: 666)\n"
-        << "  --fov <float>            Vertical FOV in degrees (default: 45)\n"
-        << "  --mesh <octa|half>       Built-in mesh (default: half)\n"
-        << "  --mesh-file <path>       External OBJ mesh (normalized to [-1,1])\n"
-        << "  --normal-out <path>      Normal PNG output path (default: normal.png)\n"
-        << "  --depth-out <path>       Depth PNG output path (default: depth.png)\n"
-        << "  --target-w <float>       Target winding iso-value (default: 0.5)\n"
-        << "  --epsilon <float>        Harnack epsilon (default: 1e-3)\n"
-        << "  --max-iters <int>        Max iterations (default: 2048)\n"
-        << "  --tmax <float>           Ray t_max (default: 100)\n"
-        << "  --accuracy <float>       Taylor accuracy scale (default: 2)\n"
-        << "  --yaw <float>            Orbit yaw in radians (default: 0)\n"
-        << "  --pitch <float>          Orbit pitch in radians (default: -0.35)\n"
-        << "  --camera-distance <f>    Orbit camera distance (default: 2.7)\n"
-        << "  --target-x <f>           Camera target x (default: 0)\n"
-        << "  --target-y <f>           Camera target y (default: 0)\n"
-        << "  --target-z <f>           Camera target z (default: 0)\n"
-        << "  --profile-hole           Auto-profile largest internal background hole\n"
-        << "  --profile-px <int>       Profile ray pixel x\n"
-        << "  --profile-py <int>       Profile ray pixel y\n"
-        << "  --profile-samples <int>  Dense W(t) sample count (default: 8192)\n"
-        << "  --profile-out <path>     Optional CSV output for Harnack iteration log\n"
-        << "  --help                   Show this message\n";
+    std::cout << "Usage: " << argv0 << " [options]\n"
+              << "Options:\n"
+              << "  --width <int>            Image width (default: 915)\n"
+              << "  --height <int>           Image height (default: 666)\n"
+              << "  --fov <float>            Vertical FOV in degrees (default: 45)\n"
+              << "  --mesh <octa|half>       Built-in mesh (default: half)\n"
+              << "  --mesh-file <path>       External OBJ mesh (normalized to [-1,1])\n"
+              << "  --normal-out <path>      Normal PNG output path (default: normal.png)\n"
+              << "  --depth-out <path>       Depth PNG output path (default: depth.png)\n"
+              << "  --target-w <float>       Target winding iso-value (default: 0.5)\n"
+              << "  --epsilon <float>        Harnack epsilon (default: 1e-3)\n"
+              << "  --max-iters <int>        Max iterations (default: 2048)\n"
+              << "  --tmax <float>           Ray t_max (default: 100)\n"
+              << "  --accuracy <float>       Taylor accuracy scale (default: 2)\n"
+              << "  --yaw <float>            Orbit yaw in radians (default: 0)\n"
+              << "  --pitch <float>          Orbit pitch in radians (default: -0.35)\n"
+              << "  --camera-distance <f>    Orbit camera distance (default: 2.7)\n"
+              << "  --target-x <f>           Camera target x (default: 0)\n"
+              << "  --target-y <f>           Camera target y (default: 0)\n"
+              << "  --target-z <f>           Camera target z (default: 0)\n"
+              << "  --profile-hole           Auto-profile largest internal background hole\n"
+              << "  --profile-px <int>       Profile ray pixel x\n"
+              << "  --profile-py <int>       Profile ray pixel y\n"
+              << "  --profile-samples <int>  Dense W(t) sample count (default: 8192)\n"
+              << "  --profile-out <path>     Optional CSV output for Harnack iteration log\n"
+              << "  --help                   Show this message\n";
 }
 
 [[nodiscard]] bool parse_options(int argc, char **argv, Options &opt) {
@@ -440,9 +439,8 @@ std::uint8_t to_u8(Real const v) {
     return true;
 }
 
-[[nodiscard]] bool parse_obj_face_index(
-    std::string const &token, int const vertex_count, int &out_index
-) {
+[[nodiscard]] bool
+parse_obj_face_index(std::string const &token, int const vertex_count, int &out_index) {
     std::string index_token = token;
     std::size_t const slash = index_token.find('/');
     if (slash != std::string::npos)
@@ -486,7 +484,8 @@ std::uint8_t to_u8(Real const v) {
         if (line.empty() || line[0] == '#')
             continue;
 
-        if (line.size() >= 2 && line[0] == 'v' && std::isspace(static_cast<unsigned char>(line[1]))) {
+        if (line.size() >= 2 && line[0] == 'v' &&
+            std::isspace(static_cast<unsigned char>(line[1]))) {
             std::istringstream iss(line.substr(1));
             Real x = Real(0), y = Real(0), z = Real(0);
             if (!(iss >> x >> y >> z)) {
@@ -497,7 +496,8 @@ std::uint8_t to_u8(Real const v) {
             continue;
         }
 
-        if (line.size() >= 2 && line[0] == 'f' && std::isspace(static_cast<unsigned char>(line[1]))) {
+        if (line.size() >= 2 && line[0] == 'f' &&
+            std::isspace(static_cast<unsigned char>(line[1]))) {
             std::istringstream iss(line.substr(1));
             std::vector<int> face;
             std::string token;
@@ -558,9 +558,8 @@ std::uint8_t to_u8(Real const v) {
     return basis;
 }
 
-[[nodiscard]] Vec3 ray_direction_for_pixel(
-    int const px, int const py, Options const &opt, CameraBasis const &camera
-) {
+[[nodiscard]] Vec3
+ray_direction_for_pixel(int const px, int const py, Options const &opt, CameraBasis const &camera) {
     Real const tan_half_fov = std::tan((opt.fov_degrees * k_pi / Real(180)) * Real(0.5));
     Real const aspect = static_cast<Real>(opt.width) / static_cast<Real>(std::max(opt.height, 1));
 
@@ -570,13 +569,13 @@ std::uint8_t to_u8(Real const v) {
         Real(1) - ((static_cast<Real>(py) + Real(0.5)) / static_cast<Real>(opt.height)) * Real(2);
 
     return normalize(
-        camera.forward + camera.right * (sx * aspect * tan_half_fov) + camera.up * (sy * tan_half_fov)
+        camera.forward + camera.right * (sx * aspect * tan_half_fov) +
+        camera.up * (sy * tan_half_fov)
     );
 }
 
-[[nodiscard]] HoleInfo find_largest_internal_hole(
-    std::vector<Real> const &hit_t, int const width, int const height
-) {
+[[nodiscard]] HoleInfo
+find_largest_internal_hole(std::vector<Real> const &hit_t, int const width, int const height) {
     HoleInfo out{};
     if (width <= 0 || height <= 0)
         return out;
@@ -624,7 +623,8 @@ std::uint8_t to_u8(Real const v) {
 
     for (int y0 = 0; y0 < height; ++y0) {
         for (int x0 = 0; x0 < width; ++x0) {
-            std::size_t const seed = static_cast<std::size_t>(y0) * width + static_cast<std::size_t>(x0);
+            std::size_t const seed =
+                static_cast<std::size_t>(y0) * width + static_cast<std::size_t>(x0);
             if (visited[seed] || !is_bg[seed])
                 continue;
 
@@ -687,13 +687,14 @@ std::uint8_t to_u8(Real const v) {
 
 __global__ void probe_point_kernel(
     gwn::gwn_geometry_accessor<Real, Index> geometry,
-    gwn::gwn_bvh4_topology_accessor<Real, Index> bvh,
-    gwn::gwn_bvh4_aabb_accessor<Real, Index> aabb,
+    gwn::gwn_bvh4_topology_accessor<Real, Index> bvh, gwn::gwn_bvh4_aabb_accessor<Real, Index> aabb,
     gwn::gwn_bvh4_moment_accessor<1, Real, Index> moments, Real const qx, Real const qy,
     Real const qz, Real const accuracy_scale, PointProbe *out
 ) {
     auto const wg = gwn::detail::gwn_winding_and_gradient_point_bvh_taylor_impl<
-        1, k_bvh_width, Real, Index, k_stack_capacity>(geometry, bvh, moments, qx, qy, qz, accuracy_scale);
+        1, k_bvh_width, Real, Index, k_stack_capacity>(
+        geometry, bvh, moments, qx, qy, qz, accuracy_scale
+    );
 
     Real const r_face = gwn::detail::gwn_unsigned_distance_point_bvh_impl<
         k_bvh_width, Real, Index, k_stack_capacity>(
@@ -705,12 +706,7 @@ __global__ void probe_point_kernel(
     );
 
     out[0] = PointProbe{
-        wg.winding,
-        wg.gradient.x,
-        wg.gradient.y,
-        wg.gradient.z,
-        r_face,
-        r_edge,
+        wg.winding, wg.gradient.x, wg.gradient.y, wg.gradient.z, r_face, r_edge,
     };
 }
 
@@ -742,13 +738,14 @@ void write_profile_csv(std::string const &path, std::vector<IterRecord> const &r
     if (!out)
         throw std::runtime_error("failed to open profile CSV: " + path);
 
-    out << "iter,t_eval,w,wrapped,dist,grad_omega_mag,r_face,r_edge,rho,t_overstep_before,accepted,hit_by_grad,hit_by_radius,invalid_radius,invalid_rho\n";
+    out << "iter,t_eval,w,wrapped,dist,grad_omega_mag,r_face,r_edge,rho,t_overstep_before,accepted,"
+           "hit_by_grad,hit_by_radius,invalid_radius,invalid_rho\n";
     for (IterRecord const &r : records) {
         out << r.iter << ',' << r.t_eval << ',' << r.w << ',' << r.wrapped << ',' << r.dist << ','
             << r.grad_omega_mag << ',' << r.r_face << ',' << r.r_edge << ',' << r.rho << ','
-            << r.t_overstep_before << ',' << (r.accepted ? 1 : 0) << ','
-            << (r.hit_by_grad ? 1 : 0) << ',' << (r.hit_by_radius ? 1 : 0) << ','
-            << (r.invalid_radius ? 1 : 0) << ',' << (r.invalid_rho ? 1 : 0) << '\n';
+            << r.t_overstep_before << ',' << (r.accepted ? 1 : 0) << ',' << (r.hit_by_grad ? 1 : 0)
+            << ',' << (r.hit_by_radius ? 1 : 0) << ',' << (r.invalid_radius ? 1 : 0) << ','
+            << (r.invalid_rho ? 1 : 0) << '\n';
     }
 }
 
@@ -800,8 +797,7 @@ int main(int argc, char **argv) {
         gwn::gwn_geometry_object<Real, Index> geometry;
         throw_if_error(
             gwn::gwn_upload_geometry(
-                geometry,
-                cuda::std::span<Real const>(mesh.vx.data(), mesh.vx.size()),
+                geometry, cuda::std::span<Real const>(mesh.vx.data(), mesh.vx.size()),
                 cuda::std::span<Real const>(mesh.vy.data(), mesh.vy.size()),
                 cuda::std::span<Real const>(mesh.vz.data(), mesh.vz.size()),
                 cuda::std::span<Index const>(mesh.i0.data(), mesh.i0.size()),
@@ -845,12 +841,24 @@ int main(int argc, char **argv) {
         gwn::gwn_device_array<Real> d_ox, d_oy, d_oz, d_dx, d_dy, d_dz;
         gwn::gwn_device_array<Real> d_t, d_nx, d_ny, d_nz;
 
-        throw_if_error(d_ox.copy_from_host(cuda::std::span<Real const>(ox.data(), ox.size())), "copy d_ox");
-        throw_if_error(d_oy.copy_from_host(cuda::std::span<Real const>(oy.data(), oy.size())), "copy d_oy");
-        throw_if_error(d_oz.copy_from_host(cuda::std::span<Real const>(oz.data(), oz.size())), "copy d_oz");
-        throw_if_error(d_dx.copy_from_host(cuda::std::span<Real const>(dx.data(), dx.size())), "copy d_dx");
-        throw_if_error(d_dy.copy_from_host(cuda::std::span<Real const>(dy.data(), dy.size())), "copy d_dy");
-        throw_if_error(d_dz.copy_from_host(cuda::std::span<Real const>(dz.data(), dz.size())), "copy d_dz");
+        throw_if_error(
+            d_ox.copy_from_host(cuda::std::span<Real const>(ox.data(), ox.size())), "copy d_ox"
+        );
+        throw_if_error(
+            d_oy.copy_from_host(cuda::std::span<Real const>(oy.data(), oy.size())), "copy d_oy"
+        );
+        throw_if_error(
+            d_oz.copy_from_host(cuda::std::span<Real const>(oz.data(), oz.size())), "copy d_oz"
+        );
+        throw_if_error(
+            d_dx.copy_from_host(cuda::std::span<Real const>(dx.data(), dx.size())), "copy d_dx"
+        );
+        throw_if_error(
+            d_dy.copy_from_host(cuda::std::span<Real const>(dy.data(), dy.size())), "copy d_dy"
+        );
+        throw_if_error(
+            d_dz.copy_from_host(cuda::std::span<Real const>(dz.data(), dz.size())), "copy d_dz"
+        );
         throw_if_error(d_t.resize(pixel_count), "resize d_t");
         throw_if_error(d_nx.resize(pixel_count), "resize d_nx");
         throw_if_error(d_ny.resize(pixel_count), "resize d_ny");
@@ -869,10 +877,18 @@ int main(int argc, char **argv) {
 
         std::vector<Real> host_t(pixel_count), host_nx(pixel_count), host_ny(pixel_count),
             host_nz(pixel_count);
-        throw_if_error(d_t.copy_to_host(cuda::std::span<Real>(host_t.data(), host_t.size())), "copy host_t");
-        throw_if_error(d_nx.copy_to_host(cuda::std::span<Real>(host_nx.data(), host_nx.size())), "copy host_nx");
-        throw_if_error(d_ny.copy_to_host(cuda::std::span<Real>(host_ny.data(), host_ny.size())), "copy host_ny");
-        throw_if_error(d_nz.copy_to_host(cuda::std::span<Real>(host_nz.data(), host_nz.size())), "copy host_nz");
+        throw_if_error(
+            d_t.copy_to_host(cuda::std::span<Real>(host_t.data(), host_t.size())), "copy host_t"
+        );
+        throw_if_error(
+            d_nx.copy_to_host(cuda::std::span<Real>(host_nx.data(), host_nx.size())), "copy host_nx"
+        );
+        throw_if_error(
+            d_ny.copy_to_host(cuda::std::span<Real>(host_ny.data(), host_ny.size())), "copy host_ny"
+        );
+        throw_if_error(
+            d_nz.copy_to_host(cuda::std::span<Real>(host_nz.data(), host_nz.size())), "copy host_nz"
+        );
         throw_if_error(gwn::gwn_cuda_to_status(cudaDeviceSynchronize()), "copy sync");
 
         std::size_t hit_count = 0;
@@ -928,21 +944,24 @@ int main(int argc, char **argv) {
                 profile_py = hole.sample_y;
                 std::cout << "Detected largest internal hole: area=" << hole.area << " bbox=["
                           << hole.min_x << ',' << hole.min_y << " -> " << hole.max_x << ','
-                          << hole.max_y << "] centroid=(" << hole.centroid_x << ',' << hole.centroid_y
-                          << ") sample=(" << hole.sample_x << ',' << hole.sample_y << ")\n";
+                          << hole.max_y << "] centroid=(" << hole.centroid_x << ','
+                          << hole.centroid_y << ") sample=(" << hole.sample_x << ','
+                          << hole.sample_y << ")\n";
             } else {
                 std::cout << "No internal hole region detected in this render.\n";
             }
         }
 
         bool const has_profile_pixel =
-            (profile_px >= 0 && profile_py >= 0 && profile_px < opt.width && profile_py < opt.height);
+            (profile_px >= 0 && profile_py >= 0 && profile_px < opt.width &&
+             profile_py < opt.height);
         if (has_profile_pixel) {
-            std::cout << "\n=== Ray Profile @ pixel (" << profile_px << ", " << profile_py << ") ===\n";
+            std::cout << "\n=== Ray Profile @ pixel (" << profile_px << ", " << profile_py
+                      << ") ===\n";
 
             Vec3 const ray_dir = ray_direction_for_pixel(profile_px, profile_py, opt, camera);
-            std::size_t const pixel_idx =
-                static_cast<std::size_t>(profile_py) * opt.width + static_cast<std::size_t>(profile_px);
+            std::size_t const pixel_idx = static_cast<std::size_t>(profile_py) * opt.width +
+                                          static_cast<std::size_t>(profile_px);
             bool const tracer_hit = host_t[pixel_idx] >= Real(0);
             std::cout << "Trace image result: hit=" << (tracer_hit ? "yes" : "no")
                       << " t=" << host_t[pixel_idx] << "\n";
@@ -962,22 +981,31 @@ int main(int argc, char **argv) {
             }
 
             gwn::gwn_device_array<Real> d_qx, d_qy, d_qz, d_w;
-            throw_if_error(d_qx.copy_from_host(cuda::std::span<Real const>(qx.data(), qx.size())), "copy d_qx");
-            throw_if_error(d_qy.copy_from_host(cuda::std::span<Real const>(qy.data(), qy.size())), "copy d_qy");
-            throw_if_error(d_qz.copy_from_host(cuda::std::span<Real const>(qz.data(), qz.size())), "copy d_qz");
+            throw_if_error(
+                d_qx.copy_from_host(cuda::std::span<Real const>(qx.data(), qx.size())), "copy d_qx"
+            );
+            throw_if_error(
+                d_qy.copy_from_host(cuda::std::span<Real const>(qy.data(), qy.size())), "copy d_qy"
+            );
+            throw_if_error(
+                d_qz.copy_from_host(cuda::std::span<Real const>(qz.data(), qz.size())), "copy d_qz"
+            );
             throw_if_error(d_w.resize(qx.size()), "resize d_w");
 
             throw_if_error(
                 gwn::gwn_compute_winding_number_batch_bvh_taylor<1, Real, Index>(
-                    geometry.accessor(), bvh.accessor(), moments.accessor(), d_qx.span(), d_qy.span(),
-                    d_qz.span(), d_w.span(), opt.accuracy_scale
+                    geometry.accessor(), bvh.accessor(), moments.accessor(), d_qx.span(),
+                    d_qy.span(), d_qz.span(), d_w.span(), opt.accuracy_scale
                 ),
                 "dense winding query"
             );
             throw_if_error(gwn::gwn_cuda_to_status(cudaDeviceSynchronize()), "dense winding sync");
 
             std::vector<Real> sample_w(sample_t.size(), Real(0));
-            throw_if_error(d_w.copy_to_host(cuda::std::span<Real>(sample_w.data(), sample_w.size())), "copy sample_w");
+            throw_if_error(
+                d_w.copy_to_host(cuda::std::span<Real>(sample_w.data(), sample_w.size())),
+                "copy sample_w"
+            );
             throw_if_error(gwn::gwn_cuda_to_status(cudaDeviceSynchronize()), "copy sample_w sync");
 
             Real min_w = std::numeric_limits<Real>::infinity();
@@ -1015,7 +1043,8 @@ int main(int argc, char **argv) {
             std::vector<IterRecord> records;
             records.reserve(static_cast<std::size_t>(opt.max_iterations) + 2u);
 
-            Real const dir_len = std::sqrt(ray_dir.x * ray_dir.x + ray_dir.y * ray_dir.y + ray_dir.z * ray_dir.z);
+            Real const dir_len =
+                std::sqrt(ray_dir.x * ray_dir.x + ray_dir.y * ray_dir.y + ray_dir.z * ray_dir.z);
             Real const target_omega = k_four_pi * opt.target_winding;
 
             Real t = Real(0);
@@ -1036,11 +1065,13 @@ int main(int argc, char **argv) {
                     geometry, bvh, aabb, moments, px, py, pz, opt.accuracy_scale, d_probe
                 );
 
-                Real const grad_mag =
-                    std::sqrt(pp.grad_x * pp.grad_x + pp.grad_y * pp.grad_y + pp.grad_z * pp.grad_z);
+                Real const grad_mag = std::sqrt(
+                    pp.grad_x * pp.grad_x + pp.grad_y * pp.grad_y + pp.grad_z * pp.grad_z
+                );
                 Real const grad_omega_mag = k_four_pi * grad_mag;
                 Real const omega = k_four_pi * pp.winding;
-                Real const wrapped = gwn::detail::gwn_glsl_mod<Real>(omega - target_omega, k_four_pi);
+                Real const wrapped =
+                    gwn::detail::gwn_glsl_mod<Real>(omega - target_omega, k_four_pi);
                 Real const dist_lo = wrapped;
                 Real const dist_hi = k_four_pi - wrapped;
                 Real const dist = (dist_lo < dist_hi) ? dist_lo : dist_hi;
@@ -1063,11 +1094,10 @@ int main(int argc, char **argv) {
                     break;
                 }
 
-                Real const rho =
-                    gwn::detail::gwn_harnack_constrained_two_sided_step(
-                        wrapped, Real(0), k_four_pi, -k_four_pi, pp.r_face
-                    ) /
-                    dir_len;
+                Real const rho = gwn::detail::gwn_harnack_constrained_two_sided_step(
+                                     wrapped, Real(0), k_four_pi, -k_four_pi, pp.r_face
+                                 ) /
+                                 dir_len;
                 rec.rho = rho;
 
                 if (!(rho >= Real(0))) {
@@ -1103,8 +1133,8 @@ int main(int argc, char **argv) {
                 }
             }
 
-            if (!loop_hit && terminal_reason == "t_max_exceeded" && t < opt.t_max &&
-                static_cast<int>(records.size()) > opt.max_iterations) {
+            if (!loop_hit && terminal_reason == "t_max_exceeded" &&
+                t<opt.t_max &&static_cast<int>(records.size())> opt.max_iterations) {
                 terminal_reason = "max_iterations_reached";
             }
 

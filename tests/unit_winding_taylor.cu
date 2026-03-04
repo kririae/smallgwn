@@ -27,8 +27,7 @@ enum class taylor_topology_builder {
 };
 
 // Helper: upload octahedron, build BVH + Taylor, query Taylor WN.
-template <int Order>
-struct TaylorTestContext {
+template <int Order> struct TaylorTestContext {
     gwn::gwn_geometry_object<Real, Index> geometry;
     gwn::gwn_bvh4_topology_object<Real, Index> bvh;
     gwn::gwn_bvh4_aabb_object<Real, Index> aabb;
@@ -51,8 +50,7 @@ void setup_octahedron_taylor(
     std::vector<Index> i2{4, 4, 4, 4, 5, 5, 5, 5};
 
     gwn::gwn_status const upload_status = gwn::gwn_upload_geometry(
-        ctx.geometry,
-        cuda::std::span<Real const>(vx.data(), vx.size()),
+        ctx.geometry, cuda::std::span<Real const>(vx.data(), vx.size()),
         cuda::std::span<Real const>(vy.data(), vy.size()),
         cuda::std::span<Real const>(vz.data(), vz.size()),
         cuda::std::span<Index const>(i0.data(), i0.size()),
@@ -173,8 +171,7 @@ TEST_F(CudaFixture, order1_more_accurate_than_order0) {
 
     gwn::gwn_geometry_object<Real, Index> geometry;
     gwn::gwn_status const upload_status = gwn::gwn_upload_geometry(
-        geometry,
-        cuda::std::span<Real const>(vx.data(), vx.size()),
+        geometry, cuda::std::span<Real const>(vx.data(), vx.size()),
         cuda::std::span<Real const>(vy.data(), vy.size()),
         cuda::std::span<Real const>(vz.data(), vz.size()),
         cuda::std::span<Index const>(i0.data(), i0.size()),
@@ -270,8 +267,7 @@ TEST_F(CudaFixture, order2_more_accurate_than_order1) {
 
     gwn::gwn_geometry_object<Real, Index> geometry;
     gwn::gwn_status const upload_status = gwn::gwn_upload_geometry(
-        geometry,
-        cuda::std::span<Real const>(vx.data(), vx.size()),
+        geometry, cuda::std::span<Real const>(vx.data(), vx.size()),
         cuda::std::span<Real const>(vy.data(), vy.size()),
         cuda::std::span<Real const>(vz.data(), vz.size()),
         cuda::std::span<Index const>(i0.data(), i0.size()),
@@ -355,8 +351,7 @@ TEST_F(CudaFixture, repeated_build_matches_order1) {
 
     gwn::gwn_geometry_object<Real, Index> geometry;
     gwn::gwn_status const upload_status = gwn::gwn_upload_geometry(
-        geometry,
-        cuda::std::span<Real const>(vx.data(), vx.size()),
+        geometry, cuda::std::span<Real const>(vx.data(), vx.size()),
         cuda::std::span<Real const>(vy.data(), vy.size()),
         cuda::std::span<Real const>(vz.data(), vz.size()),
         cuda::std::span<Index const>(i0.data(), i0.size()),
@@ -435,8 +430,7 @@ TEST_F(CudaFixture, repeated_build_matches_order2) {
 
     gwn::gwn_geometry_object<Real, Index> geometry;
     gwn::gwn_status const upload_status = gwn::gwn_upload_geometry(
-        geometry,
-        cuda::std::span<Real const>(vx.data(), vx.size()),
+        geometry, cuda::std::span<Real const>(vx.data(), vx.size()),
         cuda::std::span<Real const>(vy.data(), vy.size()),
         cuda::std::span<Real const>(vz.data(), vz.size()),
         cuda::std::span<Index const>(i0.data(), i0.size()),

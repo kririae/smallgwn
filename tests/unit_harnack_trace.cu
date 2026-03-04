@@ -13,13 +13,13 @@
 
 using Real = gwn::tests::Real;
 using Index = gwn::tests::Index;
-using gwn::tests::CudaFixture;
-using gwn::tests::OctahedronMesh;
-using gwn::tests::HalfOctahedronMesh;
 using gwn::tests::CubeMesh;
-using gwn::tests::OpenCubeMesh;
-using gwn::tests::half_octahedron_face_z;
+using gwn::tests::CudaFixture;
 using gwn::tests::generate_sphere_rays;
+using gwn::tests::half_octahedron_face_z;
+using gwn::tests::HalfOctahedronMesh;
+using gwn::tests::OctahedronMesh;
+using gwn::tests::OpenCubeMesh;
 using gwn::tests::wrapped_angle_residual;
 
 namespace {
@@ -28,22 +28,17 @@ namespace {
 
 template <int Order, class Mesh>
 bool run_harnack_trace(
-    Mesh const &mesh,
-    std::vector<Real> const &ox, std::vector<Real> const &oy, std::vector<Real> const &oz,
-    std::vector<Real> const &dx, std::vector<Real> const &dy, std::vector<Real> const &dz,
-    std::vector<Real> &out_t,
-    std::vector<Real> &out_nx, std::vector<Real> &out_ny, std::vector<Real> &out_nz,
-    Real const target_winding = Real(0.5),
-    Real const epsilon = Real(1e-3),
-    int const max_iterations = 2048,
-    Real const t_max = Real(100),
+    Mesh const &mesh, std::vector<Real> const &ox, std::vector<Real> const &oy,
+    std::vector<Real> const &oz, std::vector<Real> const &dx, std::vector<Real> const &dy,
+    std::vector<Real> const &dz, std::vector<Real> &out_t, std::vector<Real> &out_nx,
+    std::vector<Real> &out_ny, std::vector<Real> &out_nz, Real const target_winding = Real(0.5),
+    Real const epsilon = Real(1e-3), int const max_iterations = 2048, Real const t_max = Real(100),
     Real const accuracy_scale = Real(2)
 ) {
     // 1. Upload geometry.
     gwn::gwn_geometry_object<Real, Index> geometry;
     gwn::gwn_status s = gwn::gwn_upload_geometry(
-        geometry,
-        cuda::std::span<Real const>(mesh.vx.data(), mesh.vx.size()),
+        geometry, cuda::std::span<Real const>(mesh.vx.data(), mesh.vx.size()),
         cuda::std::span<Real const>(mesh.vy.data(), mesh.vy.size()),
         cuda::std::span<Real const>(mesh.vz.data(), mesh.vz.size()),
         cuda::std::span<Index const>(mesh.i0.data(), mesh.i0.size()),
@@ -75,10 +70,9 @@ bool run_harnack_trace(
     gwn::gwn_device_array<Real> d_t, d_nx, d_ny, d_nz;
     bool ok = d_ox.resize(n).is_ok() && d_oy.resize(n).is_ok() && d_oz.resize(n).is_ok() &&
               d_dx.resize(n).is_ok() && d_dy.resize(n).is_ok() && d_dz.resize(n).is_ok() &&
-              d_t.resize(n).is_ok() && d_nx.resize(n).is_ok() &&
-              d_ny.resize(n).is_ok() && d_nz.resize(n).is_ok();
-    ok = ok &&
-         d_ox.copy_from_host(cuda::std::span<Real const>(ox.data(), n)).is_ok() &&
+              d_t.resize(n).is_ok() && d_nx.resize(n).is_ok() && d_ny.resize(n).is_ok() &&
+              d_nz.resize(n).is_ok();
+    ok = ok && d_ox.copy_from_host(cuda::std::span<Real const>(ox.data(), n)).is_ok() &&
          d_oy.copy_from_host(cuda::std::span<Real const>(oy.data(), n)).is_ok() &&
          d_oz.copy_from_host(cuda::std::span<Real const>(oz.data(), n)).is_ok() &&
          d_dx.copy_from_host(cuda::std::span<Real const>(dx.data(), n)).is_ok() &&
@@ -91,11 +85,9 @@ bool run_harnack_trace(
 
     // 4. Launch Harnack trace.
     s = gwn::gwn_compute_harnack_trace_batch_bvh_taylor<Order, Real, Index>(
-        geometry.accessor(), bvh.accessor(), aabb.accessor(), data.accessor(),
-        d_ox.span(), d_oy.span(), d_oz.span(),
-        d_dx.span(), d_dy.span(), d_dz.span(),
-        d_t.span(), d_nx.span(), d_ny.span(), d_nz.span(),
-        target_winding, epsilon, max_iterations, t_max, accuracy_scale
+        geometry.accessor(), bvh.accessor(), aabb.accessor(), data.accessor(), d_ox.span(),
+        d_oy.span(), d_oz.span(), d_dx.span(), d_dy.span(), d_dz.span(), d_t.span(), d_nx.span(),
+        d_ny.span(), d_nz.span(), target_winding, epsilon, max_iterations, t_max, accuracy_scale
     );
     if (!s.is_ok()) {
         ADD_FAILURE() << "harnack trace: " << gwn::tests::status_to_debug_string(s);
@@ -122,21 +114,16 @@ bool run_harnack_trace(
 
 template <int Order, class Mesh>
 bool run_harnack_trace_angle(
-    Mesh const &mesh,
-    std::vector<Real> const &ox, std::vector<Real> const &oy, std::vector<Real> const &oz,
-    std::vector<Real> const &dx, std::vector<Real> const &dy, std::vector<Real> const &dz,
-    std::vector<Real> &out_t,
-    std::vector<Real> &out_nx, std::vector<Real> &out_ny, std::vector<Real> &out_nz,
-    Real const target_winding = Real(0.5),
-    Real const epsilon = Real(1e-3),
-    int const max_iterations = 2048,
-    Real const t_max = Real(100),
+    Mesh const &mesh, std::vector<Real> const &ox, std::vector<Real> const &oy,
+    std::vector<Real> const &oz, std::vector<Real> const &dx, std::vector<Real> const &dy,
+    std::vector<Real> const &dz, std::vector<Real> &out_t, std::vector<Real> &out_nx,
+    std::vector<Real> &out_ny, std::vector<Real> &out_nz, Real const target_winding = Real(0.5),
+    Real const epsilon = Real(1e-3), int const max_iterations = 2048, Real const t_max = Real(100),
     Real const accuracy_scale = Real(2)
 ) {
     gwn::gwn_geometry_object<Real, Index> geometry;
     gwn::gwn_status s = gwn::gwn_upload_geometry(
-        geometry,
-        cuda::std::span<Real const>(mesh.vx.data(), mesh.vx.size()),
+        geometry, cuda::std::span<Real const>(mesh.vx.data(), mesh.vx.size()),
         cuda::std::span<Real const>(mesh.vy.data(), mesh.vy.size()),
         cuda::std::span<Real const>(mesh.vz.data(), mesh.vz.size()),
         cuda::std::span<Index const>(mesh.i0.data(), mesh.i0.size()),
@@ -166,10 +153,9 @@ bool run_harnack_trace_angle(
     gwn::gwn_device_array<Real> d_t, d_nx, d_ny, d_nz;
     bool ok = d_ox.resize(n).is_ok() && d_oy.resize(n).is_ok() && d_oz.resize(n).is_ok() &&
               d_dx.resize(n).is_ok() && d_dy.resize(n).is_ok() && d_dz.resize(n).is_ok() &&
-              d_t.resize(n).is_ok() && d_nx.resize(n).is_ok() &&
-              d_ny.resize(n).is_ok() && d_nz.resize(n).is_ok();
-    ok = ok &&
-         d_ox.copy_from_host(cuda::std::span<Real const>(ox.data(), n)).is_ok() &&
+              d_t.resize(n).is_ok() && d_nx.resize(n).is_ok() && d_ny.resize(n).is_ok() &&
+              d_nz.resize(n).is_ok();
+    ok = ok && d_ox.copy_from_host(cuda::std::span<Real const>(ox.data(), n)).is_ok() &&
          d_oy.copy_from_host(cuda::std::span<Real const>(oy.data(), n)).is_ok() &&
          d_oz.copy_from_host(cuda::std::span<Real const>(oz.data(), n)).is_ok() &&
          d_dx.copy_from_host(cuda::std::span<Real const>(dx.data(), n)).is_ok() &&
@@ -181,11 +167,9 @@ bool run_harnack_trace_angle(
     }
 
     s = gwn::gwn_compute_harnack_trace_batch_bvh_taylor<Order, Real, Index>(
-        geometry.accessor(), bvh.accessor(), aabb.accessor(), data.accessor(),
-        d_ox.span(), d_oy.span(), d_oz.span(),
-        d_dx.span(), d_dy.span(), d_dz.span(),
-        d_t.span(), d_nx.span(), d_ny.span(), d_nz.span(),
-        target_winding, epsilon, max_iterations, t_max, accuracy_scale
+        geometry.accessor(), bvh.accessor(), aabb.accessor(), data.accessor(), d_ox.span(),
+        d_oy.span(), d_oz.span(), d_dx.span(), d_dy.span(), d_dz.span(), d_t.span(), d_nx.span(),
+        d_ny.span(), d_nz.span(), target_winding, epsilon, max_iterations, t_max, accuracy_scale
     );
     if (!s.is_ok()) {
         ADD_FAILURE() << "harnack trace: " << gwn::tests::status_to_debug_string(s);
@@ -213,15 +197,12 @@ bool run_harnack_trace_angle(
 
 template <int Order, class Mesh>
 bool run_winding_query(
-    Mesh const &mesh,
-    std::vector<Real> const &qx, std::vector<Real> const &qy, std::vector<Real> const &qz,
-    std::vector<Real> &out_w,
-    Real const accuracy_scale = Real(2)
+    Mesh const &mesh, std::vector<Real> const &qx, std::vector<Real> const &qy,
+    std::vector<Real> const &qz, std::vector<Real> &out_w, Real const accuracy_scale = Real(2)
 ) {
     gwn::gwn_geometry_object<Real, Index> geometry;
     gwn::gwn_status s = gwn::gwn_upload_geometry(
-        geometry,
-        cuda::std::span<Real const>(mesh.vx.data(), mesh.vx.size()),
+        geometry, cuda::std::span<Real const>(mesh.vx.data(), mesh.vx.size()),
         cuda::std::span<Real const>(mesh.vy.data(), mesh.vy.size()),
         cuda::std::span<Real const>(mesh.vz.data(), mesh.vz.size()),
         cuda::std::span<Index const>(mesh.i0.data(), mesh.i0.size()),
@@ -244,18 +225,17 @@ bool run_winding_query(
 
     std::size_t const n = qx.size();
     gwn::gwn_device_array<Real> d_qx, d_qy, d_qz, d_w;
-    bool ok = d_qx.resize(n).is_ok() && d_qy.resize(n).is_ok() &&
-              d_qz.resize(n).is_ok() && d_w.resize(n).is_ok();
-    ok = ok &&
-         d_qx.copy_from_host(cuda::std::span<Real const>(qx.data(), n)).is_ok() &&
+    bool ok = d_qx.resize(n).is_ok() && d_qy.resize(n).is_ok() && d_qz.resize(n).is_ok() &&
+              d_w.resize(n).is_ok();
+    ok = ok && d_qx.copy_from_host(cuda::std::span<Real const>(qx.data(), n)).is_ok() &&
          d_qy.copy_from_host(cuda::std::span<Real const>(qy.data(), n)).is_ok() &&
          d_qz.copy_from_host(cuda::std::span<Real const>(qz.data(), n)).is_ok();
     if (!ok)
         return false;
 
     s = gwn::gwn_compute_winding_number_batch_bvh_taylor<Order, Real, Index>(
-        geometry.accessor(), bvh.accessor(), data.accessor(),
-        d_qx.span(), d_qy.span(), d_qz.span(), d_w.span(), accuracy_scale
+        geometry.accessor(), bvh.accessor(), data.accessor(), d_qx.span(), d_qy.span(), d_qz.span(),
+        d_w.span(), accuracy_scale
     );
     if (!s.is_ok())
         return false;
@@ -272,14 +252,12 @@ bool run_winding_query(
 
 template <class Mesh>
 bool run_edge_distance_query(
-    Mesh const &mesh,
-    std::vector<Real> const &qx, std::vector<Real> const &qy, std::vector<Real> const &qz,
-    std::vector<Real> &out_d
+    Mesh const &mesh, std::vector<Real> const &qx, std::vector<Real> const &qy,
+    std::vector<Real> const &qz, std::vector<Real> &out_d
 ) {
     gwn::gwn_geometry_object<Real, Index> geometry;
     gwn::gwn_status s = gwn::gwn_upload_geometry(
-        geometry,
-        cuda::std::span<Real const>(mesh.vx.data(), mesh.vx.size()),
+        geometry, cuda::std::span<Real const>(mesh.vx.data(), mesh.vx.size()),
         cuda::std::span<Real const>(mesh.vy.data(), mesh.vy.size()),
         cuda::std::span<Real const>(mesh.vz.data(), mesh.vz.size()),
         cuda::std::span<Index const>(mesh.i0.data(), mesh.i0.size()),
@@ -299,18 +277,17 @@ bool run_edge_distance_query(
 
     std::size_t const n = qx.size();
     gwn::gwn_device_array<Real> d_qx, d_qy, d_qz, d_out;
-    bool ok = d_qx.resize(n).is_ok() && d_qy.resize(n).is_ok() &&
-              d_qz.resize(n).is_ok() && d_out.resize(n).is_ok();
-    ok = ok &&
-         d_qx.copy_from_host(cuda::std::span<Real const>(qx.data(), n)).is_ok() &&
+    bool ok = d_qx.resize(n).is_ok() && d_qy.resize(n).is_ok() && d_qz.resize(n).is_ok() &&
+              d_out.resize(n).is_ok();
+    ok = ok && d_qx.copy_from_host(cuda::std::span<Real const>(qx.data(), n)).is_ok() &&
          d_qy.copy_from_host(cuda::std::span<Real const>(qy.data(), n)).is_ok() &&
          d_qz.copy_from_host(cuda::std::span<Real const>(qz.data(), n)).is_ok();
     if (!ok)
         return false;
 
     s = gwn::gwn_compute_unsigned_edge_distance_batch_bvh<Real, Index>(
-        geometry.accessor(), bvh.accessor(), aabb.accessor(),
-        d_qx.span(), d_qy.span(), d_qz.span(), d_out.span()
+        geometry.accessor(), bvh.accessor(), aabb.accessor(), d_qx.span(), d_qy.span(), d_qz.span(),
+        d_out.span()
     );
     if (!s.is_ok())
         return false;
@@ -324,8 +301,7 @@ bool run_edge_distance_query(
 }
 
 inline Real point_segment_distance(
-    Real const qx, Real const qy, Real const qz,
-    Real const ax, Real const ay, Real const az,
+    Real const qx, Real const qy, Real const qz, Real const ax, Real const ay, Real const az,
     Real const bx, Real const by, Real const bz
 ) {
     Real const abx = bx - ax;
@@ -353,7 +329,8 @@ inline Real point_segment_distance(
     return std::sqrt(dx * dx + dy * dy + dz * dz);
 }
 
-inline Real cpu_edge_distance(OctahedronMesh const &mesh, Real const qx, Real const qy, Real const qz) {
+inline Real
+cpu_edge_distance(OctahedronMesh const &mesh, Real const qx, Real const qy, Real const qz) {
     Real best = std::numeric_limits<Real>::infinity();
     for (std::size_t ti = 0; ti < mesh.i0.size(); ++ti) {
         auto const ia = static_cast<std::size_t>(mesh.i0[ti]);
@@ -432,6 +409,26 @@ TEST(HarnackStepSize, constrained_step_never_exceeds_radius) {
     EXPECT_LE(rho, R);
 }
 
+// Test 1c: Two-sided constrained step should match constrained_step min-step
+// selection semantics (legacy behavior).
+TEST(HarnackStepSize, two_sided_min_step_selection_matches_legacy) {
+    using namespace gwn::detail;
+
+    Real const R = Real(1);
+    Real const f_t = Real(-2); // a <= 0 branch: base step = R * 1e-4
+    Real const lower = Real(0);
+    Real const upper = Real(2);
+    Real const c = Real(-1);
+    Real const min_abs = Real(0.2);
+    Real const min_rel = Real(0.1);
+
+    Real const rho =
+        gwn_harnack_constrained_two_sided_step(f_t, lower, upper, c, R, Real(1), min_abs, min_rel);
+
+    // Legacy rule: if (R > min_abs_step), use R * min_relative_step.
+    EXPECT_NEAR(rho, Real(0.1), Real(1e-6));
+}
+
 // Test 2: Ray parameterization should follow reference semantics.
 //
 // Reference tracer does NOT normalize ray direction; it scales the step by
@@ -474,8 +471,7 @@ TEST_F(CudaFixture, harnack_convergence_at_mesh_surface) {
 
     constexpr Real k_eps = 1e-3f;
     std::vector<Real> ht, hnx, hny, hnz;
-    if (!run_harnack_trace<1>(mesh, ox, oy, oz, dx, dy, dz,
-                              ht, hnx, hny, hnz, Real(0.5), k_eps))
+    if (!run_harnack_trace<1>(mesh, ox, oy, oz, dx, dy, dz, ht, hnx, hny, hnz, Real(0.5), k_eps))
         GTEST_SKIP() << "CUDA unavailable";
 
     std::vector<Real> qx_hit, qy_hit, qz_hit;
@@ -504,8 +500,7 @@ TEST_F(CudaFixture, harnack_convergence_at_mesh_surface) {
         if (!(t_hit[i] > t_face_hit[i] + Real(1e-3)))
             continue;
         Real const residual = wrapped_angle_residual(w_hit[i], Real(0.5));
-        EXPECT_LT(residual, Real(0.2))
-            << "open-mesh wrapped residual too large at hit " << i;
+        EXPECT_LT(residual, Real(0.2)) << "open-mesh wrapped residual too large at hit " << i;
     }
 }
 
@@ -521,11 +516,11 @@ TEST_F(CudaFixture, harnack_normal_sanity) {
     // Rays from above the half-octahedron pointing down.
     // Use off-center origins to avoid hitting the apex vertex directly.
     std::vector<Real> ox{0.4f, -0.2f, 0.1f};
-    std::vector<Real> oy{0.1f,  0.3f, -0.4f};
-    std::vector<Real> oz{5,     5,     5};
-    std::vector<Real> dx{0,     0,     0};
-    std::vector<Real> dy{0,     0,     0};
-    std::vector<Real> dz{-1,   -1,    -1};
+    std::vector<Real> oy{0.1f, 0.3f, -0.4f};
+    std::vector<Real> oz{5, 5, 5};
+    std::vector<Real> dx{0, 0, 0};
+    std::vector<Real> dy{0, 0, 0};
+    std::vector<Real> dz{-1, -1, -1};
 
     std::vector<Real> ht, hnx, hny, hnz;
     if (!run_harnack_trace<1>(mesh, ox, oy, oz, dx, dy, dz, ht, hnx, hny, hnz))
@@ -536,18 +531,16 @@ TEST_F(CudaFixture, harnack_normal_sanity) {
         if (ht[i] < Real(0))
             continue;
 
-        Real const nmag = std::sqrt(hnx[i]*hnx[i] + hny[i]*hny[i] + hnz[i]*hnz[i]);
+        Real const nmag = std::sqrt(hnx[i] * hnx[i] + hny[i] * hny[i] + hnz[i] * hnz[i]);
         if (nmag < Real(0.5))
             continue; // Skip degenerate normals (vertex/edge singularity).
 
         ++valid_normals;
 
-        EXPECT_NEAR(nmag, Real(1), Real(0.1))
-            << "ray " << i << ": normal magnitude = " << nmag;
+        EXPECT_NEAR(nmag, Real(1), Real(0.1)) << "ray " << i << ": normal magnitude = " << nmag;
 
         Real const ndotd = hnx[i] * dx[i] + hny[i] * dy[i] + hnz[i] * dz[i];
-        EXPECT_LT(ndotd, Real(0))
-            << "ray " << i << ": normal should oppose incoming direction";
+        EXPECT_LT(ndotd, Real(0)) << "ray " << i << ": normal should oppose incoming direction";
     }
     // We expect at least one ray to produce a valid normal.
     EXPECT_GE(valid_normals, 1) << "No rays produced valid normals";
@@ -558,22 +551,21 @@ TEST_F(CudaFixture, harnack_no_hit_rays) {
     OctahedronMesh mesh;
 
     // Rays starting outside, pointing away from the mesh.
-    std::vector<Real> ox{5,  0, 0};
-    std::vector<Real> oy{0,  5, 0};
-    std::vector<Real> oz{0,  0, 5};
-    std::vector<Real> dx{1, 0, 0};  // pointing away
+    std::vector<Real> ox{5, 0, 0};
+    std::vector<Real> oy{0, 5, 0};
+    std::vector<Real> oz{0, 0, 5};
+    std::vector<Real> dx{1, 0, 0}; // pointing away
     std::vector<Real> dy{0, 1, 0};
     std::vector<Real> dz{0, 0, 1};
 
     std::vector<Real> ht, hnx, hny, hnz;
-    if (!run_harnack_trace<1>(mesh, ox, oy, oz, dx, dy, dz, ht, hnx, hny, hnz,
-                              Real(0.5), Real(1e-3), 256, Real(10)))
+    if (!run_harnack_trace<1>(
+            mesh, ox, oy, oz, dx, dy, dz, ht, hnx, hny, hnz, Real(0.5), Real(1e-3), 256, Real(10)
+        ))
         GTEST_SKIP() << "CUDA unavailable";
 
-    for (std::size_t i = 0; i < ox.size(); ++i) {
-        EXPECT_LT(ht[i], Real(0))
-            << "ray " << i << " should not hit (t=" << ht[i] << ")";
-    }
+    for (std::size_t i = 0; i < ox.size(); ++i)
+        EXPECT_LT(ht[i], Real(0)) << "ray " << i << " should not hit (t=" << ht[i] << ")";
 }
 
 // Test 7: Mismatched output spans return error.
@@ -587,14 +579,12 @@ TEST_F(CudaFixture, harnack_mismatched_spans_returns_error) {
     cuda::std::span<Real> out2(dummy, 2);
     cuda::std::span<Real> empty_out{};
 
-    gwn::gwn_status const s =
-        gwn::gwn_compute_harnack_trace_batch_bvh_taylor<0, Real, Index>(
-            geometry, bvh, aabb, moment,
-            empty, empty, empty,  // origins (0)
-            empty, empty, empty,  // dirs (0)
-            out2,                 // output_t (2), MISMATCH
-            empty_out, empty_out, empty_out
-        );
+    gwn::gwn_status const s = gwn::gwn_compute_harnack_trace_batch_bvh_taylor<0, Real, Index>(
+        geometry, bvh, aabb, moment, empty, empty, empty, // origins (0)
+        empty, empty, empty,                              // dirs (0)
+        out2,                                             // output_t (2), MISMATCH
+        empty_out, empty_out, empty_out
+    );
     EXPECT_EQ(s.error(), gwn::gwn_error::invalid_argument);
 }
 
@@ -609,16 +599,14 @@ TEST_F(CudaFixture, harnack_batch_rejects_invalid_accessors) {
     gwn::gwn_device_array<Real> d_t, d_nx, d_ny, d_nz;
     bool ok = d_ox.resize(1).is_ok() && d_oy.resize(1).is_ok() && d_oz.resize(1).is_ok() &&
               d_dx.resize(1).is_ok() && d_dy.resize(1).is_ok() && d_dz.resize(1).is_ok() &&
-              d_t.resize(1).is_ok() && d_nx.resize(1).is_ok() &&
-              d_ny.resize(1).is_ok() && d_nz.resize(1).is_ok();
+              d_t.resize(1).is_ok() && d_nx.resize(1).is_ok() && d_ny.resize(1).is_ok() &&
+              d_nz.resize(1).is_ok();
     if (!ok)
         GTEST_SKIP() << "CUDA unavailable";
 
     gwn::gwn_status const s = gwn::gwn_compute_harnack_trace_batch_bvh_taylor<0, Real, Index>(
-        geometry, bvh, aabb, moment,
-        d_ox.span(), d_oy.span(), d_oz.span(),
-        d_dx.span(), d_dy.span(), d_dz.span(),
-        d_t.span(), d_nx.span(), d_ny.span(), d_nz.span()
+        geometry, bvh, aabb, moment, d_ox.span(), d_oy.span(), d_oz.span(), d_dx.span(),
+        d_dy.span(), d_dz.span(), d_t.span(), d_nx.span(), d_ny.span(), d_nz.span()
     );
     EXPECT_EQ(s.error(), gwn::gwn_error::invalid_argument);
 }
@@ -629,8 +617,8 @@ TEST_F(CudaFixture, edge_distance_batch_rejects_invalid_accessors) {
     gwn::gwn_bvh4_aabb_accessor<Real, Index> aabb{};
 
     gwn::gwn_device_array<Real> d_qx, d_qy, d_qz, d_out;
-    bool ok = d_qx.resize(1).is_ok() && d_qy.resize(1).is_ok() &&
-              d_qz.resize(1).is_ok() && d_out.resize(1).is_ok();
+    bool ok = d_qx.resize(1).is_ok() && d_qy.resize(1).is_ok() && d_qz.resize(1).is_ok() &&
+              d_out.resize(1).is_ok();
     if (!ok)
         GTEST_SKIP() << "CUDA unavailable";
 
@@ -654,8 +642,7 @@ TEST_F(CudaFixture, edge_distance_matches_cpu_reference) {
     ASSERT_EQ(d_gpu.size(), qx.size());
     for (std::size_t i = 0; i < qx.size(); ++i) {
         Real const d_cpu = cpu_edge_distance(mesh, qx[i], qy[i], qz[i]);
-        EXPECT_NEAR(d_gpu[i], d_cpu, Real(2e-4))
-            << "query " << i << " edge distance mismatch";
+        EXPECT_NEAR(d_gpu[i], d_cpu, Real(2e-4)) << "query " << i << " edge distance mismatch";
     }
 }
 
@@ -663,7 +650,7 @@ TEST_F(CudaFixture, harnack_angle_half_octahedron_hits) {
     HalfOctahedronMesh mesh;
 
     std::vector<Real> ox{-0.4f, 0.0f, 0.4f, -0.3f, 0.1f, 0.3f};
-    std::vector<Real> oy{-0.3f, 0.2f, 0.1f,  0.4f, -0.2f, 0.0f};
+    std::vector<Real> oy{-0.3f, 0.2f, 0.1f, 0.4f, -0.2f, 0.0f};
     std::vector<Real> oz{2.0f, 2.0f, 2.0f, 1.8f, 1.8f, 1.8f};
     std::vector<Real> dx{0, 0, 0, 0, 0, 0};
     std::vector<Real> dy{0, 0, 0, 0, 0, 0};
@@ -747,8 +734,7 @@ TEST_F(CudaFixture, harnack_cube_closed_hits) {
         Real const hz = oz[i] + ht[i] * dz[i];
         // Hit point should be near the cube surface (max coord ≈ 1).
         Real const max_coord = std::max({std::abs(hx), std::abs(hy), std::abs(hz)});
-        EXPECT_NEAR(max_coord, Real(1), Real(0.15))
-            << "ray " << i << ": hit not near cube surface";
+        EXPECT_NEAR(max_coord, Real(1), Real(0.15)) << "ray " << i << ": hit not near cube surface";
     }
     EXPECT_GE(hits, 1) << "closed cube should produce at least one hit";
 }
@@ -770,10 +756,9 @@ TEST_F(CudaFixture, harnack_open_cube_hits) {
         GTEST_SKIP() << "CUDA unavailable";
 
     int hits = 0;
-    for (std::size_t i = 0; i < ox.size(); ++i) {
+    for (std::size_t i = 0; i < ox.size(); ++i)
         if (ht[i] >= Real(0))
             ++hits;
-    }
     EXPECT_GE(hits, 1) << "open cube should produce at least one hit";
 }
 
@@ -810,8 +795,7 @@ TEST_F(CudaFixture, harnack_open_cube_winding_convergence) {
 
     for (std::size_t i = 0; i < w.size(); ++i) {
         Real const residual = wrapped_angle_residual(w[i], Real(0.5));
-        EXPECT_LT(residual, Real(0.5))
-            << "open cube winding residual too large at hit " << i
-            << " (w=" << w[i] << ", residual=" << residual << ")";
+        EXPECT_LT(residual, Real(0.5)) << "open cube winding residual too large at hit " << i
+                                       << " (w=" << w[i] << ", residual=" << residual << ")";
     }
 }

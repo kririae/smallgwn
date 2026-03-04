@@ -37,10 +37,7 @@ struct RaysSoA {
     std::size_t size() const { return ox.size(); }
 };
 
-enum class EvalMode : int {
-    taylor = 0,
-    exact = 1
-};
+enum class EvalMode : int { taylor = 0, exact = 1 };
 
 enum class TraceTerminalReason : int {
     unknown = 0,
@@ -72,8 +69,7 @@ constexpr int k_width = 4;
 constexpr int k_stack = gwn::k_gwn_default_traversal_stack_capacity;
 constexpr int k_block_size = 128;
 
-template <class T>
-__device__ inline T diag_sqrt(T const value) noexcept {
+template <class T> __device__ inline T diag_sqrt(T const value) noexcept {
     if constexpr (std::is_same_v<T, float>)
         return sqrtf(value);
     return sqrt(value);
@@ -100,7 +96,9 @@ __device__ inline gwn::detail::gwn_winding_and_gradient_result<Real> eval_w_and_
     gwn::detail::gwn_winding_and_gradient_result<Real> result;
     if constexpr (Mode == EvalMode::taylor) {
         return gwn::detail::gwn_winding_and_gradient_point_bvh_taylor_impl<
-            Order, k_width, Real, Index, k_stack>(geometry, bvh, moment_tree, px, py, pz, accuracy_scale);
+            Order, k_width, Real, Index, k_stack>(
+            geometry, bvh, moment_tree, px, py, pz, accuracy_scale
+        );
     } else {
         result.winding = eval_w_exact<Order>(geometry, bvh, px, py, pz);
         // Test-only exact fallback: finite-difference gradient of exact winding.
@@ -180,11 +178,10 @@ __device__ inline TraceDiagnostic trace_reference_semantics(
         Real const grad_omega_mag = k_four_pi * grad_w_mag;
         diag.last_grad_omega_mag = grad_omega_mag;
 
-        Real const R = gwn::detail::gwn_unsigned_distance_point_bvh_impl<
-            k_width, Real, Index, k_stack>(
-            geometry, bvh, aabb_tree, px, py, pz,
-            std::numeric_limits<Real>::infinity()
-        );
+        Real const R =
+            gwn::detail::gwn_unsigned_distance_point_bvh_impl<k_width, Real, Index, k_stack>(
+                geometry, bvh, aabb_tree, px, py, pz, std::numeric_limits<Real>::infinity()
+            );
         diag.last_R = R;
         if (!(R >= Real(0))) {
             diag.terminal_reason = static_cast<int>(TraceTerminalReason::invalid_radius);
@@ -234,11 +231,10 @@ __global__ void harnack_trace_smallgwn_kernel(
     gwn::gwn_geometry_accessor<Real, Index> geometry,
     gwn::gwn_bvh4_topology_accessor<Real, Index> bvh,
     gwn::gwn_bvh4_aabb_accessor<Real, Index> aabb_tree,
-    gwn::gwn_bvh4_moment_accessor<Order, Real, Index> moment_tree,
-    Real const *ray_ox, Real const *ray_oy, Real const *ray_oz,
-    Real const *ray_dx, Real const *ray_dy, Real const *ray_dz, std::size_t const ray_count,
-    Real const target_winding, Real const epsilon, int const max_iterations, Real const t_max,
-    Real const accuracy_scale, TraceDiagnostic *out_diag
+    gwn::gwn_bvh4_moment_accessor<Order, Real, Index> moment_tree, Real const *ray_ox,
+    Real const *ray_oy, Real const *ray_oz, Real const *ray_dx, Real const *ray_dy,
+    Real const *ray_dz, std::size_t const ray_count, Real const target_winding, Real const epsilon,
+    int const max_iterations, Real const t_max, Real const accuracy_scale, TraceDiagnostic *out_diag
 ) {
     std::size_t const ray_id = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if (ray_id >= ray_count)
@@ -265,11 +261,10 @@ __global__ void harnack_trace_reference_kernel(
     gwn::gwn_geometry_accessor<Real, Index> geometry,
     gwn::gwn_bvh4_topology_accessor<Real, Index> bvh,
     gwn::gwn_bvh4_aabb_accessor<Real, Index> aabb_tree,
-    gwn::gwn_bvh4_moment_accessor<Order, Real, Index> moment_tree,
-    Real const *ray_ox, Real const *ray_oy, Real const *ray_oz,
-    Real const *ray_dx, Real const *ray_dy, Real const *ray_dz, std::size_t const ray_count,
-    Real const target_winding, Real const epsilon, int const max_iterations, Real const t_max,
-    Real const accuracy_scale, TraceDiagnostic *out_diag
+    gwn::gwn_bvh4_moment_accessor<Order, Real, Index> moment_tree, Real const *ray_ox,
+    Real const *ray_oy, Real const *ray_oz, Real const *ray_dx, Real const *ray_dy,
+    Real const *ray_dz, std::size_t const ray_count, Real const target_winding, Real const epsilon,
+    int const max_iterations, Real const t_max, Real const accuracy_scale, TraceDiagnostic *out_diag
 ) {
     std::size_t const ray_id = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if (ray_id >= ray_count)
@@ -282,18 +277,15 @@ __global__ void harnack_trace_reference_kernel(
     );
 }
 
-template <int Order>
-struct TraceHarness {
+template <int Order> struct TraceHarness {
     gwn::gwn_geometry_object<Real, Index> geometry;
     gwn::gwn_bvh4_topology_object<Real, Index> bvh;
     gwn::gwn_bvh4_aabb_object<Real, Index> aabb;
     gwn::gwn_bvh4_moment_object<Order, Real, Index> moment;
 
-    template <class Mesh>
-    bool build(Mesh const &mesh, std::string &error_message) {
+    template <class Mesh> bool build(Mesh const &mesh, std::string &error_message) {
         gwn::gwn_status s = gwn::gwn_upload_geometry(
-            geometry,
-            cuda::std::span<Real const>(mesh.vx.data(), mesh.vx.size()),
+            geometry, cuda::std::span<Real const>(mesh.vx.data(), mesh.vx.size()),
             cuda::std::span<Real const>(mesh.vy.data(), mesh.vy.size()),
             cuda::std::span<Real const>(mesh.vz.data(), mesh.vz.size()),
             cuda::std::span<Index const>(mesh.i0.data(), mesh.i0.size()),
@@ -319,9 +311,9 @@ struct TraceHarness {
     }
 
     bool run_smallgwn(
-        RaysSoA const &rays, Real const target_winding, Real const epsilon, int const max_iterations,
-        Real const t_max, Real const accuracy_scale, std::vector<TraceDiagnostic> &out,
-        std::string &error_message
+        RaysSoA const &rays, Real const target_winding, Real const epsilon,
+        int const max_iterations, Real const t_max, Real const accuracy_scale,
+        std::vector<TraceDiagnostic> &out, std::string &error_message
     ) {
         gwn::gwn_device_array<Real> d_ox, d_oy, d_oz, d_dx, d_dy, d_dz;
         gwn::gwn_device_array<TraceDiagnostic> d_out;
@@ -335,9 +327,9 @@ struct TraceHarness {
         dim3 const block(k_block_size);
         dim3 const grid(static_cast<unsigned int>((rays.size() + k_block_size - 1) / k_block_size));
         harnack_trace_smallgwn_kernel<Order><<<grid, block>>>(
-            geometry.accessor(), bvh.accessor(), aabb.accessor(), moment.accessor(),
-            d_ox.data(), d_oy.data(), d_oz.data(), d_dx.data(), d_dy.data(), d_dz.data(),
-            rays.size(), target_winding, epsilon, max_iterations, t_max, accuracy_scale, d_out.data()
+            geometry.accessor(), bvh.accessor(), aabb.accessor(), moment.accessor(), d_ox.data(),
+            d_oy.data(), d_oz.data(), d_dx.data(), d_dy.data(), d_dz.data(), rays.size(),
+            target_winding, epsilon, max_iterations, t_max, accuracy_scale, d_out.data()
         );
         if (cudaError_t const launch_err = cudaGetLastError(); launch_err != cudaSuccess) {
             error_message =
@@ -365,9 +357,9 @@ struct TraceHarness {
 
     template <EvalMode Mode>
     bool run_reference(
-        RaysSoA const &rays, Real const target_winding, Real const epsilon, int const max_iterations,
-        Real const t_max, Real const accuracy_scale, std::vector<TraceDiagnostic> &out,
-        std::string &error_message
+        RaysSoA const &rays, Real const target_winding, Real const epsilon,
+        int const max_iterations, Real const t_max, Real const accuracy_scale,
+        std::vector<TraceDiagnostic> &out, std::string &error_message
     ) {
         gwn::gwn_device_array<Real> d_ox, d_oy, d_oz, d_dx, d_dy, d_dz;
         gwn::gwn_device_array<TraceDiagnostic> d_out;
@@ -381,9 +373,9 @@ struct TraceHarness {
         dim3 const block(k_block_size);
         dim3 const grid(static_cast<unsigned int>((rays.size() + k_block_size - 1) / k_block_size));
         harnack_trace_reference_kernel<Order, Mode><<<grid, block>>>(
-            geometry.accessor(), bvh.accessor(), aabb.accessor(), moment.accessor(),
-            d_ox.data(), d_oy.data(), d_oz.data(), d_dx.data(), d_dy.data(), d_dz.data(),
-            rays.size(), target_winding, epsilon, max_iterations, t_max, accuracy_scale, d_out.data()
+            geometry.accessor(), bvh.accessor(), aabb.accessor(), moment.accessor(), d_ox.data(),
+            d_oy.data(), d_oz.data(), d_dx.data(), d_dy.data(), d_dz.data(), rays.size(),
+            target_winding, epsilon, max_iterations, t_max, accuracy_scale, d_out.data()
         );
         if (cudaError_t const launch_err = cudaGetLastError(); launch_err != cudaSuccess) {
             error_message =
@@ -419,13 +411,14 @@ private:
         bool ok = d_ox.resize(rays.size()).is_ok() && d_oy.resize(rays.size()).is_ok() &&
                   d_oz.resize(rays.size()).is_ok() && d_dx.resize(rays.size()).is_ok() &&
                   d_dy.resize(rays.size()).is_ok() && d_dz.resize(rays.size()).is_ok();
-        ok = ok &&
-             d_ox.copy_from_host(cuda::std::span<Real const>(rays.ox.data(), rays.size())).is_ok() &&
-             d_oy.copy_from_host(cuda::std::span<Real const>(rays.oy.data(), rays.size())).is_ok() &&
-             d_oz.copy_from_host(cuda::std::span<Real const>(rays.oz.data(), rays.size())).is_ok() &&
-             d_dx.copy_from_host(cuda::std::span<Real const>(rays.dx.data(), rays.size())).is_ok() &&
-             d_dy.copy_from_host(cuda::std::span<Real const>(rays.dy.data(), rays.size())).is_ok() &&
-             d_dz.copy_from_host(cuda::std::span<Real const>(rays.dz.data(), rays.size())).is_ok();
+        ok =
+            ok &&
+            d_ox.copy_from_host(cuda::std::span<Real const>(rays.ox.data(), rays.size())).is_ok() &&
+            d_oy.copy_from_host(cuda::std::span<Real const>(rays.oy.data(), rays.size())).is_ok() &&
+            d_oz.copy_from_host(cuda::std::span<Real const>(rays.oz.data(), rays.size())).is_ok() &&
+            d_dx.copy_from_host(cuda::std::span<Real const>(rays.dx.data(), rays.size())).is_ok() &&
+            d_dy.copy_from_host(cuda::std::span<Real const>(rays.dy.data(), rays.size())).is_ok() &&
+            d_dz.copy_from_host(cuda::std::span<Real const>(rays.dz.data(), rays.size())).is_ok();
         if (!ok) {
             error_message = "ray allocation/upload failed";
             return false;
@@ -448,13 +441,12 @@ void append_ray(
 
 RaysSoA make_basic_forward_rays() {
     RaysSoA rays;
-    for (int yi = -1; yi <= 1; ++yi) {
+    for (int yi = -1; yi <= 1; ++yi)
         for (int xi = -1; xi <= 1; ++xi)
             append_ray(
                 rays, Real(0.2) * Real(xi), Real(0.2) * Real(yi), Real(2), Real(0), Real(0),
                 Real(-1)
             );
-    }
     return rays;
 }
 
@@ -462,10 +454,9 @@ RaysSoA make_branchcut_rays() {
     RaysSoA rays;
     std::array<Real, 4> const xs{Real(-0.45), Real(-0.30), Real(0.30), Real(0.45)};
     std::array<Real, 3> const ys{Real(-0.15), Real(0), Real(0.15)};
-    for (Real const y : ys) {
+    for (Real const y : ys)
         for (Real const x : xs)
             append_ray(rays, x, y, Real(2), Real(0), Real(0), Real(-1));
-    }
     return rays;
 }
 
@@ -495,24 +486,15 @@ RaysSoA make_closed_off_axis_rays() {
 
 char const *reason_to_cstr(int const reason) {
     switch (static_cast<TraceTerminalReason>(reason)) {
-    case TraceTerminalReason::unknown:
-        return "unknown";
-    case TraceTerminalReason::invalid_ray_dir:
-        return "invalid_ray_dir";
-    case TraceTerminalReason::hit_grad_stop:
-        return "hit_grad_stop";
-    case TraceTerminalReason::hit_singular_radius:
-        return "hit_singular_radius";
-    case TraceTerminalReason::invalid_radius:
-        return "invalid_radius";
-    case TraceTerminalReason::invalid_rho:
-        return "invalid_rho";
-    case TraceTerminalReason::nonpositive_rho:
-        return "nonpositive_rho";
-    case TraceTerminalReason::tmax_exceeded:
-        return "tmax_exceeded";
-    case TraceTerminalReason::max_iterations_reached:
-        return "max_iterations_reached";
+    case TraceTerminalReason::unknown: return "unknown";
+    case TraceTerminalReason::invalid_ray_dir: return "invalid_ray_dir";
+    case TraceTerminalReason::hit_grad_stop: return "hit_grad_stop";
+    case TraceTerminalReason::hit_singular_radius: return "hit_singular_radius";
+    case TraceTerminalReason::invalid_radius: return "invalid_radius";
+    case TraceTerminalReason::invalid_rho: return "invalid_rho";
+    case TraceTerminalReason::nonpositive_rho: return "nonpositive_rho";
+    case TraceTerminalReason::tmax_exceeded: return "tmax_exceeded";
+    case TraceTerminalReason::max_iterations_reached: return "max_iterations_reached";
     }
     return "invalid_reason";
 }
@@ -551,10 +533,9 @@ ComparisonSummary compare_behavior(
         if (e.iterations > 0)
             ++summary.exact_fallback_samples;
 
-        bool const algorithmic_mismatch =
-            (s_hit != t_hit) ||
-            (s_hit && t_hit && std::abs(s.t - t.t) > t_tolerance) ||
-            (std::abs(s.iterations - t.iterations) > 1);
+        bool const algorithmic_mismatch = (s_hit != t_hit) ||
+                                          (s_hit && t_hit && std::abs(s.t - t.t) > t_tolerance) ||
+                                          (std::abs(s.iterations - t.iterations) > 1);
         if (!algorithmic_mismatch)
             continue;
 
@@ -570,9 +551,8 @@ ComparisonSummary compare_behavior(
                << ", reason=" << reason_to_cstr(e.terminal_reason) << ")";
         detail << " drift_taylor_exact=" << (taylor_exact_drift ? "yes" : "no");
         detail << " [t_eval=" << t.last_t_eval << ", dist=" << t.last_dist
-               << ", grad=" << t.last_grad_omega_mag << ", R=" << t.last_R
-               << ", rho=" << t.last_rho << ", commits=" << t.commit_count
-               << ", backoffs=" << t.backoff_count << "]\n";
+               << ", grad=" << t.last_grad_omega_mag << ", R=" << t.last_R << ", rho=" << t.last_rho
+               << ", commits=" << t.commit_count << ", backoffs=" << t.backoff_count << "]\n";
     }
 
     detail << "summary: algorithmic_mismatch=" << summary.algorithmic_mismatch
@@ -584,8 +564,8 @@ ComparisonSummary compare_behavior(
 
 template <int Order, class Mesh>
 ComparisonSummary run_behavior_case(
-    Mesh const &mesh, RaysSoA const &rays, Real const target_winding,
-    Real const epsilon, int const max_iterations, Real const t_max, Real const accuracy_scale
+    Mesh const &mesh, RaysSoA const &rays, Real const target_winding, Real const epsilon,
+    int const max_iterations, Real const t_max, Real const accuracy_scale
 ) {
     TraceHarness<Order> harness;
     std::string error_message;
@@ -676,13 +656,12 @@ TEST_F(CudaFixture, harnack_behavior_match_open_cube) {
 
     // Forward rays from z=+3 toward -z, passing through the open z=+1 face.
     RaysSoA rays;
-    for (int yi = -1; yi <= 1; ++yi) {
+    for (int yi = -1; yi <= 1; ++yi)
         for (int xi = -1; xi <= 1; ++xi)
             append_ray(
-                rays, Real(0.3) * Real(xi), Real(0.3) * Real(yi), Real(3),
-                Real(0), Real(0), Real(-1)
+                rays, Real(0.3) * Real(xi), Real(0.3) * Real(yi), Real(3), Real(0), Real(0),
+                Real(-1)
             );
-    }
 
     ComparisonSummary const summary = run_behavior_case<1>(
         mesh, rays,

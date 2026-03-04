@@ -34,8 +34,7 @@ template <class Real_, class Index_>
 void reference_winding_gradient_fd(
     std::span<Real_ const> vx, std::span<Real_ const> vy, std::span<Real_ const> vz,
     std::span<Index_ const> i0, std::span<Index_ const> i1, std::span<Index_ const> i2,
-    Real_ const qx, Real_ const qy, Real_ const qz, Real_ const h, Real_ &gx, Real_ &gy,
-    Real_ &gz
+    Real_ const qx, Real_ const qy, Real_ const qz, Real_ const h, Real_ &gx, Real_ &gy, Real_ &gz
 ) {
     auto w = [&](Real_ x, Real_ y, Real_ z) {
         return gwn::tests::reference_winding_number_point<Real_, Index_>(
@@ -95,17 +94,15 @@ struct HalfOctahedronMesh {
 // Returns true on success; skips if CUDA unavailable.
 template <int Order, std::size_t Nv, std::size_t Nt>
 bool run_gradient_query(
-    std::array<Real, Nv> const &vx, std::array<Real, Nv> const &vy,
-    std::array<Real, Nv> const &vz, std::array<Index, Nt> const &i0,
-    std::array<Index, Nt> const &i1, std::array<Index, Nt> const &i2,
-    std::vector<Real> const &qx, std::vector<Real> const &qy, std::vector<Real> const &qz,
-    std::vector<Real> &out_gx, std::vector<Real> &out_gy, std::vector<Real> &out_gz,
-    Real const accuracy_scale = Real(2)
+    std::array<Real, Nv> const &vx, std::array<Real, Nv> const &vy, std::array<Real, Nv> const &vz,
+    std::array<Index, Nt> const &i0, std::array<Index, Nt> const &i1,
+    std::array<Index, Nt> const &i2, std::vector<Real> const &qx, std::vector<Real> const &qy,
+    std::vector<Real> const &qz, std::vector<Real> &out_gx, std::vector<Real> &out_gy,
+    std::vector<Real> &out_gz, Real const accuracy_scale = Real(2)
 ) {
     gwn::gwn_geometry_object<Real, Index> geometry;
     gwn::gwn_status const upload_status = gwn::gwn_upload_geometry(
-        geometry,
-        cuda::std::span<Real const>(vx.data(), vx.size()),
+        geometry, cuda::std::span<Real const>(vx.data(), vx.size()),
         cuda::std::span<Real const>(vy.data(), vy.size()),
         cuda::std::span<Real const>(vz.data(), vz.size()),
         cuda::std::span<Index const>(i0.data(), i0.size()),
@@ -128,8 +125,7 @@ bool run_gradient_query(
             geometry, bvh, aabb, data
         );
     if (!build_status.is_ok()) {
-        ADD_FAILURE() << "BVH build failed: "
-                      << gwn::tests::status_to_debug_string(build_status);
+        ADD_FAILURE() << "BVH build failed: " << gwn::tests::status_to_debug_string(build_status);
         return false;
     }
 
@@ -137,8 +133,7 @@ bool run_gradient_query(
     gwn::gwn_device_array<Real> d_qx, d_qy, d_qz, d_gx, d_gy, d_gz;
     bool ok = d_qx.resize(n).is_ok() && d_qy.resize(n).is_ok() && d_qz.resize(n).is_ok() &&
               d_gx.resize(n).is_ok() && d_gy.resize(n).is_ok() && d_gz.resize(n).is_ok();
-    ok = ok &&
-         d_qx.copy_from_host(cuda::std::span<Real const>(qx.data(), n)).is_ok() &&
+    ok = ok && d_qx.copy_from_host(cuda::std::span<Real const>(qx.data(), n)).is_ok() &&
          d_qy.copy_from_host(cuda::std::span<Real const>(qy.data(), n)).is_ok() &&
          d_qz.copy_from_host(cuda::std::span<Real const>(qz.data(), n)).is_ok();
     if (!ok) {
@@ -191,9 +186,9 @@ TEST_F(CudaFixture, gradient_near_surface_half_octahedron_brute_force) {
     // Near-surface queries: above the face interiors of the half-octahedron.
     // Each upper face has a centroid roughly at z≈0.33 (for the top half).
     // Queries at z=0.7 are close to face centers and have non-trivial gradients.
-    std::vector<Real> qx{ 0.3f, -0.3f, 0.3f, -0.3f, 0.0f};
-    std::vector<Real> qy{ 0.3f,  0.3f,-0.3f, -0.3f, 0.0f};
-    std::vector<Real> qz{ 0.7f,  0.7f, 0.7f,  0.7f, 0.5f};
+    std::vector<Real> qx{0.3f, -0.3f, 0.3f, -0.3f, 0.0f};
+    std::vector<Real> qy{0.3f, 0.3f, -0.3f, -0.3f, 0.0f};
+    std::vector<Real> qz{0.7f, 0.7f, 0.7f, 0.7f, 0.5f};
     std::size_t const n = qx.size();
 
     // CPU finite-difference reference.
@@ -201,11 +196,11 @@ TEST_F(CudaFixture, gradient_near_surface_half_octahedron_brute_force) {
     int nontrivial = 0;
     for (std::size_t i = 0; i < n; ++i) {
         reference_winding_gradient_fd<Real, Index>(
-            mesh.sx(), mesh.sy(), mesh.sz(), mesh.si0(), mesh.si1(), mesh.si2(),
-            qx[i], qy[i], qz[i], k_fd_h, ref_gx[i], ref_gy[i], ref_gz[i]
+            mesh.sx(), mesh.sy(), mesh.sz(), mesh.si0(), mesh.si1(), mesh.si2(), qx[i], qy[i],
+            qz[i], k_fd_h, ref_gx[i], ref_gy[i], ref_gz[i]
         );
-        Real const mag = std::sqrt(ref_gx[i] * ref_gx[i] + ref_gy[i] * ref_gy[i] +
-                                   ref_gz[i] * ref_gz[i]);
+        Real const mag =
+            std::sqrt(ref_gx[i] * ref_gx[i] + ref_gy[i] * ref_gy[i] + ref_gz[i] * ref_gz[i]);
         if (mag > k_min_mag)
             ++nontrivial;
     }
@@ -215,8 +210,8 @@ TEST_F(CudaFixture, gradient_near_surface_half_octahedron_brute_force) {
     // GPU gradient with large accuracy_scale to force brute-force leaves.
     std::vector<Real> gpu_gx, gpu_gy, gpu_gz;
     if (!run_gradient_query<1>(
-            mesh.vx, mesh.vy, mesh.vz, mesh.i0, mesh.i1, mesh.i2,
-            qx, qy, qz, gpu_gx, gpu_gy, gpu_gz, /*accuracy_scale=*/Real(1000)
+            mesh.vx, mesh.vy, mesh.vz, mesh.i0, mesh.i1, mesh.i2, qx, qy, qz, gpu_gx, gpu_gy,
+            gpu_gz, /*accuracy_scale=*/Real(1000)
         ))
         GTEST_SKIP() << "CUDA unavailable or build failed";
 
@@ -268,22 +263,21 @@ TEST_F(CudaFixture, gradient_single_triangle_brute_force) {
     int nontrivial = 0;
     for (std::size_t i = 0; i < n; ++i) {
         reference_winding_gradient_fd<Real, Index>(
-            spvx, spvy, spvz, spi0, spi1, spi2,
-            qx[i], qy[i], qz[i], k_fd_h, ref_gx[i], ref_gy[i], ref_gz[i]
+            spvx, spvy, spvz, spi0, spi1, spi2, qx[i], qy[i], qz[i], k_fd_h, ref_gx[i], ref_gy[i],
+            ref_gz[i]
         );
-        Real const mag = std::sqrt(ref_gx[i] * ref_gx[i] + ref_gy[i] * ref_gy[i] +
-                                   ref_gz[i] * ref_gz[i]);
+        Real const mag =
+            std::sqrt(ref_gx[i] * ref_gx[i] + ref_gy[i] * ref_gy[i] + ref_gz[i] * ref_gz[i]);
         if (mag > k_min_mag)
             ++nontrivial;
     }
-    ASSERT_GE(nontrivial, 1)
-        << "all reference gradients near single triangle are trivially small";
+    ASSERT_GE(nontrivial, 1) << "all reference gradients near single triangle are trivially small";
 
     // GPU gradient (single triangle → always brute-force leaf).
     std::vector<Real> gpu_gx, gpu_gy, gpu_gz;
     if (!run_gradient_query<1>(
-            tvx, tvy, tvz, ti0, ti1, ti2,
-            qx, qy, qz, gpu_gx, gpu_gy, gpu_gz, /*accuracy_scale=*/Real(2)
+            tvx, tvy, tvz, ti0, ti1, ti2, qx, qy, qz, gpu_gx, gpu_gy, gpu_gz,
+            /*accuracy_scale=*/Real(2)
         ))
         GTEST_SKIP() << "CUDA unavailable or build failed";
 
@@ -312,9 +306,9 @@ TEST_F(CudaFixture, gradient_order0_half_octahedron_far_field_taylor) {
     HalfOctahedronMesh mesh;
 
     // Far-field queries at r≈3 (use Taylor approximation, not brute force).
-    std::vector<Real> qx{3.5f, -3.0f, 0.0f,  0.0f, 2.0f};
-    std::vector<Real> qy{0.0f,  0.0f, 3.5f, -3.0f, 2.0f};
-    std::vector<Real> qz{0.0f,  0.0f, 0.0f,  0.0f, 2.0f};
+    std::vector<Real> qx{3.5f, -3.0f, 0.0f, 0.0f, 2.0f};
+    std::vector<Real> qy{0.0f, 0.0f, 3.5f, -3.0f, 2.0f};
+    std::vector<Real> qz{0.0f, 0.0f, 0.0f, 0.0f, 2.0f};
     std::size_t const n = qx.size();
 
     // CPU finite-difference reference.
@@ -322,23 +316,24 @@ TEST_F(CudaFixture, gradient_order0_half_octahedron_far_field_taylor) {
     int nontrivial = 0;
     for (std::size_t i = 0; i < n; ++i) {
         reference_winding_gradient_fd<Real, Index>(
-            mesh.sx(), mesh.sy(), mesh.sz(), mesh.si0(), mesh.si1(), mesh.si2(),
-            qx[i], qy[i], qz[i], k_fd_h, ref_gx[i], ref_gy[i], ref_gz[i]
+            mesh.sx(), mesh.sy(), mesh.sz(), mesh.si0(), mesh.si1(), mesh.si2(), qx[i], qy[i],
+            qz[i], k_fd_h, ref_gx[i], ref_gy[i], ref_gz[i]
         );
-        Real const mag = std::sqrt(ref_gx[i] * ref_gx[i] + ref_gy[i] * ref_gy[i] +
-                                   ref_gz[i] * ref_gz[i]);
+        Real const mag =
+            std::sqrt(ref_gx[i] * ref_gx[i] + ref_gy[i] * ref_gy[i] + ref_gz[i] * ref_gz[i]);
         if (mag > k_min_nontrivial_mag)
             ++nontrivial;
     }
     // At least some far-field queries must have non-trivial gradients.
-    ASSERT_GE(nontrivial, 2)
-        << "half-octahedron far-field reference gradients are trivially small, "
-           "mesh symmetry cancelled the monopole? Test design issue.";
+    ASSERT_GE(
+        nontrivial, 2
+    ) << "half-octahedron far-field reference gradients are trivially small, "
+         "mesh symmetry cancelled the monopole? Test design issue.";
 
     std::vector<Real> gpu_gx, gpu_gy, gpu_gz;
     if (!run_gradient_query<0>(
-            mesh.vx, mesh.vy, mesh.vz, mesh.i0, mesh.i1, mesh.i2,
-            qx, qy, qz, gpu_gx, gpu_gy, gpu_gz, Real(2)
+            mesh.vx, mesh.vy, mesh.vz, mesh.i0, mesh.i1, mesh.i2, qx, qy, qz, gpu_gx, gpu_gy,
+            gpu_gz, Real(2)
         ))
         GTEST_SKIP() << "CUDA unavailable or build failed";
 
@@ -358,30 +353,29 @@ TEST_F(CudaFixture, gradient_order1_half_octahedron_far_field_taylor) {
 
     HalfOctahedronMesh mesh;
 
-    std::vector<Real> qx{3.5f, -3.0f, 0.0f,  0.0f, 2.0f};
-    std::vector<Real> qy{0.0f,  0.0f, 3.5f, -3.0f, 2.0f};
-    std::vector<Real> qz{0.0f,  0.0f, 0.0f,  0.0f, 2.0f};
+    std::vector<Real> qx{3.5f, -3.0f, 0.0f, 0.0f, 2.0f};
+    std::vector<Real> qy{0.0f, 0.0f, 3.5f, -3.0f, 2.0f};
+    std::vector<Real> qz{0.0f, 0.0f, 0.0f, 0.0f, 2.0f};
     std::size_t const n = qx.size();
 
     std::vector<Real> ref_gx(n), ref_gy(n), ref_gz(n);
     int nontrivial = 0;
     for (std::size_t i = 0; i < n; ++i) {
         reference_winding_gradient_fd<Real, Index>(
-            mesh.sx(), mesh.sy(), mesh.sz(), mesh.si0(), mesh.si1(), mesh.si2(),
-            qx[i], qy[i], qz[i], k_fd_h, ref_gx[i], ref_gy[i], ref_gz[i]
+            mesh.sx(), mesh.sy(), mesh.sz(), mesh.si0(), mesh.si1(), mesh.si2(), qx[i], qy[i],
+            qz[i], k_fd_h, ref_gx[i], ref_gy[i], ref_gz[i]
         );
-        Real const mag = std::sqrt(ref_gx[i] * ref_gx[i] + ref_gy[i] * ref_gy[i] +
-                                   ref_gz[i] * ref_gz[i]);
+        Real const mag =
+            std::sqrt(ref_gx[i] * ref_gx[i] + ref_gy[i] * ref_gy[i] + ref_gz[i] * ref_gz[i]);
         if (mag > k_min_nontrivial_mag)
             ++nontrivial;
     }
-    ASSERT_GE(nontrivial, 2)
-        << "reference gradients are trivially small, test design issue";
+    ASSERT_GE(nontrivial, 2) << "reference gradients are trivially small, test design issue";
 
     std::vector<Real> gpu_gx, gpu_gy, gpu_gz;
     if (!run_gradient_query<1>(
-            mesh.vx, mesh.vy, mesh.vz, mesh.i0, mesh.i1, mesh.i2,
-            qx, qy, qz, gpu_gx, gpu_gy, gpu_gz, Real(2)
+            mesh.vx, mesh.vy, mesh.vz, mesh.i0, mesh.i1, mesh.i2, qx, qy, qz, gpu_gx, gpu_gy,
+            gpu_gz, Real(2)
         ))
         GTEST_SKIP() << "CUDA unavailable or build failed";
 
@@ -401,30 +395,30 @@ TEST_F(CudaFixture, gradient_order1_more_accurate_than_order0_half_octahedron) {
 
     HalfOctahedronMesh mesh;
 
-    std::vector<Real> qx{3.5f, -3.0f, 0.0f,  0.0f};
-    std::vector<Real> qy{0.0f,  0.0f, 3.5f, -3.0f};
-    std::vector<Real> qz{0.0f,  0.0f, 0.0f,  0.0f};
+    std::vector<Real> qx{3.5f, -3.0f, 0.0f, 0.0f};
+    std::vector<Real> qy{0.0f, 0.0f, 3.5f, -3.0f};
+    std::vector<Real> qz{0.0f, 0.0f, 0.0f, 0.0f};
     std::size_t const n = qx.size();
 
     std::vector<Real> ref_gx(n), ref_gy(n), ref_gz(n);
     for (std::size_t i = 0; i < n; ++i) {
         reference_winding_gradient_fd<Real, Index>(
-            mesh.sx(), mesh.sy(), mesh.sz(), mesh.si0(), mesh.si1(), mesh.si2(),
-            qx[i], qy[i], qz[i], k_fd_h, ref_gx[i], ref_gy[i], ref_gz[i]
+            mesh.sx(), mesh.sy(), mesh.sz(), mesh.si0(), mesh.si1(), mesh.si2(), qx[i], qy[i],
+            qz[i], k_fd_h, ref_gx[i], ref_gy[i], ref_gz[i]
         );
     }
 
     std::vector<Real> gpu0_gx, gpu0_gy, gpu0_gz;
     if (!run_gradient_query<0>(
-            mesh.vx, mesh.vy, mesh.vz, mesh.i0, mesh.i1, mesh.i2,
-            qx, qy, qz, gpu0_gx, gpu0_gy, gpu0_gz, Real(2)
+            mesh.vx, mesh.vy, mesh.vz, mesh.i0, mesh.i1, mesh.i2, qx, qy, qz, gpu0_gx, gpu0_gy,
+            gpu0_gz, Real(2)
         ))
         GTEST_SKIP() << "CUDA unavailable or build failed";
 
     std::vector<Real> gpu1_gx, gpu1_gy, gpu1_gz;
     if (!run_gradient_query<1>(
-            mesh.vx, mesh.vy, mesh.vz, mesh.i0, mesh.i1, mesh.i2,
-            qx, qy, qz, gpu1_gx, gpu1_gy, gpu1_gz, Real(2)
+            mesh.vx, mesh.vy, mesh.vz, mesh.i0, mesh.i1, mesh.i2, qx, qy, qz, gpu1_gx, gpu1_gy,
+            gpu1_gz, Real(2)
         ))
         GTEST_SKIP() << "CUDA unavailable or build failed";
 
@@ -437,9 +431,8 @@ TEST_F(CudaFixture, gradient_order1_more_accurate_than_order0_half_octahedron) {
         max_err1 = std::max(max_err1, std::abs(gpu1_gy[i] - ref_gy[i]));
         max_err1 = std::max(max_err1, std::abs(gpu1_gz[i] - ref_gz[i]));
     }
-    EXPECT_LE(max_err1, max_err0 + 1e-6f)
-        << "Order-1 should be at least as accurate as Order-0"
-        << " (err0=" << max_err0 << " err1=" << max_err1 << ")";
+    EXPECT_LE(max_err1, max_err0 + 1e-6f) << "Order-1 should be at least as accurate as Order-0"
+                                          << " (err0=" << max_err0 << " err1=" << max_err1 << ")";
 }
 
 // Test 5: Order-2 half-octahedron far-field Taylor, tests the Order-2
@@ -450,30 +443,29 @@ TEST_F(CudaFixture, gradient_order2_half_octahedron_far_field_taylor) {
 
     HalfOctahedronMesh mesh;
 
-    std::vector<Real> qx{3.5f, -3.0f, 0.0f,  0.0f, 2.0f};
-    std::vector<Real> qy{0.0f,  0.0f, 3.5f, -3.0f, 2.0f};
-    std::vector<Real> qz{0.0f,  0.0f, 0.0f,  0.0f, 2.0f};
+    std::vector<Real> qx{3.5f, -3.0f, 0.0f, 0.0f, 2.0f};
+    std::vector<Real> qy{0.0f, 0.0f, 3.5f, -3.0f, 2.0f};
+    std::vector<Real> qz{0.0f, 0.0f, 0.0f, 0.0f, 2.0f};
     std::size_t const n = qx.size();
 
     std::vector<Real> ref_gx(n), ref_gy(n), ref_gz(n);
     int nontrivial = 0;
     for (std::size_t i = 0; i < n; ++i) {
         reference_winding_gradient_fd<Real, Index>(
-            mesh.sx(), mesh.sy(), mesh.sz(), mesh.si0(), mesh.si1(), mesh.si2(),
-            qx[i], qy[i], qz[i], k_fd_h, ref_gx[i], ref_gy[i], ref_gz[i]
+            mesh.sx(), mesh.sy(), mesh.sz(), mesh.si0(), mesh.si1(), mesh.si2(), qx[i], qy[i],
+            qz[i], k_fd_h, ref_gx[i], ref_gy[i], ref_gz[i]
         );
-        Real const mag = std::sqrt(ref_gx[i] * ref_gx[i] + ref_gy[i] * ref_gy[i] +
-                                   ref_gz[i] * ref_gz[i]);
+        Real const mag =
+            std::sqrt(ref_gx[i] * ref_gx[i] + ref_gy[i] * ref_gy[i] + ref_gz[i] * ref_gz[i]);
         if (mag > k_min_nontrivial_mag)
             ++nontrivial;
     }
-    ASSERT_GE(nontrivial, 2)
-        << "reference gradients are trivially small, test design issue";
+    ASSERT_GE(nontrivial, 2) << "reference gradients are trivially small, test design issue";
 
     std::vector<Real> gpu_gx, gpu_gy, gpu_gz;
     if (!run_gradient_query<2>(
-            mesh.vx, mesh.vy, mesh.vz, mesh.i0, mesh.i1, mesh.i2,
-            qx, qy, qz, gpu_gx, gpu_gy, gpu_gz, Real(2)
+            mesh.vx, mesh.vy, mesh.vz, mesh.i0, mesh.i1, mesh.i2, qx, qy, qz, gpu_gx, gpu_gy,
+            gpu_gz, Real(2)
         ))
         GTEST_SKIP() << "CUDA unavailable or build failed";
 
@@ -493,30 +485,30 @@ TEST_F(CudaFixture, gradient_order2_more_accurate_than_order1_half_octahedron) {
 
     HalfOctahedronMesh mesh;
 
-    std::vector<Real> qx{3.5f, -3.0f, 0.0f,  0.0f};
-    std::vector<Real> qy{0.0f,  0.0f, 3.5f, -3.0f};
-    std::vector<Real> qz{0.0f,  0.0f, 0.0f,  0.0f};
+    std::vector<Real> qx{3.5f, -3.0f, 0.0f, 0.0f};
+    std::vector<Real> qy{0.0f, 0.0f, 3.5f, -3.0f};
+    std::vector<Real> qz{0.0f, 0.0f, 0.0f, 0.0f};
     std::size_t const n = qx.size();
 
     std::vector<Real> ref_gx(n), ref_gy(n), ref_gz(n);
     for (std::size_t i = 0; i < n; ++i) {
         reference_winding_gradient_fd<Real, Index>(
-            mesh.sx(), mesh.sy(), mesh.sz(), mesh.si0(), mesh.si1(), mesh.si2(),
-            qx[i], qy[i], qz[i], k_fd_h, ref_gx[i], ref_gy[i], ref_gz[i]
+            mesh.sx(), mesh.sy(), mesh.sz(), mesh.si0(), mesh.si1(), mesh.si2(), qx[i], qy[i],
+            qz[i], k_fd_h, ref_gx[i], ref_gy[i], ref_gz[i]
         );
     }
 
     std::vector<Real> gpu1_gx, gpu1_gy, gpu1_gz;
     if (!run_gradient_query<1>(
-            mesh.vx, mesh.vy, mesh.vz, mesh.i0, mesh.i1, mesh.i2,
-            qx, qy, qz, gpu1_gx, gpu1_gy, gpu1_gz, Real(2)
+            mesh.vx, mesh.vy, mesh.vz, mesh.i0, mesh.i1, mesh.i2, qx, qy, qz, gpu1_gx, gpu1_gy,
+            gpu1_gz, Real(2)
         ))
         GTEST_SKIP() << "CUDA unavailable or build failed";
 
     std::vector<Real> gpu2_gx, gpu2_gy, gpu2_gz;
     if (!run_gradient_query<2>(
-            mesh.vx, mesh.vy, mesh.vz, mesh.i0, mesh.i1, mesh.i2,
-            qx, qy, qz, gpu2_gx, gpu2_gy, gpu2_gz, Real(2)
+            mesh.vx, mesh.vy, mesh.vz, mesh.i0, mesh.i1, mesh.i2, qx, qy, qz, gpu2_gx, gpu2_gy,
+            gpu2_gz, Real(2)
         ))
         GTEST_SKIP() << "CUDA unavailable or build failed";
 
@@ -529,9 +521,8 @@ TEST_F(CudaFixture, gradient_order2_more_accurate_than_order1_half_octahedron) {
         max_err2 = std::max(max_err2, std::abs(gpu2_gy[i] - ref_gy[i]));
         max_err2 = std::max(max_err2, std::abs(gpu2_gz[i] - ref_gz[i]));
     }
-    EXPECT_LE(max_err2, max_err1 + 1e-6f)
-        << "Order-2 should be at least as accurate as Order-1"
-        << " (err1=" << max_err1 << " err2=" << max_err2 << ")";
+    EXPECT_LE(max_err2, max_err1 + 1e-6f) << "Order-2 should be at least as accurate as Order-1"
+                                          << " (err1=" << max_err1 << " err2=" << max_err2 << ")";
 }
 
 // Test 7: Closed-mesh interior points should have near-zero gradient.
@@ -547,15 +538,13 @@ TEST_F(CudaFixture, gradient_closed_octahedron_interior_near_zero) {
 
     std::vector<Real> gx, gy, gz;
     if (!run_gradient_query<1>(
-            mesh.vx, mesh.vy, mesh.vz, mesh.i0, mesh.i1, mesh.i2,
-            qx, qy, qz, gx, gy, gz, Real(2)
+            mesh.vx, mesh.vy, mesh.vz, mesh.i0, mesh.i1, mesh.i2, qx, qy, qz, gx, gy, gz, Real(2)
         ))
         GTEST_SKIP() << "CUDA unavailable or build failed";
 
     for (std::size_t i = 0; i < qx.size(); ++i) {
         Real const gm = std::sqrt(gx[i] * gx[i] + gy[i] * gy[i] + gz[i] * gz[i]);
-        EXPECT_LT(gm, Real(5e-3))
-            << "interior gradient should be near zero at query " << i;
+        EXPECT_LT(gm, Real(5e-3)) << "interior gradient should be near zero at query " << i;
     }
 }
 

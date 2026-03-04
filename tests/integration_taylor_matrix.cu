@@ -26,9 +26,7 @@ namespace {
 using Real = gwn::tests::Real;
 using gwn::tests::HostMesh;
 
-static_assert(
-    true, "Taylor-only integration matrix: exact API intentionally excluded."
-);
+static_assert(true, "Taylor-only integration matrix: exact API intentionally excluded.");
 
 enum class topology_builder {
     k_lbvh,
@@ -58,15 +56,13 @@ constexpr std::size_t k_order2_slot = 1u;
 }
 
 [[nodiscard]] std::optional<std::size_t> width_slot(int const width) noexcept {
-    for (std::size_t i = 0; i < k_matrix_widths.size(); ++i) {
+    for (std::size_t i = 0; i < k_matrix_widths.size(); ++i)
         if (k_matrix_widths[i] == width)
             return i;
-    }
     return std::nullopt;
 }
 
-[[nodiscard]] std::optional<std::size_t>
-get_env_size_t_allow_zero(char const *name) {
+[[nodiscard]] std::optional<std::size_t> get_env_size_t_allow_zero(char const *name) {
     char const *value = std::getenv(name);
     if (value == nullptr || *value == '\0')
         return std::nullopt;
@@ -136,9 +132,8 @@ struct QuerySoA {
     Real const max_y = bounds.max_y + extent_y * k_pad_ratio;
     Real const max_z = bounds.max_z + extent_z * k_pad_ratio;
 
-    std::size_t side = static_cast<std::size_t>(std::llround(std::cbrt(
-        static_cast<double>(target_points)
-    )));
+    std::size_t side =
+        static_cast<std::size_t>(std::llround(std::cbrt(static_cast<double>(target_points))));
     side = std::max<std::size_t>(side, 2u);
     std::size_t const count = side * side * side;
 
@@ -192,8 +187,7 @@ struct ComboRunResult {
 };
 
 template <
-    int Order, int Width, typename IndexT,
-    std::enable_if_t<std::is_unsigned_v<IndexT>, int> = 0>
+    int Order, int Width, typename IndexT, std::enable_if_t<std::is_unsigned_v<IndexT>, int> = 0>
 [[nodiscard]] ComboRunResult run_combo(
     topology_builder const builder, HostMesh const &mesh, MeshIndices<IndexT> const &index_mesh,
     QuerySoA const &query, Real const accuracy_scale
@@ -202,8 +196,7 @@ template <
 
     gwn::gwn_geometry_object<Real, IndexT> geometry{};
     gwn::gwn_status const upload_status = gwn::gwn_upload_geometry(
-        geometry,
-        cuda::std::span<Real const>(mesh.vertex_x.data(), mesh.vertex_x.size()),
+        geometry, cuda::std::span<Real const>(mesh.vertex_x.data(), mesh.vertex_x.size()),
         cuda::std::span<Real const>(mesh.vertex_y.data(), mesh.vertex_y.size()),
         cuda::std::span<Real const>(mesh.vertex_z.data(), mesh.vertex_z.size()),
         cuda::std::span<IndexT const>(index_mesh.tri_i0.data(), index_mesh.tri_i0.size()),
@@ -221,13 +214,15 @@ template <
 
     gwn::gwn_status build_status = gwn::gwn_status::internal_error("builder dispatch failed");
     if (builder == topology_builder::k_hploc) {
-        build_status = gwn::gwn_bvh_facade_build_topology_aabb_moment_hploc<Order, Width, Real, IndexT>(
-            geometry, topology, aabb, moment
-        );
+        build_status =
+            gwn::gwn_bvh_facade_build_topology_aabb_moment_hploc<Order, Width, Real, IndexT>(
+                geometry, topology, aabb, moment
+            );
     } else {
-        build_status = gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<Order, Width, Real, IndexT>(
-            geometry, topology, aabb, moment
-        );
+        build_status =
+            gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<Order, Width, Real, IndexT>(
+                geometry, topology, aabb, moment
+            );
     }
     if (!build_status.is_ok()) {
         result.error = gwn::tests::status_to_debug_string(build_status);
@@ -270,7 +265,8 @@ template <
     }
 
     result.output.resize(count, Real(0));
-    if (!d_out.copy_to_host(cuda::std::span<Real>(result.output.data(), result.output.size())).is_ok()) {
+    if (!d_out.copy_to_host(cuda::std::span<Real>(result.output.data(), result.output.size()))
+             .is_ok()) {
         result.error = "Failed to copy winding output to host.";
         return result;
     }
@@ -344,9 +340,8 @@ summarize_error(std::span<Real const> const lhs, std::span<Real const> const rhs
         summary.max_abs = std::max(summary.max_abs, diff);
     }
     std::sort(abs_error.begin(), abs_error.end());
-    std::size_t const p99_index = static_cast<std::size_t>(
-        std::floor(0.99 * static_cast<double>(abs_error.size() - 1))
-    );
+    std::size_t const p99_index =
+        static_cast<std::size_t>(std::floor(0.99 * static_cast<double>(abs_error.size() - 1)));
     summary.p99_abs = abs_error[p99_index];
     return summary;
 }
@@ -373,7 +368,9 @@ struct MatrixSummary {
     std::vector<std::string> failures{};
 };
 
-void record_combo_coverage(MatrixSummary &summary, int const width, bool const is_u64, int const order) {
+void record_combo_coverage(
+    MatrixSummary &summary, int const width, bool const is_u64, int const order
+) {
     std::optional<std::size_t> const width_idx = width_slot(width);
     if (width_idx.has_value())
         summary.seen_widths[*width_idx] = true;
@@ -424,7 +421,8 @@ void check_threshold(
     if (total_points == 0)
         total_points = default_total_points;
 
-    int order_max = gwn::tests::get_env_positive_int("SMALLGWN_MATRIX_ORDER_MAX", default_order_max);
+    int order_max =
+        gwn::tests::get_env_positive_int("SMALLGWN_MATRIX_ORDER_MAX", default_order_max);
     order_max = std::max(1, std::min(order_max, default_order_max));
 
     std::vector<std::filesystem::path> model_paths = gwn::tests::collect_model_paths();
@@ -466,19 +464,20 @@ void check_threshold(
                 for (int index_slot = 0; index_slot < 2; ++index_slot) {
                     bool const is_u64 = (index_slot == 1);
                     for (int const width : k_matrix_widths) {
-                        ComboRunResult result = is_u64
-                            ? run_combo_for_width<std::uint64_t>(
-                                  width, order, builder, mesh, mesh_u64, query, k_accuracy_scale
-                              )
-                            : run_combo_for_width<std::uint32_t>(
-                                  width, order, builder, mesh, mesh_u32, query, k_accuracy_scale
-                              );
+                        ComboRunResult result =
+                            is_u64
+                                ? run_combo_for_width<std::uint64_t>(
+                                      width, order, builder, mesh, mesh_u64, query, k_accuracy_scale
+                                  )
+                                : run_combo_for_width<std::uint32_t>(
+                                      width, order, builder, mesh, mesh_u32, query, k_accuracy_scale
+                                  );
                         if (!result.ok) {
                             summary.failures.push_back(
                                 model_path.filename().string() + " order=" + std::to_string(order) +
-                                " builder=" + to_builder_name(builder) + " width=" +
-                                std::to_string(width) + " index=" + (is_u64 ? "u64" : "u32") +
-                                " failed: " + result.error
+                                " builder=" + to_builder_name(builder) +
+                                " width=" + std::to_string(width) +
+                                " index=" + (is_u64 ? "u64" : "u32") + " failed: " + result.error
                             );
                             order_ok = false;
                             continue;
@@ -487,8 +486,8 @@ void check_threshold(
                         std::optional<std::size_t> const width_idx = width_slot(width);
                         if (!width_idx.has_value()) {
                             summary.failures.push_back(
-                                model_path.filename().string() + " order=" +
-                                std::to_string(order) + " builder=" + to_builder_name(builder) +
+                                model_path.filename().string() + " order=" + std::to_string(order) +
+                                " builder=" + to_builder_name(builder) +
                                 " has unknown width slot " + std::to_string(width)
                             );
                             order_ok = false;
@@ -507,14 +506,16 @@ void check_threshold(
                 int const width = k_matrix_widths[width_index];
                 for (int index = 0; index < 2; ++index) {
                     std::span<Real const> const lbvh_span{
-                        outputs[0u][static_cast<std::size_t>(index)][width_index]};
+                        outputs[0u][static_cast<std::size_t>(index)][width_index]
+                    };
                     std::span<Real const> const hploc_span{
-                        outputs[1u][static_cast<std::size_t>(index)][width_index]};
+                        outputs[1u][static_cast<std::size_t>(index)][width_index]
+                    };
                     check_threshold(
                         summary, hploc_span, lbvh_span, k_builder_max_abs, k_builder_p99_abs,
                         model_path.filename().string() + " order=" + std::to_string(order) +
-                            " builder_diff width=" + std::to_string(width) + " index=" +
-                            (index == 0 ? "u32" : "u64")
+                            " builder_diff width=" + std::to_string(width) +
+                            " index=" + (index == 0 ? "u32" : "u64")
                     );
                 }
             }
@@ -523,34 +524,41 @@ void check_threshold(
                 for (int index = 0; index < 2; ++index) {
                     std::span<Real const> const width4{
                         outputs[static_cast<std::size_t>(builder)][static_cast<std::size_t>(index)]
-                               [width4_slot]};
+                               [width4_slot]
+                    };
                     for (std::size_t width_index = 0; width_index < k_matrix_widths.size();
                          ++width_index) {
                         int const width = k_matrix_widths[width_index];
                         if (width == 4)
                             continue;
                         std::span<Real const> const width_span{
-                            outputs[static_cast<std::size_t>(builder)][static_cast<std::size_t>(index)]
-                                   [width_index]};
+                            outputs[static_cast<std::size_t>(builder)]
+                                   [static_cast<std::size_t>(index)][width_index]
+                        };
                         check_threshold(
                             summary, width_span, width4, k_width_max_abs, k_width_p99_abs,
                             model_path.filename().string() + " order=" + std::to_string(order) +
                                 " width_diff builder=" +
-                                to_builder_name(k_matrix_builders[static_cast<std::size_t>(builder)]) +
-                                " width=" + std::to_string(width) + " vs width=4 index=" +
-                                (index == 0 ? "u32" : "u64")
+                                to_builder_name(
+                                    k_matrix_builders[static_cast<std::size_t>(builder)]
+                                ) +
+                                " width=" + std::to_string(width) +
+                                " vs width=4 index=" + (index == 0 ? "u32" : "u64")
                         );
                     }
                 }
             }
 
             for (int builder = 0; builder < 2; ++builder) {
-                for (std::size_t width_index = 0; width_index < k_matrix_widths.size(); ++width_index) {
+                for (std::size_t width_index = 0; width_index < k_matrix_widths.size();
+                     ++width_index) {
                     int const width = k_matrix_widths[width_index];
                     std::span<Real const> const u32_span{
-                        outputs[static_cast<std::size_t>(builder)][0u][width_index]};
+                        outputs[static_cast<std::size_t>(builder)][0u][width_index]
+                    };
                     std::span<Real const> const u64_span{
-                        outputs[static_cast<std::size_t>(builder)][1u][width_index]};
+                        outputs[static_cast<std::size_t>(builder)][1u][width_index]
+                    };
                     check_threshold(
                         summary, u64_span, u32_span, k_index_max_abs, k_index_p99_abs,
                         model_path.filename().string() + " order=" + std::to_string(order) +
@@ -576,13 +584,9 @@ void check_threshold(
     return summary;
 }
 
-[[nodiscard]] MatrixSummary run_light_profile() {
-    return run_matrix_profile(2u, 200'000u, 1);
-}
+[[nodiscard]] MatrixSummary run_light_profile() { return run_matrix_profile(2u, 200'000u, 1); }
 
-[[nodiscard]] MatrixSummary run_heavy_profile() {
-    return run_matrix_profile(8u, 2'000'000u, 2);
-}
+[[nodiscard]] MatrixSummary run_heavy_profile() { return run_matrix_profile(8u, 2'000'000u, 2); }
 
 TEST(smallgwn_integration_taylor_matrix, light_order1_width_index_builder_matrix) {
     SMALLGWN_SKIP_IF_NO_CUDA();
@@ -594,9 +598,8 @@ TEST(smallgwn_integration_taylor_matrix, light_order1_width_index_builder_matrix
     EXPECT_EQ(summary.width_count, k_matrix_widths.size());
     EXPECT_EQ(summary.index_count, 2u);
     EXPECT_EQ(summary.combo_count, expected_combo_count);
-    for (std::size_t i = 0; i < k_matrix_widths.size(); ++i) {
+    for (std::size_t i = 0; i < k_matrix_widths.size(); ++i)
         EXPECT_TRUE(summary.seen_widths[i]) << "Missing width coverage for " << k_matrix_widths[i];
-    }
     EXPECT_TRUE(summary.seen_indexes[k_index_u32_slot]);
     EXPECT_TRUE(summary.seen_indexes[k_index_u64_slot]);
 }

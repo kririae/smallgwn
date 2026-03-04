@@ -36,8 +36,7 @@ std::optional<gwn::gwn_geometry_object<Real, Index>> upload_octahedron() {
 
     gwn::gwn_geometry_object<Real, Index> geometry;
     gwn::gwn_status const status = gwn::gwn_upload_geometry(
-        geometry,
-        cuda::std::span<Real const>(vx.data(), vx.size()),
+        geometry, cuda::std::span<Real const>(vx.data(), vx.size()),
         cuda::std::span<Real const>(vy.data(), vy.size()),
         cuda::std::span<Real const>(vz.data(), vz.size()),
         cuda::std::span<Index const>(i0.data(), i0.size()),
@@ -247,8 +246,8 @@ TEST_F(CudaFixture, taylor_order0_nodes_are_finite) {
     std::vector<TaylorNode0> host_nodes(node_count);
     ASSERT_EQ(
         cudaSuccess, cudaMemcpy(
-                         host_nodes.data(), data_acc.nodes.data(),
-                         node_count * sizeof(TaylorNode0), cudaMemcpyDeviceToHost
+                         host_nodes.data(), data_acc.nodes.data(), node_count * sizeof(TaylorNode0),
+                         cudaMemcpyDeviceToHost
                      )
     );
 
@@ -301,8 +300,7 @@ TEST_F(CudaFixture, taylor_single_triangle) {
 
     gwn::gwn_geometry_object<Real, Index> geometry;
     gwn::gwn_status const upload_status = gwn::gwn_upload_geometry(
-        geometry,
-        cuda::std::span<Real const>(vx.data(), vx.size()),
+        geometry, cuda::std::span<Real const>(vx.data(), vx.size()),
         cuda::std::span<Real const>(vy.data(), vy.size()),
         cuda::std::span<Real const>(vz.data(), vz.size()),
         cuda::std::span<Index const>(i0.data(), i0.size()),
