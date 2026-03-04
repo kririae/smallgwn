@@ -58,7 +58,7 @@ template <gwn_index_type Index> struct gwn_validate_triangle_indices_functor {
     cuda::std::span<Index const> i1{};
     cuda::std::span<Index const> i2{};
     std::size_t vertex_count{0};
-    std::uint32_t *invalid_flag{nullptr};
+    cuda::std::span<std::uint32_t> invalid_flag{};
 
     __device__ void operator()(std::size_t const triangle_id) const {
         Index const a = i0[triangle_id];
@@ -69,7 +69,7 @@ template <gwn_index_type Index> struct gwn_validate_triangle_indices_functor {
             gwn_index_in_bounds(c, vertex_count)) {
             return;
         }
-        atomicExch(invalid_flag, std::uint32_t(1));
+        atomicExch(&invalid_flag[0], std::uint32_t(1));
     }
 };
 
@@ -106,7 +106,7 @@ gwn_status gwn_validate_triangle_indices_device_impl(
                 i1,
                 i2,
                 vertex_count,
-                invalid_flag.data(),
+                invalid_flag.span(),
             },
             stream
         )
@@ -127,8 +127,8 @@ template <gwn_index_type Index> struct gwn_build_edge_arrays_functor {
     cuda::std::span<Index const> i0{};
     cuda::std::span<Index const> i1{};
     cuda::std::span<Index const> i2{};
-    Index *key_hi{nullptr};
-    gwn_boundary_edge_payload_hi<Index> *payload_hi{nullptr};
+    cuda::std::span<Index> key_hi{};
+    cuda::std::span<gwn_boundary_edge_payload_hi<Index>> payload_hi{};
 
     __device__ void operator()(std::size_t const triangle_id) const {
         Index const vertices[3] = {i0[triangle_id], i1[triangle_id], i2[triangle_id]};
@@ -155,8 +155,8 @@ template <gwn_index_type Index> struct gwn_build_edge_arrays_functor {
 template <gwn_index_type Index> struct gwn_prepare_second_sort_inputs_functor {
     cuda::std::span<Index const> sorted_key_hi{};
     cuda::std::span<gwn_boundary_edge_payload_hi<Index> const> sorted_payload_hi{};
-    Index *key_lo{nullptr};
-    gwn_boundary_edge_payload_lo<Index> *payload_lo{nullptr};
+    cuda::std::span<Index> key_lo{};
+    cuda::std::span<gwn_boundary_edge_payload_lo<Index>> payload_lo{};
 
     __device__ void operator()(std::size_t const edge_id) const {
         key_lo[edge_id] = sorted_payload_hi[edge_id].lo;
@@ -172,8 +172,8 @@ template <gwn_index_type Index> struct gwn_mark_boundary_edges_functor {
     cuda::std::span<Index const> sorted_key_lo{};
     cuda::std::span<gwn_boundary_edge_payload_lo<Index> const> sorted_payload_lo{};
     std::size_t edge_count{0};
-    std::uint32_t *triangle_mask_u32{nullptr};
-    std::uint64_t *singular_edge_count{nullptr};
+    cuda::std::span<std::uint32_t> triangle_mask_u32{};
+    cuda::std::span<std::uint32_t> boundary_head_flags{};
 
     __device__ bool same_key(std::size_t const a, std::size_t const b) const {
         return sorted_key_lo[a] == sorted_key_lo[b] &&
@@ -195,23 +195,22 @@ template <gwn_index_type Index> struct gwn_mark_boundary_edges_functor {
 
         std::size_t const incident_count = end - edge_id;
         bool const is_boundary = incident_count != 2 || orientation_sum != 0;
+        boundary_head_flags[edge_id] = is_boundary ? std::uint32_t(1) : std::uint32_t(0);
         if (!is_boundary)
             return;
-
-        atomicAdd(reinterpret_cast<unsigned long long *>(singular_edge_count), 1ULL);
 
         for (std::size_t k = edge_id; k < end; ++k) {
             std::uint64_t const tri_edge = sorted_payload_lo[k].tri_edge;
             std::size_t const triangle_id = static_cast<std::size_t>(tri_edge >> 2);
             std::uint32_t const local_edge = static_cast<std::uint32_t>(tri_edge & 0x3ULL);
-            atomicOr(triangle_mask_u32 + triangle_id, std::uint32_t(1u << local_edge));
+            atomicOr(&triangle_mask_u32[triangle_id], std::uint32_t(1u << local_edge));
         }
     }
 };
 
 struct gwn_pack_triangle_boundary_mask_functor {
     cuda::std::span<std::uint32_t const> in_u32{};
-    std::uint8_t *out_u8{nullptr};
+    cuda::std::span<std::uint8_t> out_u8{};
 
     __device__ void operator()(std::size_t const triangle_id) const {
         out_u8[triangle_id] = static_cast<std::uint8_t>(in_u32[triangle_id] & 0x7u);
@@ -293,7 +292,8 @@ gwn_status gwn_compute_triangle_boundary_edge_mask_device_impl(
     gwn_device_array<gwn_boundary_edge_payload_lo<Index>> payload_lo_in(stream);
     gwn_device_array<gwn_boundary_edge_payload_lo<Index>> payload_lo_out(stream);
     gwn_device_array<std::uint32_t> triangle_mask_u32(stream);
-    gwn_device_array<std::uint64_t> singular_edge_count(stream);
+    gwn_device_array<std::uint32_t> boundary_head_flags(stream);
+    gwn_device_array<std::uint32_t> singular_edge_count(stream);
 
     GWN_RETURN_ON_ERROR(key_hi_in.resize(edge_count, stream));
     GWN_RETURN_ON_ERROR(key_hi_out.resize(edge_count, stream));
@@ -304,10 +304,12 @@ gwn_status gwn_compute_triangle_boundary_edge_mask_device_impl(
     GWN_RETURN_ON_ERROR(payload_lo_in.resize(edge_count, stream));
     GWN_RETURN_ON_ERROR(payload_lo_out.resize(edge_count, stream));
     GWN_RETURN_ON_ERROR(triangle_mask_u32.resize(triangle_count, stream));
-    GWN_RETURN_ON_ERROR(singular_edge_count.resize(1, stream));
+    GWN_RETURN_ON_ERROR(boundary_head_flags.resize(edge_count, stream));
+    if (out_singular_edge_count != nullptr)
+        GWN_RETURN_ON_ERROR(singular_edge_count.resize(1, stream));
 
     GWN_RETURN_ON_ERROR(triangle_mask_u32.zero(stream));
-    GWN_RETURN_ON_ERROR(singular_edge_count.zero(stream));
+    GWN_RETURN_ON_ERROR(boundary_head_flags.zero(stream));
 
     constexpr int k_block_size = k_gwn_default_block_size;
     GWN_RETURN_ON_ERROR(
@@ -317,8 +319,8 @@ gwn_status gwn_compute_triangle_boundary_edge_mask_device_impl(
                 i0,
                 i1,
                 i2,
-                key_hi_in.data(),
-                payload_hi_in.data(),
+                key_hi_in.span(),
+                payload_hi_in.span(),
             },
             stream
         )
@@ -335,8 +337,8 @@ gwn_status gwn_compute_triangle_boundary_edge_mask_device_impl(
             gwn_prepare_second_sort_inputs_functor<Index>{
                 key_hi_out.span(),
                 payload_hi_out.span(),
-                key_lo_in.data(),
-                payload_lo_in.data(),
+                key_lo_in.span(),
+                payload_lo_in.span(),
             },
             stream
         )
@@ -354,8 +356,8 @@ gwn_status gwn_compute_triangle_boundary_edge_mask_device_impl(
                 key_lo_out.span(),
                 payload_lo_out.span(),
                 edge_count,
-                triangle_mask_u32.data(),
-                singular_edge_count.data(),
+                triangle_mask_u32.span(),
+                boundary_head_flags.span(),
             },
             stream
         )
@@ -366,23 +368,39 @@ gwn_status gwn_compute_triangle_boundary_edge_mask_device_impl(
             triangle_count,
             gwn_pack_triangle_boundary_mask_functor{
                 triangle_mask_u32.span(),
-                gwn_mutable_data(out_mask),
+                cuda::std::span<std::uint8_t>(gwn_mutable_data(out_mask), out_mask.size()),
             },
             stream
         )
     );
 
     if (out_singular_edge_count != nullptr) {
-        std::uint64_t host_singular_edge_count = 0;
+        std::size_t reduction_temp_bytes = 0;
+        std::uint64_t const item_count = static_cast<std::uint64_t>(edge_count);
+        GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
+            cub::DeviceReduce::Sum(
+                nullptr, reduction_temp_bytes, boundary_head_flags.data(),
+                singular_edge_count.data(), item_count, stream
+            )
+        ));
+
+        gwn_device_array<std::uint8_t> reduction_temp_storage(stream);
+        GWN_RETURN_ON_ERROR(reduction_temp_storage.resize(reduction_temp_bytes, stream));
+        GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
+            cub::DeviceReduce::Sum(
+                reduction_temp_storage.data(), reduction_temp_bytes, boundary_head_flags.data(),
+                singular_edge_count.data(), item_count, stream
+            )
+        ));
+
+        std::uint32_t host_singular_edge_count = 0;
         GWN_RETURN_ON_ERROR(singular_edge_count.copy_to_host(
-            cuda::std::span<std::uint64_t>(&host_singular_edge_count, 1), stream
+            cuda::std::span<std::uint32_t>(&host_singular_edge_count, 1), stream
         ));
         GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaStreamSynchronize(stream)));
 
-        if (host_singular_edge_count >
-            static_cast<std::uint64_t>(std::numeric_limits<Index>::max())) {
+        if (host_singular_edge_count > std::numeric_limits<Index>::max())
             return gwn_status::internal_error("Singular-edge count overflow.");
-        }
         *out_singular_edge_count = static_cast<Index>(host_singular_edge_count);
     }
 
@@ -396,9 +414,9 @@ template <gwn_real_type Real, gwn_index_type Index> struct gwn_accumulate_vertex
     cuda::std::span<Index const> tri_i0{};
     cuda::std::span<Index const> tri_i1{};
     cuda::std::span<Index const> tri_i2{};
-    Real *vertex_nx{nullptr};
-    Real *vertex_ny{nullptr};
-    Real *vertex_nz{nullptr};
+    cuda::std::span<Real> vertex_nx{};
+    cuda::std::span<Real> vertex_ny{};
+    cuda::std::span<Real> vertex_nz{};
 
     __device__ void operator()(std::size_t const triangle_id) const {
         std::size_t const ia = static_cast<std::size_t>(tri_i0[triangle_id]);
@@ -426,22 +444,22 @@ template <gwn_real_type Real, gwn_index_type Index> struct gwn_accumulate_vertex
         Real const ny = ab_z * ac_x - ab_x * ac_z;
         Real const nz = ab_x * ac_y - ab_y * ac_x;
 
-        atomicAdd(vertex_nx + ia, nx);
-        atomicAdd(vertex_ny + ia, ny);
-        atomicAdd(vertex_nz + ia, nz);
-        atomicAdd(vertex_nx + ib, nx);
-        atomicAdd(vertex_ny + ib, ny);
-        atomicAdd(vertex_nz + ib, nz);
-        atomicAdd(vertex_nx + ic, nx);
-        atomicAdd(vertex_ny + ic, ny);
-        atomicAdd(vertex_nz + ic, nz);
+        atomicAdd(&vertex_nx[ia], nx);
+        atomicAdd(&vertex_ny[ia], ny);
+        atomicAdd(&vertex_nz[ia], nz);
+        atomicAdd(&vertex_nx[ib], nx);
+        atomicAdd(&vertex_ny[ib], ny);
+        atomicAdd(&vertex_nz[ib], nz);
+        atomicAdd(&vertex_nx[ic], nx);
+        atomicAdd(&vertex_ny[ic], ny);
+        atomicAdd(&vertex_nz[ic], nz);
     }
 };
 
 template <gwn_real_type Real> struct gwn_normalize_vertex_normals_functor {
-    Real *vertex_nx{nullptr};
-    Real *vertex_ny{nullptr};
-    Real *vertex_nz{nullptr};
+    cuda::std::span<Real> vertex_nx{};
+    cuda::std::span<Real> vertex_ny{};
+    cuda::std::span<Real> vertex_nz{};
 
     __device__ void operator()(std::size_t const vertex_id) const {
         using std::sqrt;
@@ -514,9 +532,9 @@ gwn_status gwn_compute_vertex_normals_device_impl(
                 tri_i0,
                 tri_i1,
                 tri_i2,
-                gwn_mutable_data(out_nx),
-                gwn_mutable_data(out_ny),
-                gwn_mutable_data(out_nz),
+                cuda::std::span<Real>(gwn_mutable_data(out_nx), out_nx.size()),
+                cuda::std::span<Real>(gwn_mutable_data(out_ny), out_ny.size()),
+                cuda::std::span<Real>(gwn_mutable_data(out_nz), out_nz.size()),
             },
             stream
         )
@@ -525,9 +543,9 @@ gwn_status gwn_compute_vertex_normals_device_impl(
     return gwn_launch_linear_kernel<k_block_size>(
         vertex_count,
         gwn_normalize_vertex_normals_functor<Real>{
-            gwn_mutable_data(out_nx),
-            gwn_mutable_data(out_ny),
-            gwn_mutable_data(out_nz),
+            cuda::std::span<Real>(gwn_mutable_data(out_nx), out_nx.size()),
+            cuda::std::span<Real>(gwn_mutable_data(out_ny), out_ny.size()),
+            cuda::std::span<Real>(gwn_mutable_data(out_nz), out_nz.size()),
         },
         stream
     );
