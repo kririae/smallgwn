@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <limits>
@@ -50,10 +51,7 @@ __host__ __device__ inline Real gwn_point_segment_distance_squared_impl(
     if (!(ab_dot_ab > Real(0)))
         return gwn_query_squared_norm(ap); // degenerate segment
     Real t = gwn_query_dot(ap, ab) / ab_dot_ab;
-    if (t < Real(0))
-        t = Real(0);
-    if (t > Real(1))
-        t = Real(1);
+    t = std::max(Real(0), std::min(Real(1), t));
     return gwn_query_squared_norm(p - (a + t * ab));
 }
 
@@ -63,15 +61,10 @@ __host__ __device__ inline Real gwn_point_triangle_edge_distance_squared_impl(
     gwn_query_vec3<Real> const &p, gwn_query_vec3<Real> const &a, gwn_query_vec3<Real> const &b,
     gwn_query_vec3<Real> const &c
 ) noexcept {
-    Real d2_ab = gwn_point_segment_distance_squared_impl(p, a, b);
-    Real d2_bc = gwn_point_segment_distance_squared_impl(p, b, c);
-    Real d2_ca = gwn_point_segment_distance_squared_impl(p, c, a);
-    Real result = d2_ab;
-    if (d2_bc < result)
-        result = d2_bc;
-    if (d2_ca < result)
-        result = d2_ca;
-    return result;
+    Real const d2_ab = gwn_point_segment_distance_squared_impl(p, a, b);
+    Real const d2_bc = gwn_point_segment_distance_squared_impl(p, b, c);
+    Real const d2_ca = gwn_point_segment_distance_squared_impl(p, c, a);
+    return std::min(d2_ab, std::min(d2_bc, d2_ca));
 }
 
 template <gwn_real_type Real>
@@ -234,16 +227,9 @@ __host__ __device__ inline Real gwn_aabb_min_distance_squared_impl(
     Real const qx, Real const qy, Real const qz, Real const min_x, Real const min_y,
     Real const min_z, Real const max_x, Real const max_y, Real const max_z
 ) noexcept {
-    auto const clamp_delta = [](Real q, Real lo, Real hi) -> Real {
-        if (q < lo)
-            return lo - q;
-        if (q > hi)
-            return q - hi;
-        return Real(0);
-    };
-    Real const dx = clamp_delta(qx, min_x, max_x);
-    Real const dy = clamp_delta(qy, min_y, max_y);
-    Real const dz = clamp_delta(qz, min_z, max_z);
+    Real const dx = std::max(min_x - qx, Real(0)) + std::max(qx - max_x, Real(0));
+    Real const dy = std::max(min_y - qy, Real(0)) + std::max(qy - max_y, Real(0));
+    Real const dz = std::max(min_z - qz, Real(0)) + std::max(qz - max_z, Real(0));
     Real const result = dx * dx + dy * dy + dz * dz;
     GWN_ASSERT(!(result < Real(0)), "AABB min distance squared is negative");
     return result;

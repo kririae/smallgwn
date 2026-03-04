@@ -4,6 +4,7 @@
 
 #include <concepts>
 #include <cstddef>
+#include <limits>
 #include <type_traits>
 
 #include "gwn_utils.cuh"
@@ -13,14 +14,20 @@ namespace gwn::detail {
 inline constexpr int k_gwn_default_block_size = 128;
 
 template <int BlockSize>
-[[nodiscard]] constexpr int gwn_block_count_1d(std::size_t const element_count) noexcept {
+[[nodiscard]] constexpr std::size_t gwn_max_linear_kernel_elements_1d() noexcept {
+    static_assert(BlockSize > 0, "BlockSize must be positive.");
+    return static_cast<std::size_t>(std::numeric_limits<int>::max()) *
+           static_cast<std::size_t>(BlockSize);
+}
+
+template <int BlockSize>
+[[nodiscard]] constexpr std::size_t gwn_block_count_1d(std::size_t const element_count) noexcept {
     static_assert(BlockSize > 0, "BlockSize must be positive.");
     if (element_count == 0)
-        return 0;
+        return 0u;
 
     constexpr std::size_t k_block_size = static_cast<std::size_t>(BlockSize);
-    std::size_t const block_count = (element_count + k_block_size - 1) / k_block_size;
-    return static_cast<int>(block_count);
+    return ((element_count - 1) / k_block_size) + 1;
 }
 
 template <int BlockSize>
@@ -66,8 +73,13 @@ gwn_status gwn_launch_linear_kernel(
 ) noexcept {
     if (element_count == 0)
         return gwn_status::ok();
+    if (element_count > gwn_max_linear_kernel_elements_1d<BlockSize>()) {
+        return gwn_status::invalid_argument(
+            "Linear kernel launch element count exceeds supported range."
+        );
+    }
 
-    int const block_count = gwn_block_count_1d<BlockSize>(element_count);
+    int const block_count = static_cast<int>(gwn_block_count_1d<BlockSize>(element_count));
     gwn_linear_kernel<BlockSize, Functor>
         <<<block_count, BlockSize, 0, stream>>>(element_count, functor);
     return gwn_check_last_kernel();

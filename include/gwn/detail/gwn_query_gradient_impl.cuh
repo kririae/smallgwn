@@ -66,9 +66,9 @@ struct gwn_winding_gradient_batch_bvh_taylor_functor {
     cuda::std::span<Real const> query_x{};
     cuda::std::span<Real const> query_y{};
     cuda::std::span<Real const> query_z{};
-    cuda::std::span<Real> output_x{};
-    cuda::std::span<Real> output_y{};
-    cuda::std::span<Real> output_z{};
+    cuda::std::span<Real> out_grad_x{};
+    cuda::std::span<Real> out_grad_y{};
+    cuda::std::span<Real> out_grad_z{};
     Real accuracy_scale{};
 
     __device__ void operator()(std::size_t const query_id) const {
@@ -77,29 +77,11 @@ struct gwn_winding_gradient_batch_bvh_taylor_functor {
                 geometry, bvh, data_tree, query_x[query_id], query_y[query_id], query_z[query_id],
                 accuracy_scale
             );
-        output_x[query_id] = grad.x;
-        output_y[query_id] = grad.y;
-        output_z[query_id] = grad.z;
+        out_grad_x[query_id] = grad.x;
+        out_grad_y[query_id] = grad.y;
+        out_grad_z[query_id] = grad.z;
     }
 };
-
-template <int Order, int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity>
-[[nodiscard]] inline gwn_winding_gradient_batch_bvh_taylor_functor<
-    Order, Width, Real, Index, StackCapacity>
-gwn_make_winding_gradient_batch_bvh_taylor_functor(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
-    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &data_tree,
-    cuda::std::span<Real const> const query_x, cuda::std::span<Real const> const query_y,
-    cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output_x,
-    cuda::std::span<Real> const output_y, cuda::std::span<Real> const output_z,
-    Real const accuracy_scale
-) {
-    return gwn_winding_gradient_batch_bvh_taylor_functor<Order, Width, Real, Index, StackCapacity>{
-        geometry, bvh,      data_tree, query_x,  query_y,
-        query_z,  output_x, output_y,  output_z, accuracy_scale
-    };
-}
 
 } // namespace detail
 } // namespace gwn

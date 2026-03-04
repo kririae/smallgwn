@@ -544,8 +544,14 @@ template <class T>
 }
 
 template <class T>
+    requires(!std::is_const_v<T>)
+[[nodiscard]] constexpr T *gwn_mutable_data(cuda::std::span<T> const span) noexcept {
+    return span.data();
+}
+
+template <class T>
 gwn_status gwn_allocate_span(
-    cuda::std::span<T const> &dst, std::size_t const count, cudaStream_t const stream
+    cuda::std::span<T> &dst, std::size_t const count, cudaStream_t const stream
 ) noexcept {
     if (dst.data() != nullptr || dst.size() != 0)
         return gwn_status::invalid_argument("gwn_allocate_span expects an empty destination span.");
@@ -553,19 +559,24 @@ gwn_status gwn_allocate_span(
         dst = {};
         return gwn_status::ok();
     }
+    if (count > (std::numeric_limits<std::size_t>::max() / sizeof(std::remove_const_t<T>))) {
+        return gwn_status::invalid_argument(
+            "gwn_allocate_span element count exceeds addressable byte range."
+        );
+    }
 
     void *ptr = nullptr;
     GWN_RETURN_ON_ERROR(gwn_cuda_malloc(&ptr, count * sizeof(T), stream));
     GWN_ASSERT(
         ptr != nullptr, "gwn_allocate_span allocated %zu elements but returned null storage.", count
     );
-    dst = cuda::std::span<T const>(static_cast<T const *>(ptr), count);
+    dst = cuda::std::span<T>(static_cast<T *>(ptr), count);
     GWN_ASSERT(gwn_span_has_storage(dst), "gwn_allocate_span produced invalid span storage.");
     return gwn_status::ok();
 }
 
 template <class T>
-void gwn_free_span(cuda::std::span<T const> &span_view, cudaStream_t const stream) noexcept {
+void gwn_free_span(cuda::std::span<T> &span_view, cudaStream_t const stream) noexcept {
     GWN_ASSERT(gwn_span_has_storage(span_view), "gwn_free_span requires valid span storage.");
 
     if (span_view.data() != nullptr) {
@@ -577,8 +588,9 @@ void gwn_free_span(cuda::std::span<T const> &span_view, cudaStream_t const strea
 }
 
 template <class T>
+    requires(!std::is_const_v<T>)
 gwn_status gwn_copy_h2d(
-    cuda::std::span<T const> const dst_device, cuda::std::span<T const> const src_host,
+    cuda::std::span<T> const dst_device, cuda::std::span<T const> const src_host,
     cudaStream_t const stream
 ) noexcept {
     if (dst_device.size() != src_host.size())
@@ -618,8 +630,9 @@ gwn_status gwn_copy_d2h(
 }
 
 template <class T>
+    requires(!std::is_const_v<T>)
 gwn_status gwn_copy_d2d(
-    cuda::std::span<T const> const dst_device, cuda::std::span<T const> const src_device,
+    cuda::std::span<T> const dst_device, cuda::std::span<T const> const src_device,
     cudaStream_t const stream
 ) noexcept {
     if (dst_device.size() != src_device.size())

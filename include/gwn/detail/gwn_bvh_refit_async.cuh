@@ -7,6 +7,7 @@
 #include <limits>
 
 #include "../gwn_kernel_utils.cuh"
+#include "gwn_bvh_status_helpers.cuh"
 #include "gwn_bvh_topology_build_common.cuh"
 
 namespace gwn {
@@ -525,6 +526,7 @@ template <int Width, gwn_real_type Real, gwn_index_type Index> struct gwn_aabb_r
 
     static constexpr char const *k_error_name =
         "AABB refit failed topology/propagation validation.";
+    static constexpr std::string_view k_phase = k_gwn_bvh_phase_refit_aabb;
 
     __device__ static bool make_leaf_payload(
         gwn_geometry_accessor<Real, Index> const &geometry,
@@ -601,6 +603,7 @@ struct gwn_moment_refit_traits {
 
     static constexpr char const *k_error_name =
         "Moment refit failed topology/propagation validation.";
+    static constexpr std::string_view k_phase = k_gwn_bvh_phase_refit_moment;
 
     __device__ static bool make_leaf_payload(
         gwn_geometry_accessor<Real, Index> const &geometry,
@@ -1012,9 +1015,9 @@ gwn_status gwn_run_refit_pass(
     cudaStream_t const stream = gwn_default_stream()
 ) noexcept {
     if (!geometry.is_valid())
-        return gwn_status::invalid_argument("Geometry accessor is invalid for refit.");
+        return gwn_bvh_invalid_argument(Traits::k_phase, "Geometry accessor is invalid for refit.");
     if (!topology.is_valid())
-        return gwn_status::invalid_argument("Topology accessor is invalid for refit.");
+        return gwn_bvh_invalid_argument(Traits::k_phase, "Topology accessor is invalid for refit.");
     if (!topology.has_internal_root())
         return gwn_status::ok();
 
@@ -1023,7 +1026,7 @@ gwn_status gwn_run_refit_pass(
     if (node_count == 0)
         return gwn_status::ok();
     if (node_count > (std::numeric_limits<std::size_t>::max() / std::size_t(Width)))
-        return gwn_status::internal_error("Refit node count overflow.");
+        return gwn_bvh_internal_error(Traits::k_phase, "Refit node count overflow.");
 
     std::size_t const pending_count = node_count * std::size_t(Width);
     GWN_ASSERT(pending_count / std::size_t(Width) == node_count, "refit: pending_count overflow");
@@ -1118,7 +1121,7 @@ gwn_status gwn_run_refit_pass(
     )));
     GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaStreamSynchronize(stream)));
     if (host_error_flag != 0)
-        return gwn_status::internal_error(Traits::k_error_name);
+        return gwn_bvh_internal_error(Traits::k_phase, Traits::k_error_name);
 
     return gwn_status::ok();
 }

@@ -153,6 +153,18 @@ gwn_status gwn_reduce_minmax_cub(
     return gwn_status::ok();
 }
 
+template <gwn_real_type Real>
+gwn_status gwn_reduce_minmax_cub(
+    cuda::std::span<Real> const values, gwn_device_array<Real> &min_result,
+    gwn_device_array<Real> &max_result, gwn_device_array<std::uint8_t> &temp_storage,
+    Real &host_min, Real &host_max, cudaStream_t const stream
+) noexcept {
+    return gwn_reduce_minmax_cub(
+        cuda::std::span<Real const>(values.data(), values.size()), min_result, max_result,
+        temp_storage, host_min, host_max, stream
+    );
+}
+
 template <gwn_real_type Real, gwn_index_type Index, class MortonCode>
 struct gwn_compute_triangle_aabbs_and_morton_functor {
     gwn_geometry_accessor<Real, Index> geometry{};
