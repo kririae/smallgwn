@@ -54,27 +54,19 @@ template <gwn_real_type Real> struct gwn_hybrid_trace_arguments {
 };
 
 template <gwn_real_type Real>
-__host__ __device__ inline void
-gwn_init_hybrid_trace_arguments_impl(gwn_hybrid_trace_arguments<Real> &arguments) noexcept {
-    arguments = gwn_hybrid_trace_arguments<Real>{};
-}
-
-template <gwn_real_type Real>
 __device__ inline bool gwn_try_normalize_impl(gwn_query_vec3<Real> &v) noexcept {
     using std::isfinite;
-    using std::sqrt;
 
     Real const n2 = v.x * v.x + v.y * v.y + v.z * v.z;
     if (!(n2 > Real(0)))
         return false;
-
-    Real const n = sqrt(n2);
-    if (!(n > Real(0)))
-        return false;
-    if (!isfinite(n))
+    if (!isfinite(n2))
         return false;
 
-    Real const inv_n = Real(1) / n;
+    Real const inv_n = rsqrt(n2);
+    if (!isfinite(inv_n))
+        return false;
+
     v.x *= inv_n;
     v.y *= inv_n;
     v.z *= inv_n;
@@ -94,12 +86,11 @@ __device__ inline bool gwn_triangle_indices_from_primitive_impl(
     i1 = geometry.tri_i1[tri];
     i2 = geometry.tri_i2[tri];
 
-    if (!gwn_index_in_bounds(i0, geometry.vertex_count()))
+    if (!gwn_index_in_bounds(i0, geometry.vertex_count()) ||
+        !gwn_index_in_bounds(i1, geometry.vertex_count()) ||
+        !gwn_index_in_bounds(i2, geometry.vertex_count())) {
         return false;
-    if (!gwn_index_in_bounds(i1, geometry.vertex_count()))
-        return false;
-    if (!gwn_index_in_bounds(i2, geometry.vertex_count()))
-        return false;
+    }
 
     return true;
 }
@@ -245,15 +236,6 @@ __device__ inline bool gwn_triangle_barycentric_vertex_normal_from_primitive_imp
     return gwn_try_normalize_impl(normal_out);
 }
 
-template <gwn_real_type Real, gwn_index_type Index>
-__device__ inline void gwn_store_normal(
-    gwn_hybrid_trace_result<Real, Index> &result, gwn_query_vec3<Real> const &normal
-) noexcept {
-    result.normal_x = normal.x;
-    result.normal_y = normal.y;
-    result.normal_z = normal.z;
-}
-
 template <int Order, int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity>
 __device__ inline gwn_hybrid_trace_result<Real, Index> gwn_hybrid_trace_ray_impl(
     gwn_geometry_accessor<Real, Index> const &geometry,
@@ -327,7 +309,9 @@ __device__ inline gwn_hybrid_trace_result<Real, Index> gwn_hybrid_trace_ray_impl
         gwn_query_vec3<Real> normal(fill_hit.normal_x, fill_hit.normal_y, fill_hit.normal_z);
         if (!gwn_try_normalize_impl(normal))
             normal = gwn_query_vec3<Real>(Real(0), Real(0), Real(0));
-        gwn_store_normal(result, normal);
+        result.normal_x = normal.x;
+        result.normal_y = normal.y;
+        result.normal_z = normal.z;
         return result;
     }
 
@@ -371,7 +355,9 @@ __device__ inline gwn_hybrid_trace_result<Real, Index> gwn_hybrid_trace_ray_impl
 
     if (!gwn_try_normalize_impl(normal))
         normal = gwn_query_vec3<Real>(Real(0), Real(0), Real(0));
-    gwn_store_normal(result, normal);
+    result.normal_x = normal.x;
+    result.normal_y = normal.y;
+    result.normal_z = normal.z;
     return result;
 }
 

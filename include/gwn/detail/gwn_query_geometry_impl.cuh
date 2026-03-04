@@ -73,12 +73,16 @@ __host__ __device__ inline Real gwn_point_triangle_boundary_edge_distance_square
     gwn_query_vec3<Real> const &p, gwn_query_vec3<Real> const &a, gwn_query_vec3<Real> const &b,
     gwn_query_vec3<Real> const &c, std::uint8_t const boundary_edge_mask
 ) noexcept {
+    std::uint8_t constexpr k_boundary_edge_ab = std::uint8_t(1u << 0);
+    std::uint8_t constexpr k_boundary_edge_bc = std::uint8_t(1u << 1);
+    std::uint8_t constexpr k_boundary_edge_ca = std::uint8_t(1u << 2);
+
     Real best = std::numeric_limits<Real>::infinity();
-    if ((boundary_edge_mask & std::uint8_t(0x1u)) != std::uint8_t(0))
+    if ((boundary_edge_mask & k_boundary_edge_ab) != std::uint8_t(0))
         best = std::min(best, gwn_point_segment_distance_squared_impl(p, a, b));
-    if ((boundary_edge_mask & std::uint8_t(0x2u)) != std::uint8_t(0))
+    if ((boundary_edge_mask & k_boundary_edge_bc) != std::uint8_t(0))
         best = std::min(best, gwn_point_segment_distance_squared_impl(p, b, c));
-    if ((boundary_edge_mask & std::uint8_t(0x4u)) != std::uint8_t(0))
+    if ((boundary_edge_mask & k_boundary_edge_ca) != std::uint8_t(0))
         best = std::min(best, gwn_point_segment_distance_squared_impl(p, c, a));
     return best;
 }
