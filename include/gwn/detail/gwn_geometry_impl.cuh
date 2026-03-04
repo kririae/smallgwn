@@ -251,9 +251,9 @@ gwn_status gwn_cub_sort_pairs_impl(
 
 template <gwn_index_type Index>
 gwn_status gwn_compute_triangle_boundary_edge_mask_device_impl(
-    cuda::std::span<Index const> const i0, cuda::std::span<Index const> const i1,
-    cuda::std::span<Index const> const i2, cuda::std::span<std::uint8_t const> const out_mask,
-    Index *const out_singular_edge_count = nullptr, cudaStream_t const stream = gwn_default_stream()
+    cuda::std::span<Index const> i0, cuda::std::span<Index const> i1,
+    cuda::std::span<Index const> i2, cuda::std::span<std::uint8_t> out_mask,
+    Index *out_singular_edge_count = nullptr, cudaStream_t stream = gwn_default_stream()
 ) noexcept {
     std::size_t const triangle_count = i0.size();
     if (i1.size() != triangle_count || i2.size() != triangle_count)
@@ -368,7 +368,7 @@ gwn_status gwn_compute_triangle_boundary_edge_mask_device_impl(
             triangle_count,
             gwn_pack_triangle_boundary_mask_functor{
                 triangle_mask_u32.span(),
-                cuda::std::span<std::uint8_t>(gwn_mutable_data(out_mask), out_mask.size()),
+                out_mask,
             },
             stream
         )
@@ -602,7 +602,11 @@ gwn_status gwn_upload_accessor(
         Index singular_edge_count = Index(0);
         GWN_RETURN_ON_ERROR(
             gwn_compute_triangle_boundary_edge_mask_device_impl<Index>(
-                staging.tri_i0, staging.tri_i1, staging.tri_i2, staging.tri_boundary_edge_mask,
+                staging.tri_i0, staging.tri_i1, staging.tri_i2,
+                cuda::std::span<std::uint8_t>(
+                    gwn_mutable_data(staging.tri_boundary_edge_mask),
+                    staging.tri_boundary_edge_mask.size()
+                ),
                 &singular_edge_count, stream
             )
         );
