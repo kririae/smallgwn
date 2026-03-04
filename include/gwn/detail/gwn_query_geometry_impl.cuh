@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 
 #include "../gwn_geometry.cuh"
@@ -65,6 +66,21 @@ __host__ __device__ inline Real gwn_point_triangle_edge_distance_squared_impl(
     Real const d2_bc = gwn_point_segment_distance_squared_impl(p, b, c);
     Real const d2_ca = gwn_point_segment_distance_squared_impl(p, c, a);
     return std::min(d2_ab, std::min(d2_bc, d2_ca));
+}
+
+template <gwn_real_type Real>
+__host__ __device__ inline Real gwn_point_triangle_boundary_edge_distance_squared_impl(
+    gwn_query_vec3<Real> const &p, gwn_query_vec3<Real> const &a, gwn_query_vec3<Real> const &b,
+    gwn_query_vec3<Real> const &c, std::uint8_t const boundary_edge_mask
+) noexcept {
+    Real best = std::numeric_limits<Real>::infinity();
+    if ((boundary_edge_mask & std::uint8_t(0x1u)) != std::uint8_t(0))
+        best = std::min(best, gwn_point_segment_distance_squared_impl(p, a, b));
+    if ((boundary_edge_mask & std::uint8_t(0x2u)) != std::uint8_t(0))
+        best = std::min(best, gwn_point_segment_distance_squared_impl(p, b, c));
+    if ((boundary_edge_mask & std::uint8_t(0x4u)) != std::uint8_t(0))
+        best = std::min(best, gwn_point_segment_distance_squared_impl(p, c, a));
+    return best;
 }
 
 template <gwn_real_type Real>
@@ -220,6 +236,46 @@ __device__ inline Real gwn_triangle_edge_distance_squared_from_primitive_impl(
         geometry.vertex_x[c_index], geometry.vertex_y[c_index], geometry.vertex_z[c_index]
     );
     return gwn_point_triangle_edge_distance_squared_impl(query, a, b, c);
+}
+
+template <gwn_real_type Real, gwn_index_type Index>
+__device__ inline Real gwn_triangle_boundary_edge_distance_squared_from_primitive_impl(
+    gwn_geometry_accessor<Real, Index> const &geometry, Index const primitive_id,
+    gwn_query_vec3<Real> const &query
+) noexcept {
+    if (!gwn_index_in_bounds(primitive_id, geometry.triangle_count()))
+        return std::numeric_limits<Real>::infinity();
+
+    auto const triangle_id = static_cast<std::size_t>(primitive_id);
+    Index const ia = geometry.tri_i0[triangle_id];
+    Index const ib = geometry.tri_i1[triangle_id];
+    Index const ic = geometry.tri_i2[triangle_id];
+    if (!gwn_index_in_bounds(ia, geometry.vertex_count()) ||
+        !gwn_index_in_bounds(ib, geometry.vertex_count()) ||
+        !gwn_index_in_bounds(ic, geometry.vertex_count())) {
+        return std::numeric_limits<Real>::infinity();
+    }
+
+    auto const a_index = static_cast<std::size_t>(ia);
+    auto const b_index = static_cast<std::size_t>(ib);
+    auto const c_index = static_cast<std::size_t>(ic);
+    gwn_query_vec3<Real> const a(
+        geometry.vertex_x[a_index], geometry.vertex_y[a_index], geometry.vertex_z[a_index]
+    );
+    gwn_query_vec3<Real> const b(
+        geometry.vertex_x[b_index], geometry.vertex_y[b_index], geometry.vertex_z[b_index]
+    );
+    gwn_query_vec3<Real> const c(
+        geometry.vertex_x[c_index], geometry.vertex_y[c_index], geometry.vertex_z[c_index]
+    );
+
+    std::uint8_t mask = std::uint8_t(0x7u);
+    if (geometry.tri_boundary_edge_mask.size() == geometry.triangle_count())
+        mask = geometry.tri_boundary_edge_mask[triangle_id];
+    if (mask == std::uint8_t(0))
+        return std::numeric_limits<Real>::infinity();
+
+    return gwn_point_triangle_boundary_edge_distance_squared_impl(query, a, b, c, mask);
 }
 
 template <gwn_real_type Real>

@@ -80,6 +80,25 @@ TEST(smallgwn_unit_geometry, boundary_edge_mask_inconsistent_shared_edge_marks_b
     EXPECT_EQ(mask[1], std::uint8_t(0x7u));
 }
 
+TEST(smallgwn_unit_geometry, boundary_edge_mask_non_manifold_shared_edge_marks_boundary) {
+    // Three triangles share edge (0,1) -> non-manifold, must be boundary.
+    std::array<Index, 3> const i0{0, 1, 0};
+    std::array<Index, 3> const i1{1, 0, 1};
+    std::array<Index, 3> const i2{2, 3, 4};
+    std::array<std::uint8_t, 3> mask{0, 0, 0};
+
+    gwn::gwn_status const s = gwn::gwn_compute_triangle_boundary_edge_mask<Index>(
+        cuda::std::span<Index const>(i0.data(), i0.size()),
+        cuda::std::span<Index const>(i1.data(), i1.size()),
+        cuda::std::span<Index const>(i2.data(), i2.size()),
+        cuda::std::span<std::uint8_t>(mask.data(), mask.size())
+    );
+    ASSERT_TRUE(s.is_ok()) << gwn::tests::status_to_debug_string(s);
+    EXPECT_EQ(mask[0], std::uint8_t(0x7u));
+    EXPECT_EQ(mask[1], std::uint8_t(0x7u));
+    EXPECT_EQ(mask[2], std::uint8_t(0x7u));
+}
+
 TEST(smallgwn_unit_geometry, boundary_edge_mask_rejects_mismatched_output_size) {
     std::array<Index, 2> const i0{0, 0};
     std::array<Index, 2> const i1{1, 1};

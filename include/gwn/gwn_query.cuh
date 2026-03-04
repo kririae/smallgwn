@@ -1,7 +1,7 @@
 #pragma once
 
 /// \file gwn_query.cuh
-/// \brief Public query APIs for winding, gradients, distances, and Harnack tracing.
+/// \brief Public query APIs for winding, gradients, ray hits, and Harnack tracing.
 ///
 /// This header exposes device point queries plus host batch-query launchers
 /// over uploaded geometry and BVH data.
@@ -14,7 +14,6 @@
 #include <limits>
 
 #include "detail/gwn_harnack_trace_impl.cuh"
-#include "detail/gwn_query_distance_impl.cuh"
 #include "detail/gwn_query_geometry_impl.cuh"
 #include "detail/gwn_query_gradient_impl.cuh"
 #include "detail/gwn_query_ray_impl.cuh"
@@ -60,123 +59,6 @@ inline gwn_status gwn_validate_ray_first_hit_batch_spans(
 }
 
 } // namespace detail
-
-/// \brief Compute the unsigned distance from a query point to the closest
-///        triangle using BVH + AABB-accelerated traversal.
-///
-/// \param culling_band World-unit narrow-band distance cap. Distances larger
-///        than this value are clamped to this value. Use \c +infinity to
-///        disable culling (default).
-template <
-    int Width, gwn_real_type Real, gwn_index_type Index,
-    int StackCapacity = k_gwn_default_traversal_stack_capacity>
-__device__ inline Real gwn_unsigned_distance_point_bvh(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
-    gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree, Real const qx, Real const qy,
-    Real const qz, Real const culling_band = std::numeric_limits<Real>::infinity()
-) noexcept {
-    return detail::gwn_unsigned_distance_point_bvh_impl<Width, Real, Index, StackCapacity>(
-        geometry, bvh, aabb_tree, qx, qy, qz, culling_band
-    );
-}
-
-/// \brief Compute the signed distance from a query point to the mesh using
-///        BVH-accelerated traversal and Taylor winding-number sign inference.
-///
-/// \tparam Order Taylor winding-number order (0, 1, or 2).
-/// \param data_tree Taylor moment payload tree aligned to \p bvh.
-/// \param winding_number_threshold Inside/outside threshold applied to Taylor
-///        winding number (default: \c 0.5).
-/// \param culling_band World-unit narrow-band distance cap. Distances larger
-///        than this value are clamped to this value before applying sign. Use
-///        \c +infinity to disable culling (default).
-/// \param accuracy_scale Taylor far-field acceptance scale (default: \c 2).
-template <
-    int Order, int Width, gwn_real_type Real, gwn_index_type Index,
-    int StackCapacity = k_gwn_default_traversal_stack_capacity>
-__device__ inline Real gwn_signed_distance_point_bvh(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
-    gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree,
-    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &data_tree, Real const qx,
-    Real const qy, Real const qz, Real const winding_number_threshold = Real(0.5),
-    Real const culling_band = std::numeric_limits<Real>::infinity(),
-    Real const accuracy_scale = Real(2)
-) noexcept {
-    static_assert(
-        Order == 0 || Order == 1 || Order == 2,
-        "gwn_signed_distance_point_bvh currently supports Order 0, 1, and 2."
-    );
-
-    return detail::gwn_signed_distance_point_bvh_impl<Order, Width, Real, Index, StackCapacity>(
-        geometry, bvh, aabb_tree, data_tree, qx, qy, qz, winding_number_threshold, culling_band,
-        accuracy_scale
-    );
-}
-
-/// \brief Compute point-to-nearest-triangle-edge distances for a batch using
-///        BVH + AABB-accelerated traversal.
-template <
-    int Width, gwn_real_type Real, gwn_index_type Index = std::uint32_t,
-    int StackCapacity = k_gwn_default_traversal_stack_capacity>
-gwn_status gwn_compute_unsigned_edge_distance_batch_bvh(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
-    gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree,
-    cuda::std::span<Real const> const query_x, cuda::std::span<Real const> const query_y,
-    cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output,
-    Real const culling_band = std::numeric_limits<Real>::infinity(),
-    cudaStream_t const stream = gwn_default_stream()
-) noexcept {
-    static_assert(StackCapacity > 0, "Traversal stack capacity must be positive.");
-
-    if (!geometry.is_valid())
-        return gwn_status::invalid_argument("Geometry accessor contains mismatched span lengths.");
-    if (!bvh.is_valid())
-        return gwn_status::invalid_argument("BVH accessor is invalid.");
-    if (!aabb_tree.is_valid_for(bvh))
-        return gwn_status::invalid_argument("BVH AABB tree is invalid for the given topology.");
-    if (query_x.size() != query_y.size() || query_x.size() != query_z.size())
-        return gwn_status::invalid_argument("Query SoA spans must have identical lengths.");
-    if (query_x.size() != output.size())
-        return gwn_status::invalid_argument("Output span size must match query count.");
-    if (!gwn_span_has_storage(query_x) || !gwn_span_has_storage(query_y) ||
-        !gwn_span_has_storage(query_z) || !gwn_span_has_storage(output)) {
-        return gwn_status::invalid_argument(
-            "Query/output spans must use non-null storage when non-empty."
-        );
-    }
-    if (output.empty())
-        return gwn_status::ok();
-
-    constexpr int k_block_size = detail::k_gwn_default_block_size;
-    return detail::gwn_launch_linear_kernel<k_block_size>(
-        output.size(),
-        detail::gwn_unsigned_edge_distance_batch_bvh_functor<Width, Real, Index, StackCapacity>{
-            geometry, bvh, aabb_tree, query_x, query_y, query_z, output, culling_band
-        },
-        stream
-    );
-}
-
-/// \brief Width-4 convenience wrapper for batch edge-distance queries.
-template <
-    gwn_real_type Real, gwn_index_type Index = std::uint32_t,
-    int StackCapacity = k_gwn_default_traversal_stack_capacity>
-gwn_status gwn_compute_unsigned_edge_distance_batch_bvh(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh4_topology_accessor<Real, Index> const &bvh,
-    gwn_bvh4_aabb_accessor<Real, Index> const &aabb_tree, cuda::std::span<Real const> const query_x,
-    cuda::std::span<Real const> const query_y, cuda::std::span<Real const> const query_z,
-    cuda::std::span<Real> const output,
-    Real const culling_band = std::numeric_limits<Real>::infinity(),
-    cudaStream_t const stream = gwn_default_stream()
-) noexcept {
-    return gwn_compute_unsigned_edge_distance_batch_bvh<4, Real, Index, StackCapacity>(
-        geometry, bvh, aabb_tree, query_x, query_y, query_z, output, culling_band, stream
-    );
-}
 
 /// \brief First-hit result of a ray query against mesh triangles.
 template <gwn_real_type Real, gwn_index_type Index = std::uint32_t>

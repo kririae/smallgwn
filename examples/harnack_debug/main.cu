@@ -700,7 +700,7 @@ __global__ void probe_point_kernel(
         k_bvh_width, Real, Index, k_stack_capacity>(
         geometry, bvh, aabb, qx, qy, qz, std::numeric_limits<Real>::infinity()
     );
-    Real const r_edge = gwn::detail::gwn_unsigned_edge_distance_point_bvh_impl<
+    Real const r_edge = gwn::detail::gwn_unsigned_boundary_edge_distance_point_bvh_impl<
         k_bvh_width, Real, Index, k_stack_capacity>(
         geometry, bvh, aabb, qx, qy, qz, std::numeric_limits<Real>::infinity()
     );
