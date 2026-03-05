@@ -167,6 +167,190 @@ bool run_gradient_query(
     return true;
 }
 
+struct gradient_overflow_callback_probe {
+    int *flag{};
+
+    __device__ void operator()() const noexcept {
+        if (flag != nullptr)
+            *flag = 1;
+    }
+};
+
+enum class gradient_overflow_probe_status { k_ok, k_cuda_unavailable, k_error };
+
+gradient_overflow_probe_status run_gradient_overflow_callback_probe(
+    bool &callback_called, Real &grad_x, Real &grad_y, Real &grad_z
+) {
+    using TopologyNode = gwn::gwn_bvh4_topology_node_soa<Index>;
+    using MomentNode = gwn::gwn_bvh4_taylor_node_soa<1, Real>;
+
+    callback_called = false;
+    grad_x = Real(0);
+    grad_y = Real(0);
+    grad_z = Real(0);
+
+    std::array<Real, 3> const h_vx{Real(0), Real(1), Real(0)};
+    std::array<Real, 3> const h_vy{Real(0), Real(0), Real(1)};
+    std::array<Real, 3> const h_vz{Real(0), Real(0), Real(0)};
+    std::array<Index, 1> const h_i0{Index(0)};
+    std::array<Index, 1> const h_i1{Index(1)};
+    std::array<Index, 1> const h_i2{Index(2)};
+    std::array<Index, 1> const h_primitive_indices{Index(0)};
+
+    gwn::gwn_geometry_object<Real, Index> geometry_object;
+    gwn::gwn_status const geometry_status = gwn::gwn_upload_geometry(
+        geometry_object, cuda::std::span<Real const>(h_vx.data(), h_vx.size()),
+        cuda::std::span<Real const>(h_vy.data(), h_vy.size()),
+        cuda::std::span<Real const>(h_vz.data(), h_vz.size()),
+        cuda::std::span<Index const>(h_i0.data(), h_i0.size()),
+        cuda::std::span<Index const>(h_i1.data(), h_i1.size()),
+        cuda::std::span<Index const>(h_i2.data(), h_i2.size())
+    );
+    if (geometry_status.error() == gwn::gwn_error::cuda_runtime_error)
+        return gradient_overflow_probe_status::k_cuda_unavailable;
+    if (!geometry_status.is_ok()) {
+        ADD_FAILURE() << "geometry upload failed: "
+                      << gwn::tests::status_to_debug_string(geometry_status);
+        return gradient_overflow_probe_status::k_error;
+    }
+
+    std::array<TopologyNode, 3> h_topology{};
+    std::array<MomentNode, 3> h_moment{};
+
+    std::uint8_t const invalid_kind = static_cast<std::uint8_t>(gwn::gwn_bvh_child_kind::k_invalid);
+    std::uint8_t const leaf_kind = static_cast<std::uint8_t>(gwn::gwn_bvh_child_kind::k_leaf);
+    std::uint8_t const internal_kind =
+        static_cast<std::uint8_t>(gwn::gwn_bvh_child_kind::k_internal);
+    for (auto &node : h_topology) {
+        for (int i = 0; i < 4; ++i) {
+            node.child_index[i] = Index(0);
+            node.child_count[i] = Index(0);
+            node.child_kind[i] = invalid_kind;
+        }
+    }
+
+    h_topology[0].child_index[0] = Index(0);
+    h_topology[0].child_count[0] = Index(1);
+    h_topology[0].child_kind[0] = leaf_kind;
+    h_topology[0].child_index[1] = Index(1);
+    h_topology[0].child_kind[1] = internal_kind;
+    h_topology[0].child_index[2] = Index(2);
+    h_topology[0].child_kind[2] = internal_kind;
+
+    for (int slot = 0; slot < 4; ++slot) {
+        h_moment[0].child_max_p_dist2[slot] = Real(1e6);
+        h_moment[0].child_average_x[slot] = Real(0);
+        h_moment[0].child_average_y[slot] = Real(0);
+        h_moment[0].child_average_z[slot] = Real(0);
+        h_moment[0].child_n_x[slot] = Real(0);
+        h_moment[0].child_n_y[slot] = Real(0);
+        h_moment[0].child_n_z[slot] = Real(0);
+        h_moment[0].child_nij_xx[slot] = Real(0);
+        h_moment[0].child_nij_yy[slot] = Real(0);
+        h_moment[0].child_nij_zz[slot] = Real(0);
+        h_moment[0].child_nxy_nyx[slot] = Real(0);
+        h_moment[0].child_nyz_nzy[slot] = Real(0);
+        h_moment[0].child_nzx_nxz[slot] = Real(0);
+    }
+
+    gwn::gwn_device_array<TopologyNode> d_topology;
+    gwn::gwn_device_array<Index> d_primitive_indices;
+    gwn::gwn_device_array<MomentNode> d_moment;
+    gwn::gwn_device_array<Real> d_qx, d_qy, d_qz, d_gx, d_gy, d_gz;
+    gwn::gwn_device_array<int> d_callback_flag;
+
+    bool const allocation_ok = d_topology.resize(h_topology.size()).is_ok() &&
+                               d_primitive_indices.resize(h_primitive_indices.size()).is_ok() &&
+                               d_moment.resize(h_moment.size()).is_ok() && d_qx.resize(1).is_ok() &&
+                               d_qy.resize(1).is_ok() && d_qz.resize(1).is_ok() &&
+                               d_gx.resize(1).is_ok() && d_gy.resize(1).is_ok() &&
+                               d_gz.resize(1).is_ok() && d_callback_flag.resize(1).is_ok();
+    if (!allocation_ok) {
+        ADD_FAILURE() << "device allocation failed";
+        return gradient_overflow_probe_status::k_error;
+    }
+
+    std::array<Real, 1> const h_qx{Real(0.25)};
+    std::array<Real, 1> const h_qy{Real(0.25)};
+    std::array<Real, 1> const h_qz{Real(2)};
+    std::array<Real, 1> h_gx{Real(0)};
+    std::array<Real, 1> h_gy{Real(0)};
+    std::array<Real, 1> h_gz{Real(0)};
+    std::array<int, 1> h_callback_flag{0};
+
+    bool const upload_ok =
+        d_topology
+            .copy_from_host(
+                cuda::std::span<TopologyNode const>(h_topology.data(), h_topology.size())
+            )
+            .is_ok() &&
+        d_primitive_indices
+            .copy_from_host(
+                cuda::std::span<Index const>(h_primitive_indices.data(), h_primitive_indices.size())
+            )
+            .is_ok() &&
+        d_moment.copy_from_host(cuda::std::span<MomentNode const>(h_moment.data(), h_moment.size()))
+            .is_ok() &&
+        d_qx.copy_from_host(cuda::std::span<Real const>(h_qx.data(), h_qx.size())).is_ok() &&
+        d_qy.copy_from_host(cuda::std::span<Real const>(h_qy.data(), h_qy.size())).is_ok() &&
+        d_qz.copy_from_host(cuda::std::span<Real const>(h_qz.data(), h_qz.size())).is_ok() &&
+        d_callback_flag
+            .copy_from_host(
+                cuda::std::span<int const>(h_callback_flag.data(), h_callback_flag.size())
+            )
+            .is_ok();
+    if (!upload_ok) {
+        ADD_FAILURE() << "device upload failed";
+        return gradient_overflow_probe_status::k_error;
+    }
+
+    gwn::gwn_bvh4_topology_accessor<Real, Index> bvh{};
+    bvh.nodes = d_topology.span();
+    bvh.primitive_indices = d_primitive_indices.span();
+    bvh.root_kind = gwn::gwn_bvh_child_kind::k_internal;
+    bvh.root_index = Index(0);
+    bvh.root_count = Index(0);
+
+    gwn::gwn_bvh4_moment_accessor<1, Real, Index> moment{};
+    moment.nodes = d_moment.span();
+
+    auto const callback = gradient_overflow_callback_probe{d_callback_flag.span().data()};
+    gwn::gwn_status const query_status = gwn::gwn_compute_winding_gradient_batch_bvh_taylor<
+        1, Real, Index, 1, gradient_overflow_callback_probe>(
+        geometry_object.accessor(), bvh, moment, d_qx.span(), d_qy.span(), d_qz.span(), d_gx.span(),
+        d_gy.span(), d_gz.span(), Real(2), gwn::gwn_default_stream(), callback
+    );
+    if (!query_status.is_ok()) {
+        ADD_FAILURE() << "gradient query failed: "
+                      << gwn::tests::status_to_debug_string(query_status);
+        return gradient_overflow_probe_status::k_error;
+    }
+    if (cudaDeviceSynchronize() != cudaSuccess) {
+        ADD_FAILURE() << "CUDA synchronize failed after gradient overflow probe";
+        return gradient_overflow_probe_status::k_error;
+    }
+
+    if (!d_gx.copy_to_host(cuda::std::span<Real>(h_gx.data(), h_gx.size())).is_ok() ||
+        !d_gy.copy_to_host(cuda::std::span<Real>(h_gy.data(), h_gy.size())).is_ok() ||
+        !d_gz.copy_to_host(cuda::std::span<Real>(h_gz.data(), h_gz.size())).is_ok() ||
+        !d_callback_flag
+             .copy_to_host(cuda::std::span<int>(h_callback_flag.data(), h_callback_flag.size()))
+             .is_ok()) {
+        ADD_FAILURE() << "result/callback copy failed";
+        return gradient_overflow_probe_status::k_error;
+    }
+    if (cudaDeviceSynchronize() != cudaSuccess) {
+        ADD_FAILURE() << "CUDA synchronize failed after callback copy";
+        return gradient_overflow_probe_status::k_error;
+    }
+
+    callback_called = h_callback_flag[0] != 0;
+    grad_x = h_gx[0];
+    grad_y = h_gy[0];
+    grad_z = h_gz[0];
+    return gradient_overflow_probe_status::k_ok;
+}
+
 } // namespace
 
 // Test 1: Near-surface half-octahedron, exercises BVH leaf (brute-force) path.
@@ -548,7 +732,40 @@ TEST_F(CudaFixture, gradient_closed_octahedron_interior_near_zero) {
     }
 }
 
-// Test 8: Error-handling, mismatched output spans.
+TEST_F(CudaFixture, gradient_batch_forwards_overflow_callback) {
+    bool callback_called = false;
+    Real grad_x = Real(0);
+    Real grad_y = Real(0);
+    Real grad_z = Real(0);
+    gradient_overflow_probe_status const probe_status =
+        run_gradient_overflow_callback_probe(callback_called, grad_x, grad_y, grad_z);
+    if (probe_status == gradient_overflow_probe_status::k_cuda_unavailable)
+        GTEST_SKIP() << "CUDA unavailable";
+
+    ASSERT_EQ(probe_status, gradient_overflow_probe_status::k_ok)
+        << "gradient overflow probe execution failed";
+    EXPECT_TRUE(callback_called);
+}
+
+TEST_F(CudaFixture, gradient_overflow_returns_nan_components) {
+    bool callback_called = false;
+    Real grad_x = Real(0);
+    Real grad_y = Real(0);
+    Real grad_z = Real(0);
+    gradient_overflow_probe_status const probe_status =
+        run_gradient_overflow_callback_probe(callback_called, grad_x, grad_y, grad_z);
+    if (probe_status == gradient_overflow_probe_status::k_cuda_unavailable)
+        GTEST_SKIP() << "CUDA unavailable";
+
+    ASSERT_EQ(probe_status, gradient_overflow_probe_status::k_ok)
+        << "gradient overflow probe execution failed";
+    EXPECT_TRUE(callback_called);
+    EXPECT_TRUE(std::isnan(grad_x));
+    EXPECT_TRUE(std::isnan(grad_y));
+    EXPECT_TRUE(std::isnan(grad_z));
+}
+
+// Test 9: Error-handling, mismatched output spans.
 TEST_F(CudaFixture, gradient_mismatched_output_returns_error) {
     gwn::gwn_geometry_accessor<Real, Index> accessor{};
     gwn::gwn_bvh4_topology_accessor<Real, Index> bvh{};

@@ -7,6 +7,7 @@
 
 #include "../gwn_bvh.cuh"
 #include "../gwn_geometry.cuh"
+#include "gwn_query_common_impl.cuh"
 #include "gwn_query_geometry_impl.cuh"
 #include "gwn_query_winding_impl.cuh"
 
@@ -48,12 +49,14 @@ __device__ inline void gwn_sort_children_by_dist2_impl(
     }
 }
 
-template <int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity>
+template <
+    int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity,
+    typename OverflowCallback = gwn_traversal_overflow_trap_callback>
 __device__ inline Real gwn_unsigned_distance_point_bvh_impl(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
     gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree, Real const qx, Real const qy,
-    Real const qz, Real const culling_band
+    Real const qz, Real const culling_band, OverflowCallback const &overflow_callback = {}
 ) noexcept {
     static_assert(Width >= 2, "BVH width must be at least 2.");
     static_assert(StackCapacity > 0, "Traversal stack capacity must be positive.");
@@ -178,8 +181,10 @@ __device__ inline Real gwn_unsigned_distance_point_bvh_impl(
             if (child_box_dist2[i] >= best_dist2)
                 continue;
 
-            if (stack_size >= StackCapacity)
-                gwn_trap();
+            if (stack_size >= StackCapacity) {
+                overflow_callback();
+                return std::numeric_limits<Real>::quiet_NaN();
+            }
             stack[stack_size++] = topo_node.child_index[child_slot_order[i]];
         }
     }
@@ -193,6 +198,7 @@ template <gwn_real_type Real, gwn_index_type Index> struct gwn_closest_triangle_
     Real normal_y{Real(0)};
     Real normal_z{Real(0)};
     Index primitive_id{gwn_invalid_index<Index>()};
+    gwn_closest_triangle_normal_status status{gwn_closest_triangle_normal_status::k_miss};
 };
 
 template <gwn_real_type Real, gwn_index_type Index>
@@ -231,13 +237,15 @@ __device__ inline void gwn_visit_leaf_primitive_range_for_closest_triangle_impl(
 ///
 /// Traverses BVH nodes by lower-bound box distance, tracks the closest
 /// primitive ID, and returns its unit face normal.
-template <int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity>
+template <
+    int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity,
+    typename OverflowCallback = gwn_traversal_overflow_trap_callback>
 __device__ inline gwn_closest_triangle_normal_result<Real, Index>
 gwn_closest_triangle_normal_point_bvh_impl(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
     gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree, Real const qx, Real const qy,
-    Real const qz, Real const culling_band
+    Real const qz, Real const culling_band, OverflowCallback const &overflow_callback = {}
 ) noexcept {
     static_assert(Width >= 2, "BVH width must be at least 2.");
     static_assert(StackCapacity > 0, "Traversal stack capacity must be positive.");
@@ -256,6 +264,7 @@ gwn_closest_triangle_normal_point_bvh_impl(
         best_dist2 = std::numeric_limits<Real>::infinity();
     Index best_primitive_id = Index(0);
     bool found = false;
+    bool overflowed = false;
 
     if (bvh.root_kind == gwn_bvh_child_kind::k_leaf) {
         gwn_visit_leaf_primitive_range_for_closest_triangle_impl<Width, Real, Index>(
@@ -333,11 +342,21 @@ gwn_closest_triangle_normal_point_bvh_impl(
                     continue;
                 if (child_box_dist2[i] >= best_dist2)
                     continue;
-                if (stack_size >= StackCapacity)
-                    gwn_trap();
+                if (stack_size >= StackCapacity) {
+                    overflow_callback();
+                    overflowed = true;
+                    break;
+                }
                 stack[stack_size++] = topo_node.child_index[child_slot_order[i]];
             }
+            if (overflowed)
+                break;
         }
+    }
+
+    if (overflowed) {
+        result.status = gwn_closest_triangle_normal_status::k_overflow;
+        return result;
     }
 
     if (!found)
@@ -377,6 +396,7 @@ gwn_closest_triangle_normal_point_bvh_impl(
     result.normal_y = n.y * inv_n;
     result.normal_z = n.z * inv_n;
     result.primitive_id = best_primitive_id;
+    result.status = gwn_closest_triangle_normal_status::k_hit;
     return result;
 }
 
@@ -385,12 +405,14 @@ gwn_closest_triangle_normal_point_bvh_impl(
 ///
 /// Traverses BVH nodes by lower-bound box distance. Leaf tests only consider
 /// edges flagged by geometry.tri_boundary_edge_mask.
-template <int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity>
+template <
+    int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity,
+    typename OverflowCallback = gwn_traversal_overflow_trap_callback>
 __device__ inline Real gwn_unsigned_boundary_edge_distance_point_bvh_impl(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
     gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree, Real const qx, Real const qy,
-    Real const qz, Real const culling_band
+    Real const qz, Real const culling_band, OverflowCallback const &overflow_callback = {}
 ) noexcept {
     static_assert(Width >= 2, "BVH width must be at least 2.");
     static_assert(StackCapacity > 0, "Traversal stack capacity must be positive.");
@@ -515,8 +537,10 @@ __device__ inline Real gwn_unsigned_boundary_edge_distance_point_bvh_impl(
             if (child_box_dist2[i] >= best_dist2)
                 continue;
 
-            if (stack_size >= StackCapacity)
-                gwn_trap();
+            if (stack_size >= StackCapacity) {
+                overflow_callback();
+                return std::numeric_limits<Real>::quiet_NaN();
+            }
             stack[stack_size++] = topo_node.child_index[child_slot_order[i]];
         }
     }
@@ -524,7 +548,9 @@ __device__ inline Real gwn_unsigned_boundary_edge_distance_point_bvh_impl(
     return sqrt(best_dist2);
 }
 
-template <int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity>
+template <
+    int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity,
+    typename OverflowCallback = gwn_traversal_overflow_trap_callback>
 struct gwn_unsigned_boundary_edge_distance_batch_bvh_functor {
     gwn_geometry_accessor<Real, Index> geometry{};
     gwn_bvh_topology_accessor<Width, Real, Index> bvh{};
@@ -534,39 +560,50 @@ struct gwn_unsigned_boundary_edge_distance_batch_bvh_functor {
     cuda::std::span<Real const> query_z{};
     cuda::std::span<Real> out_distance{};
     Real culling_band{};
+    OverflowCallback overflow_callback{};
 
     __device__ void operator()(std::size_t const query_id) const {
-        out_distance[query_id] =
-            gwn_unsigned_boundary_edge_distance_point_bvh_impl<Width, Real, Index, StackCapacity>(
-                geometry, bvh, aabb_tree, query_x[query_id], query_y[query_id], query_z[query_id],
-                culling_band
-            );
+        out_distance[query_id] = gwn_unsigned_boundary_edge_distance_point_bvh_impl<
+            Width, Real, Index, StackCapacity, OverflowCallback>(
+            geometry, bvh, aabb_tree, query_x[query_id], query_y[query_id], query_z[query_id],
+            culling_band, overflow_callback
+        );
     }
 };
 
-template <int Order, int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity>
+template <
+    int Order, int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity,
+    typename OverflowCallback = gwn_traversal_overflow_trap_callback>
 __device__ inline Real gwn_signed_distance_point_bvh_impl(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
     gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree,
     gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &data_tree, Real const qx,
     Real const qy, Real const qz, Real const winding_number_threshold, Real const culling_band,
-    Real const accuracy_scale
+    Real const accuracy_scale, OverflowCallback const &overflow_callback = {}
 ) noexcept {
     static_assert(
         Order == 0 || Order == 1 || Order == 2,
         "gwn_signed_distance_point_bvh_impl currently supports Order 0, 1, and 2."
     );
 
-    Real const dist = gwn_unsigned_distance_point_bvh_impl<Width, Real, Index, StackCapacity>(
-        geometry, bvh, aabb_tree, qx, qy, qz, culling_band
-    );
+    Real const dist =
+        gwn_unsigned_distance_point_bvh_impl<Width, Real, Index, StackCapacity, OverflowCallback>(
+            geometry, bvh, aabb_tree, qx, qy, qz, culling_band, overflow_callback
+        );
+    if (!isfinite(dist))
+        return dist;
+
     Real wn = Real(0);
     if (data_tree.is_valid_for(bvh)) {
-        wn = gwn_winding_number_point_bvh_taylor_impl<Order, Width, Real, Index, StackCapacity>(
-            geometry, bvh, data_tree, qx, qy, qz, accuracy_scale
+        wn = gwn_winding_number_point_bvh_taylor_impl<
+            Order, Width, Real, Index, StackCapacity, OverflowCallback>(
+            geometry, bvh, data_tree, qx, qy, qz, accuracy_scale, overflow_callback
         );
     }
+    if (!isfinite(wn))
+        return wn;
+
     if (wn >= winding_number_threshold)
         return -dist;
     return dist;

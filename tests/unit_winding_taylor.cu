@@ -489,6 +489,227 @@ TEST_F(CudaFixture, repeated_build_matches_order2) {
         EXPECT_NEAR(out_a[i], out_b[i], k_eps) << "query " << i;
 }
 
+namespace {
+
+struct winding_overflow_callback_probe {
+    int *flag{};
+
+    __device__ void operator()() const noexcept {
+        if (flag != nullptr)
+            *flag = 1;
+    }
+};
+
+struct single_winding_overflow_probe_functor {
+    gwn::gwn_geometry_accessor<Real, Index> geometry{};
+    gwn::gwn_bvh4_topology_accessor<Real, Index> bvh{};
+    gwn::gwn_bvh4_moment_accessor<1, Real, Index> moment{};
+    cuda::std::span<Real const> qx{};
+    cuda::std::span<Real const> qy{};
+    cuda::std::span<Real const> qz{};
+    cuda::std::span<int> callback_flag{};
+    cuda::std::span<Real> out_exact{};
+    cuda::std::span<Real> out_taylor{};
+
+    __device__ void operator()(std::size_t const i) const {
+        auto const callback = winding_overflow_callback_probe{callback_flag.data()};
+        out_exact[i] = gwn::detail::gwn_winding_number_point_bvh_exact_impl<
+            4, Real, Index, 1, winding_overflow_callback_probe>(
+            geometry, bvh, qx[i], qy[i], qz[i], callback
+        );
+        out_taylor[i] = gwn::detail::gwn_winding_number_point_bvh_taylor_impl<
+            1, 4, Real, Index, 1, winding_overflow_callback_probe>(
+            geometry, bvh, moment, qx[i], qy[i], qz[i], Real(2), callback
+        );
+    }
+};
+
+enum class winding_overflow_probe_status { k_ok, k_cuda_unavailable, k_error };
+
+winding_overflow_probe_status
+run_winding_overflow_nan_probe(bool &callback_called, Real &exact_out, Real &taylor_out) {
+    using TopologyNode = gwn::gwn_bvh4_topology_node_soa<Index>;
+    using MomentNode = gwn::gwn_bvh4_taylor_node_soa<1, Real>;
+
+    callback_called = false;
+    exact_out = Real(0);
+    taylor_out = Real(0);
+
+    std::array<Real, 3> const h_vx{Real(0), Real(1), Real(0)};
+    std::array<Real, 3> const h_vy{Real(0), Real(0), Real(1)};
+    std::array<Real, 3> const h_vz{Real(0), Real(0), Real(0)};
+    std::array<Index, 1> const h_i0{Index(0)};
+    std::array<Index, 1> const h_i1{Index(1)};
+    std::array<Index, 1> const h_i2{Index(2)};
+    std::array<Index, 1> const h_primitive_indices{Index(0)};
+
+    gwn::gwn_geometry_object<Real, Index> geometry_object;
+    gwn::gwn_status const geometry_status = gwn::gwn_upload_geometry(
+        geometry_object, cuda::std::span<Real const>(h_vx.data(), h_vx.size()),
+        cuda::std::span<Real const>(h_vy.data(), h_vy.size()),
+        cuda::std::span<Real const>(h_vz.data(), h_vz.size()),
+        cuda::std::span<Index const>(h_i0.data(), h_i0.size()),
+        cuda::std::span<Index const>(h_i1.data(), h_i1.size()),
+        cuda::std::span<Index const>(h_i2.data(), h_i2.size())
+    );
+    if (geometry_status.error() == gwn::gwn_error::cuda_runtime_error)
+        return winding_overflow_probe_status::k_cuda_unavailable;
+    if (!geometry_status.is_ok()) {
+        ADD_FAILURE() << "geometry upload failed: "
+                      << gwn::tests::status_to_debug_string(geometry_status);
+        return winding_overflow_probe_status::k_error;
+    }
+
+    std::array<TopologyNode, 3> h_topology{};
+    std::array<MomentNode, 3> h_moment{};
+    std::uint8_t const invalid_kind = static_cast<std::uint8_t>(gwn::gwn_bvh_child_kind::k_invalid);
+    std::uint8_t const leaf_kind = static_cast<std::uint8_t>(gwn::gwn_bvh_child_kind::k_leaf);
+    std::uint8_t const internal_kind =
+        static_cast<std::uint8_t>(gwn::gwn_bvh_child_kind::k_internal);
+    for (auto &node : h_topology) {
+        for (int i = 0; i < 4; ++i) {
+            node.child_index[i] = Index(0);
+            node.child_count[i] = Index(0);
+            node.child_kind[i] = invalid_kind;
+        }
+    }
+    h_topology[0].child_index[0] = Index(0);
+    h_topology[0].child_count[0] = Index(1);
+    h_topology[0].child_kind[0] = leaf_kind;
+    h_topology[0].child_index[1] = Index(1);
+    h_topology[0].child_kind[1] = internal_kind;
+    h_topology[0].child_index[2] = Index(2);
+    h_topology[0].child_kind[2] = internal_kind;
+
+    for (int slot = 0; slot < 4; ++slot) {
+        h_moment[0].child_max_p_dist2[slot] = Real(1e6);
+        h_moment[0].child_average_x[slot] = Real(0);
+        h_moment[0].child_average_y[slot] = Real(0);
+        h_moment[0].child_average_z[slot] = Real(0);
+        h_moment[0].child_n_x[slot] = Real(0);
+        h_moment[0].child_n_y[slot] = Real(0);
+        h_moment[0].child_n_z[slot] = Real(0);
+        h_moment[0].child_nij_xx[slot] = Real(0);
+        h_moment[0].child_nij_yy[slot] = Real(0);
+        h_moment[0].child_nij_zz[slot] = Real(0);
+        h_moment[0].child_nxy_nyx[slot] = Real(0);
+        h_moment[0].child_nyz_nzy[slot] = Real(0);
+        h_moment[0].child_nzx_nxz[slot] = Real(0);
+    }
+
+    gwn::gwn_device_array<TopologyNode> d_topology;
+    gwn::gwn_device_array<Index> d_primitive_indices;
+    gwn::gwn_device_array<MomentNode> d_moment;
+    gwn::gwn_device_array<Real> d_qx, d_qy, d_qz, d_exact, d_taylor;
+    gwn::gwn_device_array<int> d_callback_flag;
+    bool const allocation_ok = d_topology.resize(h_topology.size()).is_ok() &&
+                               d_primitive_indices.resize(h_primitive_indices.size()).is_ok() &&
+                               d_moment.resize(h_moment.size()).is_ok() && d_qx.resize(1).is_ok() &&
+                               d_qy.resize(1).is_ok() && d_qz.resize(1).is_ok() &&
+                               d_exact.resize(1).is_ok() && d_taylor.resize(1).is_ok() &&
+                               d_callback_flag.resize(1).is_ok();
+    if (!allocation_ok) {
+        ADD_FAILURE() << "device allocation failed";
+        return winding_overflow_probe_status::k_error;
+    }
+
+    std::array<Real, 1> const h_qx{Real(0.25)};
+    std::array<Real, 1> const h_qy{Real(0.25)};
+    std::array<Real, 1> const h_qz{Real(2)};
+    std::array<Real, 1> h_exact{Real(0)};
+    std::array<Real, 1> h_taylor{Real(0)};
+    std::array<int, 1> h_callback_flag{0};
+
+    bool const upload_ok =
+        d_topology
+            .copy_from_host(
+                cuda::std::span<TopologyNode const>(h_topology.data(), h_topology.size())
+            )
+            .is_ok() &&
+        d_primitive_indices
+            .copy_from_host(
+                cuda::std::span<Index const>(h_primitive_indices.data(), h_primitive_indices.size())
+            )
+            .is_ok() &&
+        d_moment.copy_from_host(cuda::std::span<MomentNode const>(h_moment.data(), h_moment.size()))
+            .is_ok() &&
+        d_qx.copy_from_host(cuda::std::span<Real const>(h_qx.data(), h_qx.size())).is_ok() &&
+        d_qy.copy_from_host(cuda::std::span<Real const>(h_qy.data(), h_qy.size())).is_ok() &&
+        d_qz.copy_from_host(cuda::std::span<Real const>(h_qz.data(), h_qz.size())).is_ok() &&
+        d_callback_flag
+            .copy_from_host(
+                cuda::std::span<int const>(h_callback_flag.data(), h_callback_flag.size())
+            )
+            .is_ok();
+    if (!upload_ok) {
+        ADD_FAILURE() << "device upload failed";
+        return winding_overflow_probe_status::k_error;
+    }
+
+    gwn::gwn_bvh4_topology_accessor<Real, Index> bvh{};
+    bvh.nodes = d_topology.span();
+    bvh.primitive_indices = d_primitive_indices.span();
+    bvh.root_kind = gwn::gwn_bvh_child_kind::k_internal;
+    bvh.root_index = Index(0);
+    bvh.root_count = Index(0);
+
+    gwn::gwn_bvh4_moment_accessor<1, Real, Index> moment{};
+    moment.nodes = d_moment.span();
+
+    constexpr int k_block_size = gwn::detail::k_gwn_default_block_size;
+    gwn::gwn_status const launch_status = gwn::detail::gwn_launch_linear_kernel<k_block_size>(
+        1, single_winding_overflow_probe_functor{
+               geometry_object.accessor(), bvh, moment, d_qx.span(), d_qy.span(), d_qz.span(),
+               d_callback_flag.span(), d_exact.span(), d_taylor.span()
+           }
+    );
+    if (!launch_status.is_ok()) {
+        ADD_FAILURE() << "kernel launch failed: "
+                      << gwn::tests::status_to_debug_string(launch_status);
+        return winding_overflow_probe_status::k_error;
+    }
+    if (cudaDeviceSynchronize() != cudaSuccess) {
+        ADD_FAILURE() << "CUDA synchronize failed after winding overflow probe";
+        return winding_overflow_probe_status::k_error;
+    }
+
+    if (!d_exact.copy_to_host(cuda::std::span<Real>(h_exact.data(), h_exact.size())).is_ok() ||
+        !d_taylor.copy_to_host(cuda::std::span<Real>(h_taylor.data(), h_taylor.size())).is_ok() ||
+        !d_callback_flag
+             .copy_to_host(cuda::std::span<int>(h_callback_flag.data(), h_callback_flag.size()))
+             .is_ok()) {
+        ADD_FAILURE() << "device-to-host copy failed";
+        return winding_overflow_probe_status::k_error;
+    }
+    if (cudaDeviceSynchronize() != cudaSuccess) {
+        ADD_FAILURE() << "CUDA synchronize failed after result copy";
+        return winding_overflow_probe_status::k_error;
+    }
+
+    callback_called = h_callback_flag[0] != 0;
+    exact_out = h_exact[0];
+    taylor_out = h_taylor[0];
+    return winding_overflow_probe_status::k_ok;
+}
+
+} // namespace
+
+TEST_F(CudaFixture, winding_overflow_returns_nan_for_exact_and_taylor) {
+    bool callback_called = false;
+    Real exact_value = Real(0);
+    Real taylor_value = Real(0);
+    winding_overflow_probe_status const probe_status =
+        run_winding_overflow_nan_probe(callback_called, exact_value, taylor_value);
+    if (probe_status == winding_overflow_probe_status::k_cuda_unavailable)
+        GTEST_SKIP() << "CUDA unavailable";
+
+    ASSERT_EQ(probe_status, winding_overflow_probe_status::k_ok)
+        << "winding overflow probe execution failed";
+    EXPECT_TRUE(callback_called);
+    EXPECT_TRUE(std::isnan(exact_value));
+    EXPECT_TRUE(std::isnan(taylor_value));
+}
+
 // Taylor query with missing data returns error.
 
 TEST_F(CudaFixture, taylor_query_with_no_data_returns_error) {

@@ -814,3 +814,340 @@ TEST_F(CudaFixture, model_signed_distance_vs_libigl) {
             << "query " << i << " (" << qx[i] << ", " << qy[i] << ", " << qz[i] << ")";
     }
 }
+
+namespace {
+
+struct sdf_overflow_callback_probe {
+    int *flag{};
+
+    __device__ void operator()() const noexcept {
+        if (flag != nullptr)
+            *flag = 1;
+    }
+};
+
+struct sdf_overflow_probe_functor {
+    gwn::gwn_geometry_accessor<Real, Index> geometry{};
+    gwn::gwn_bvh4_topology_accessor<Real, Index> bvh{};
+    gwn::gwn_bvh4_aabb_accessor<Real, Index> aabb{};
+    gwn::gwn_bvh4_moment_accessor<1, Real, Index> moment{};
+    cuda::std::span<Real const> qx_overflow{};
+    cuda::std::span<Real const> qy_overflow{};
+    cuda::std::span<Real const> qz_overflow{};
+    cuda::std::span<Real const> qx_signed{};
+    cuda::std::span<Real const> qy_signed{};
+    cuda::std::span<Real const> qz_signed{};
+    cuda::std::span<int> callback_flag{};
+    cuda::std::span<Real> out_unsigned_distance{};
+    cuda::std::span<Real> out_boundary_edge_distance{};
+    cuda::std::span<Real> out_signed_distance{};
+    cuda::std::span<std::uint8_t> out_closest_status{};
+
+    __device__ void operator()(std::size_t const i) const {
+        auto const callback = sdf_overflow_callback_probe{callback_flag.data()};
+        out_unsigned_distance[i] =
+            gwn::gwn_unsigned_distance_point_bvh<4, Real, Index, 1, sdf_overflow_callback_probe>(
+                geometry, bvh, aabb, qx_overflow[i], qy_overflow[i], qz_overflow[i],
+                std::numeric_limits<Real>::infinity(), callback
+            );
+        out_boundary_edge_distance[i] = gwn::gwn_unsigned_boundary_edge_distance_point_bvh<
+            4, Real, Index, 1, sdf_overflow_callback_probe>(
+            geometry, bvh, aabb, qx_overflow[i], qy_overflow[i], qz_overflow[i],
+            std::numeric_limits<Real>::infinity(), callback
+        );
+        out_signed_distance[i] =
+            gwn::gwn_signed_distance_point_bvh<1, 4, Real, Index, 1, sdf_overflow_callback_probe>(
+                geometry, bvh, aabb, moment, qx_signed[i], qy_signed[i], qz_signed[i], Real(0.5),
+                std::numeric_limits<Real>::infinity(), Real(2), callback
+            );
+        auto const closest = gwn::detail::gwn_closest_triangle_normal_point_bvh_impl<
+            4, Real, Index, 1, sdf_overflow_callback_probe>(
+            geometry, bvh, aabb, qx_overflow[i], qy_overflow[i], qz_overflow[i],
+            std::numeric_limits<Real>::infinity(), callback
+        );
+        out_closest_status[i] = static_cast<std::uint8_t>(closest.status);
+    }
+};
+
+enum class sdf_overflow_probe_status { k_ok, k_cuda_unavailable, k_error };
+
+sdf_overflow_probe_status run_sdf_overflow_nan_probe(
+    bool &callback_called, Real &unsigned_distance_out, Real &boundary_edge_distance_out,
+    Real &signed_distance_out, std::uint8_t &closest_status_out
+) {
+    using TopologyNode = gwn::gwn_bvh4_topology_node_soa<Index>;
+    using AabbNode = gwn::gwn_bvh4_aabb_node_soa<Real>;
+    using MomentNode = gwn::gwn_bvh4_taylor_node_soa<1, Real>;
+
+    callback_called = false;
+    unsigned_distance_out = Real(0);
+    boundary_edge_distance_out = Real(0);
+    signed_distance_out = Real(0);
+    closest_status_out = std::uint8_t(0);
+
+    std::array<Real, 3> const h_vx{Real(0), Real(1), Real(0)};
+    std::array<Real, 3> const h_vy{Real(0), Real(0), Real(1)};
+    std::array<Real, 3> const h_vz{Real(0), Real(0), Real(0)};
+    std::array<Index, 1> const h_i0{Index(0)};
+    std::array<Index, 1> const h_i1{Index(1)};
+    std::array<Index, 1> const h_i2{Index(2)};
+    std::array<Index, 1> const h_primitive_indices{Index(0)};
+
+    gwn::gwn_geometry_object<Real, Index> geometry_object;
+    gwn::gwn_status const geometry_status = gwn::gwn_upload_geometry(
+        geometry_object, cuda::std::span<Real const>(h_vx.data(), h_vx.size()),
+        cuda::std::span<Real const>(h_vy.data(), h_vy.size()),
+        cuda::std::span<Real const>(h_vz.data(), h_vz.size()),
+        cuda::std::span<Index const>(h_i0.data(), h_i0.size()),
+        cuda::std::span<Index const>(h_i1.data(), h_i1.size()),
+        cuda::std::span<Index const>(h_i2.data(), h_i2.size())
+    );
+    if (geometry_status.error() == gwn::gwn_error::cuda_runtime_error)
+        return sdf_overflow_probe_status::k_cuda_unavailable;
+    if (!geometry_status.is_ok()) {
+        ADD_FAILURE() << "geometry upload failed: "
+                      << gwn::tests::status_to_debug_string(geometry_status);
+        return sdf_overflow_probe_status::k_error;
+    }
+
+    std::array<TopologyNode, 3> h_topology{};
+    std::array<AabbNode, 3> h_aabb{};
+    std::array<MomentNode, 3> h_moment{};
+    std::uint8_t const invalid_kind = static_cast<std::uint8_t>(gwn::gwn_bvh_child_kind::k_invalid);
+    std::uint8_t const leaf_kind = static_cast<std::uint8_t>(gwn::gwn_bvh_child_kind::k_leaf);
+    std::uint8_t const internal_kind =
+        static_cast<std::uint8_t>(gwn::gwn_bvh_child_kind::k_internal);
+
+    for (auto &node : h_topology) {
+        for (int i = 0; i < 4; ++i) {
+            node.child_index[i] = Index(0);
+            node.child_count[i] = Index(0);
+            node.child_kind[i] = invalid_kind;
+        }
+    }
+    h_topology[0].child_index[0] = Index(0);
+    h_topology[0].child_count[0] = Index(1);
+    h_topology[0].child_kind[0] = leaf_kind;
+    h_topology[0].child_index[1] = Index(1);
+    h_topology[0].child_kind[1] = internal_kind;
+    h_topology[0].child_index[2] = Index(2);
+    h_topology[0].child_kind[2] = internal_kind;
+
+    for (auto &node : h_aabb) {
+        for (int i = 0; i < 4; ++i) {
+            node.child_min_x[i] = Real(5);
+            node.child_min_y[i] = Real(5);
+            node.child_min_z[i] = Real(5);
+            node.child_max_x[i] = Real(6);
+            node.child_max_y[i] = Real(6);
+            node.child_max_z[i] = Real(6);
+        }
+    }
+    h_aabb[0].child_min_x[0] = Real(0);
+    h_aabb[0].child_min_y[0] = Real(0);
+    h_aabb[0].child_min_z[0] = Real(0);
+    h_aabb[0].child_max_x[0] = Real(1);
+    h_aabb[0].child_max_y[0] = Real(1);
+    h_aabb[0].child_max_z[0] = Real(0);
+    for (int child_slot = 1; child_slot < 3; ++child_slot) {
+        h_aabb[0].child_min_x[child_slot] = Real(-1);
+        h_aabb[0].child_min_y[child_slot] = Real(-1);
+        h_aabb[0].child_min_z[child_slot] = Real(-1);
+        h_aabb[0].child_max_x[child_slot] = Real(1);
+        h_aabb[0].child_max_y[child_slot] = Real(1);
+        h_aabb[0].child_max_z[child_slot] = Real(3);
+    }
+
+    for (int slot = 0; slot < 4; ++slot) {
+        h_moment[0].child_max_p_dist2[slot] = Real(1e6);
+        h_moment[0].child_average_x[slot] = Real(0);
+        h_moment[0].child_average_y[slot] = Real(0);
+        h_moment[0].child_average_z[slot] = Real(0);
+        h_moment[0].child_n_x[slot] = Real(0);
+        h_moment[0].child_n_y[slot] = Real(0);
+        h_moment[0].child_n_z[slot] = Real(0);
+        h_moment[0].child_nij_xx[slot] = Real(0);
+        h_moment[0].child_nij_yy[slot] = Real(0);
+        h_moment[0].child_nij_zz[slot] = Real(0);
+        h_moment[0].child_nxy_nyx[slot] = Real(0);
+        h_moment[0].child_nyz_nzy[slot] = Real(0);
+        h_moment[0].child_nzx_nxz[slot] = Real(0);
+    }
+
+    gwn::gwn_device_array<TopologyNode> d_topology;
+    gwn::gwn_device_array<AabbNode> d_aabb;
+    gwn::gwn_device_array<Index> d_primitive_indices;
+    gwn::gwn_device_array<MomentNode> d_moment;
+    gwn::gwn_device_array<Real> d_qx_overflow, d_qy_overflow, d_qz_overflow;
+    gwn::gwn_device_array<Real> d_qx_signed, d_qy_signed, d_qz_signed;
+    gwn::gwn_device_array<Real> d_unsigned, d_boundary, d_signed;
+    gwn::gwn_device_array<std::uint8_t> d_closest_status;
+    gwn::gwn_device_array<int> d_callback_flag;
+
+    bool const allocation_ok =
+        d_topology.resize(h_topology.size()).is_ok() && d_aabb.resize(h_aabb.size()).is_ok() &&
+        d_primitive_indices.resize(h_primitive_indices.size()).is_ok() &&
+        d_moment.resize(h_moment.size()).is_ok() && d_qx_overflow.resize(1).is_ok() &&
+        d_qy_overflow.resize(1).is_ok() && d_qz_overflow.resize(1).is_ok() &&
+        d_qx_signed.resize(1).is_ok() && d_qy_signed.resize(1).is_ok() &&
+        d_qz_signed.resize(1).is_ok() && d_unsigned.resize(1).is_ok() &&
+        d_boundary.resize(1).is_ok() && d_signed.resize(1).is_ok() &&
+        d_closest_status.resize(1).is_ok() && d_callback_flag.resize(1).is_ok();
+    if (!allocation_ok) {
+        ADD_FAILURE() << "device allocation failed";
+        return sdf_overflow_probe_status::k_error;
+    }
+
+    std::array<Real, 1> const h_qx_overflow{Real(0.25)};
+    std::array<Real, 1> const h_qy_overflow{Real(0.25)};
+    std::array<Real, 1> const h_qz_overflow{Real(2)};
+    std::array<Real, 1> const h_qx_signed{Real(0.25)};
+    std::array<Real, 1> const h_qy_signed{Real(0.25)};
+    std::array<Real, 1> const h_qz_signed{Real(0)};
+    std::array<Real, 1> h_unsigned{Real(0)};
+    std::array<Real, 1> h_boundary{Real(0)};
+    std::array<Real, 1> h_signed{Real(0)};
+    std::array<std::uint8_t, 1> h_closest_status{std::uint8_t(0)};
+    std::array<int, 1> h_callback_flag{0};
+
+    bool const upload_ok =
+        d_topology
+            .copy_from_host(
+                cuda::std::span<TopologyNode const>(h_topology.data(), h_topology.size())
+            )
+            .is_ok() &&
+        d_aabb.copy_from_host(cuda::std::span<AabbNode const>(h_aabb.data(), h_aabb.size()))
+            .is_ok() &&
+        d_primitive_indices
+            .copy_from_host(
+                cuda::std::span<Index const>(h_primitive_indices.data(), h_primitive_indices.size())
+            )
+            .is_ok() &&
+        d_moment.copy_from_host(cuda::std::span<MomentNode const>(h_moment.data(), h_moment.size()))
+            .is_ok() &&
+        d_qx_overflow
+            .copy_from_host(cuda::std::span<Real const>(h_qx_overflow.data(), h_qx_overflow.size()))
+            .is_ok() &&
+        d_qy_overflow
+            .copy_from_host(cuda::std::span<Real const>(h_qy_overflow.data(), h_qy_overflow.size()))
+            .is_ok() &&
+        d_qz_overflow
+            .copy_from_host(cuda::std::span<Real const>(h_qz_overflow.data(), h_qz_overflow.size()))
+            .is_ok() &&
+        d_qx_signed
+            .copy_from_host(cuda::std::span<Real const>(h_qx_signed.data(), h_qx_signed.size()))
+            .is_ok() &&
+        d_qy_signed
+            .copy_from_host(cuda::std::span<Real const>(h_qy_signed.data(), h_qy_signed.size()))
+            .is_ok() &&
+        d_qz_signed
+            .copy_from_host(cuda::std::span<Real const>(h_qz_signed.data(), h_qz_signed.size()))
+            .is_ok() &&
+        d_callback_flag
+            .copy_from_host(
+                cuda::std::span<int const>(h_callback_flag.data(), h_callback_flag.size())
+            )
+            .is_ok();
+    if (!upload_ok) {
+        ADD_FAILURE() << "device upload failed";
+        return sdf_overflow_probe_status::k_error;
+    }
+
+    gwn::gwn_bvh4_topology_accessor<Real, Index> bvh{};
+    bvh.nodes = d_topology.span();
+    bvh.primitive_indices = d_primitive_indices.span();
+    bvh.root_kind = gwn::gwn_bvh_child_kind::k_internal;
+    bvh.root_index = Index(0);
+    bvh.root_count = Index(0);
+
+    gwn::gwn_bvh4_aabb_accessor<Real, Index> aabb{};
+    aabb.nodes = d_aabb.span();
+
+    gwn::gwn_bvh4_moment_accessor<1, Real, Index> moment{};
+    moment.nodes = d_moment.span();
+
+    constexpr int k_block_size = gwn::detail::k_gwn_default_block_size;
+    gwn::gwn_status const launch_status = gwn::detail::gwn_launch_linear_kernel<k_block_size>(
+        1, sdf_overflow_probe_functor{
+               geometry_object.accessor(),
+               bvh,
+               aabb,
+               moment,
+               d_qx_overflow.span(),
+               d_qy_overflow.span(),
+               d_qz_overflow.span(),
+               d_qx_signed.span(),
+               d_qy_signed.span(),
+               d_qz_signed.span(),
+               d_callback_flag.span(),
+               d_unsigned.span(),
+               d_boundary.span(),
+               d_signed.span(),
+               d_closest_status.span(),
+           }
+    );
+    if (!launch_status.is_ok()) {
+        ADD_FAILURE() << "kernel launch failed: "
+                      << gwn::tests::status_to_debug_string(launch_status);
+        return sdf_overflow_probe_status::k_error;
+    }
+    if (cudaDeviceSynchronize() != cudaSuccess) {
+        ADD_FAILURE() << "CUDA synchronize failed after SDF overflow probe";
+        return sdf_overflow_probe_status::k_error;
+    }
+
+    if (!d_unsigned.copy_to_host(cuda::std::span<Real>(h_unsigned.data(), h_unsigned.size()))
+             .is_ok() ||
+        !d_boundary.copy_to_host(cuda::std::span<Real>(h_boundary.data(), h_boundary.size()))
+             .is_ok() ||
+        !d_signed.copy_to_host(cuda::std::span<Real>(h_signed.data(), h_signed.size())).is_ok() ||
+        !d_closest_status
+             .copy_to_host(
+                 cuda::std::span<std::uint8_t>(h_closest_status.data(), h_closest_status.size())
+             )
+             .is_ok() ||
+        !d_callback_flag
+             .copy_to_host(cuda::std::span<int>(h_callback_flag.data(), h_callback_flag.size()))
+             .is_ok()) {
+        ADD_FAILURE() << "device-to-host copy failed";
+        return sdf_overflow_probe_status::k_error;
+    }
+    if (cudaDeviceSynchronize() != cudaSuccess) {
+        ADD_FAILURE() << "CUDA synchronize failed after result copy";
+        return sdf_overflow_probe_status::k_error;
+    }
+
+    callback_called = h_callback_flag[0] != 0;
+    unsigned_distance_out = h_unsigned[0];
+    boundary_edge_distance_out = h_boundary[0];
+    signed_distance_out = h_signed[0];
+    closest_status_out = h_closest_status[0];
+    return sdf_overflow_probe_status::k_ok;
+}
+
+} // namespace
+
+TEST_F(CudaFixture, sdf_overflow_returns_nan_and_closest_normal_reports_overflow_status) {
+    bool callback_called = false;
+    Real unsigned_distance = Real(0);
+    Real boundary_edge_distance = Real(0);
+    Real signed_distance = Real(0);
+    std::uint8_t closest_status = std::uint8_t(0);
+
+    sdf_overflow_probe_status const probe_status = run_sdf_overflow_nan_probe(
+        callback_called, unsigned_distance, boundary_edge_distance, signed_distance, closest_status
+    );
+    if (probe_status == sdf_overflow_probe_status::k_cuda_unavailable)
+        GTEST_SKIP() << "CUDA unavailable";
+
+    ASSERT_EQ(probe_status, sdf_overflow_probe_status::k_ok)
+        << "SDF overflow probe execution failed";
+    EXPECT_TRUE(callback_called);
+    EXPECT_TRUE(std::isnan(unsigned_distance));
+    EXPECT_TRUE(std::isnan(boundary_edge_distance));
+    EXPECT_TRUE(std::isnan(signed_distance));
+    EXPECT_EQ(
+        closest_status,
+        static_cast<std::uint8_t>(gwn::gwn_closest_triangle_normal_status::k_overflow)
+    );
+}

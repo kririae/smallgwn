@@ -8,6 +8,7 @@
 
 #include "../gwn_bvh.cuh"
 #include "../gwn_geometry.cuh"
+#include "gwn_query_common_impl.cuh"
 #include "gwn_query_distance_impl.cuh"
 #include "gwn_query_gradient_impl.cuh"
 #include "gwn_query_vec3_impl.cuh"
@@ -115,14 +116,17 @@ __host__ __device__ inline Real gwn_harnack_constrained_two_sided_step(
 }
 
 // Per-ray Harnack trace (angle-valued, Algorithm 2).
-template <int Order, int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity>
+template <
+    int Order, int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity,
+    typename OverflowCallback = gwn_traversal_overflow_trap_callback>
 __device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_ray_impl(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
     gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree,
     gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &moment_tree, Real ray_ox,
     Real ray_oy, Real ray_oz, Real ray_dx, Real ray_dy, Real ray_dz, Real const target_winding,
-    Real const epsilon, int const max_iterations, Real const t_max, Real const accuracy_scale
+    Real const epsilon, int const max_iterations, Real const t_max, Real const accuracy_scale,
+    OverflowCallback const &overflow_callback = {}
 ) noexcept {
     static_assert(
         Order == 0 || Order == 1 || Order == 2,
@@ -146,8 +150,8 @@ __device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_ray_impl(
 
     auto eval_w_and_grad = [&](Real const px, Real const py, Real const pz) {
         return gwn_winding_and_gradient_point_bvh_taylor_impl<
-            Order, Width, Real, Index, StackCapacity>(
-            geometry, bvh, moment_tree, px, py, pz, accuracy_scale
+            Order, Width, Real, Index, StackCapacity, OverflowCallback>(
+            geometry, bvh, moment_tree, px, py, pz, accuracy_scale, overflow_callback
         );
     };
 
@@ -165,7 +169,8 @@ __device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_ray_impl(
             Real const pz = ray_oz + t_ * ray_dz;
             auto const cn =
                 gwn_closest_triangle_normal_point_bvh_impl<Width, Real, Index, StackCapacity>(
-                    geometry, bvh, aabb_tree, px, py, pz, std::numeric_limits<Real>::infinity()
+                    geometry, bvh, aabb_tree, px, py, pz, std::numeric_limits<Real>::infinity(),
+                    overflow_callback
                 );
             n.x = cn.normal_x;
             n.y = cn.normal_y;
@@ -237,10 +242,10 @@ __device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_ray_impl(
                 culling_band = band;
         }
 
-        Real const R =
-            gwn_unsigned_boundary_edge_distance_point_bvh_impl<Width, Real, Index, StackCapacity>(
-                geometry, bvh, aabb_tree, px, py, pz, culling_band
-            );
+        Real const R = gwn_unsigned_boundary_edge_distance_point_bvh_impl<
+            Width, Real, Index, StackCapacity, OverflowCallback>(
+            geometry, bvh, aabb_tree, px, py, pz, culling_band, overflow_callback
+        );
         if (!(R >= Real(0)))
             break;
         prev_t_eval = t_eval;
@@ -262,8 +267,9 @@ __device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_ray_impl(
                 gwn_query_vec3<Real> shade_normal = grad_w;
                 if (R < epsilon) {
                     auto const cn = gwn_closest_triangle_normal_point_bvh_impl<
-                        Width, Real, Index, StackCapacity>(
-                        geometry, bvh, aabb_tree, px, py, pz, std::numeric_limits<Real>::infinity()
+                        Width, Real, Index, StackCapacity, OverflowCallback>(
+                        geometry, bvh, aabb_tree, px, py, pz, std::numeric_limits<Real>::infinity(),
+                        overflow_callback
                     );
                     shade_normal.x = cn.normal_x;
                     shade_normal.y = cn.normal_y;
@@ -288,7 +294,9 @@ __device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_ray_impl(
 
 // Batch functor for Harnack tracing.
 
-template <int Order, int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity>
+template <
+    int Order, int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity,
+    typename OverflowCallback = gwn_traversal_overflow_trap_callback>
 struct gwn_harnack_trace_batch_functor {
     gwn_geometry_accessor<Real, Index> geometry{};
     gwn_bvh_topology_accessor<Width, Real, Index> bvh{};
@@ -312,13 +320,15 @@ struct gwn_harnack_trace_batch_functor {
     int max_iterations{};
     Real t_max{};
     Real accuracy_scale{};
+    OverflowCallback overflow_callback{};
 
     __device__ void operator()(std::size_t const ray_id) const {
-        auto const res = gwn_harnack_trace_ray_impl<Order, Width, Real, Index, StackCapacity>(
-            geometry, bvh, aabb_tree, moment_tree, ray_origin_x[ray_id], ray_origin_y[ray_id],
-            ray_origin_z[ray_id], ray_dir_x[ray_id], ray_dir_y[ray_id], ray_dir_z[ray_id],
-            target_winding, epsilon, max_iterations, t_max, accuracy_scale
-        );
+        auto const res =
+            gwn_harnack_trace_ray_impl<Order, Width, Real, Index, StackCapacity, OverflowCallback>(
+                geometry, bvh, aabb_tree, moment_tree, ray_origin_x[ray_id], ray_origin_y[ray_id],
+                ray_origin_z[ray_id], ray_dir_x[ray_id], ray_dir_y[ray_id], ray_dir_z[ray_id],
+                target_winding, epsilon, max_iterations, t_max, accuracy_scale, overflow_callback
+            );
         output_t[ray_id] = res.t;
         output_normal_x[ray_id] = res.normal_x;
         output_normal_y[ray_id] = res.normal_y;

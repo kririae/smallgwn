@@ -9,6 +9,7 @@
 
 #include "../gwn_bvh.cuh"
 #include "../gwn_geometry.cuh"
+#include "gwn_query_common_impl.cuh"
 #include "gwn_query_vec3_impl.cuh"
 
 namespace gwn {
@@ -19,8 +20,11 @@ template <gwn_real_type Real, gwn_index_type Index> struct gwn_ray_first_hit_res
     Index primitive_id{gwn_invalid_index<Index>()};
     Real u{Real(0)};
     Real v{Real(0)};
+    gwn_ray_first_hit_status status{gwn_ray_first_hit_status::k_miss};
 
-    __host__ __device__ constexpr bool hit() const noexcept { return t >= Real(0); }
+    __host__ __device__ constexpr bool hit() const noexcept {
+        return status == gwn_ray_first_hit_status::k_hit;
+    }
 };
 
 template <gwn_real_type Real> struct gwn_ray_aabb_interval {
@@ -325,13 +329,15 @@ __device__ inline void gwn_ray_visit_leaf_primitive_range_impl(
     }
 }
 
-template <int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity>
+template <
+    int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity,
+    typename OverflowCallback = gwn_traversal_overflow_trap_callback>
 __device__ inline gwn_ray_first_hit_result<Real, Index> gwn_ray_first_hit_bvh_impl(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
     gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree, Real const ray_ox,
     Real const ray_oy, Real const ray_oz, Real const ray_dx, Real const ray_dy, Real const ray_dz,
-    Real const t_min, Real const t_max
+    Real const t_min, Real const t_max, OverflowCallback const &overflow_callback = {}
 ) noexcept {
     static_assert(Width >= 2, "BVH width must be at least 2.");
     static_assert(StackCapacity > 0, "Traversal stack capacity must be positive.");
@@ -354,17 +360,21 @@ __device__ inline gwn_ray_first_hit_result<Real, Index> gwn_ray_first_hit_bvh_im
     best.t = t_max;
     best.primitive_id = gwn_invalid_index<Index>();
     best.found = false;
+    auto const set_result_from_best = [&]() noexcept {
+        if (!best.found)
+            return;
+        result.t = best.t;
+        result.primitive_id = best.primitive_id;
+        result.u = best.u;
+        result.v = best.v;
+        result.status = gwn_ray_first_hit_status::k_hit;
+    };
 
     if (bvh.root_kind == gwn_bvh_child_kind::k_leaf) {
         gwn_ray_visit_leaf_primitive_range_impl<Width, Real, Index>(
             geometry, bvh, origin, direction, t_min, bvh.root_index, bvh.root_count, best
         );
-        if (best.found) {
-            result.t = best.t;
-            result.primitive_id = best.primitive_id;
-            result.u = best.u;
-            result.v = best.v;
-        }
+        set_result_from_best();
         return result;
     }
 
@@ -450,22 +460,23 @@ __device__ inline gwn_ray_first_hit_result<Real, Index> gwn_ray_first_hit_bvh_im
             if (child_entry_t[i] > best.t)
                 continue;
 
-            if (stack_size >= StackCapacity)
-                gwn_trap();
+            if (stack_size >= StackCapacity) {
+                overflow_callback();
+                set_result_from_best();
+                result.status = gwn_ray_first_hit_status::k_overflow;
+                return result;
+            }
             stack[stack_size++] = topo_node.child_index[child_slot_order[i]];
         }
     }
 
-    if (best.found) {
-        result.t = best.t;
-        result.primitive_id = best.primitive_id;
-        result.u = best.u;
-        result.v = best.v;
-    }
+    set_result_from_best();
     return result;
 }
 
-template <int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity>
+template <
+    int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity,
+    typename OverflowCallback = gwn_traversal_overflow_trap_callback>
 struct gwn_ray_first_hit_batch_bvh_functor {
     gwn_geometry_accessor<Real, Index> geometry{};
     gwn_bvh_topology_accessor<Width, Real, Index> bvh{};
@@ -480,13 +491,15 @@ struct gwn_ray_first_hit_batch_bvh_functor {
     cuda::std::span<Index> out_primitive_id{};
     Real t_min{};
     Real t_max{};
+    OverflowCallback overflow_callback{};
 
     __device__ void operator()(std::size_t const ray_id) const {
-        auto const hit = gwn_ray_first_hit_bvh_impl<Width, Real, Index, StackCapacity>(
-            geometry, bvh, aabb_tree, ray_origin_x[ray_id], ray_origin_y[ray_id],
-            ray_origin_z[ray_id], ray_dir_x[ray_id], ray_dir_y[ray_id], ray_dir_z[ray_id], t_min,
-            t_max
-        );
+        auto const hit =
+            gwn_ray_first_hit_bvh_impl<Width, Real, Index, StackCapacity, OverflowCallback>(
+                geometry, bvh, aabb_tree, ray_origin_x[ray_id], ray_origin_y[ray_id],
+                ray_origin_z[ray_id], ray_dir_x[ray_id], ray_dir_y[ray_id], ray_dir_z[ray_id],
+                t_min, t_max, overflow_callback
+            );
         out_t[ray_id] = hit.t;
         out_primitive_id[ray_id] = hit.primitive_id;
     }

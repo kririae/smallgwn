@@ -8,6 +8,7 @@
 #include "../gwn_bvh.cuh"
 #include "../gwn_geometry.cuh"
 #include "gwn_harnack_trace_impl.cuh"
+#include "gwn_query_common_impl.cuh"
 #include "gwn_query_ray_impl.cuh"
 
 namespace gwn {
@@ -176,14 +177,17 @@ __device__ inline bool gwn_triangle_barycentric_vertex_normal_from_primitive_imp
     return gwn_try_normalize_impl(normal_out);
 }
 
-template <int Order, int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity>
+template <
+    int Order, int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity,
+    typename OverflowCallback = gwn_traversal_overflow_trap_callback>
 __device__ inline gwn_hybrid_trace_result<Real, Index> gwn_hybrid_trace_ray_impl(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
     gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree,
     gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &moment_tree, Real const ray_ox,
     Real const ray_oy, Real const ray_oz, Real const ray_dx, Real const ray_dy, Real const ray_dz,
-    gwn_hybrid_trace_arguments<Real> const &arguments
+    gwn_hybrid_trace_arguments<Real> const &arguments,
+    OverflowCallback const &overflow_callback = {}
 ) noexcept {
     static_assert(
         Order == 0 || Order == 1 || Order == 2,
@@ -199,10 +203,11 @@ __device__ inline gwn_hybrid_trace_result<Real, Index> gwn_hybrid_trace_ray_impl
     if (!(dir_len2 > Real(0)))
         return result;
 
-    auto const mesh_hit = gwn_ray_first_hit_bvh_impl<Width, Real, Index, StackCapacity>(
-        geometry, bvh, aabb_tree, ray_ox, ray_oy, ray_oz, ray_dx, ray_dy, ray_dz, arguments.t_min,
-        arguments.t_max
-    );
+    auto const mesh_hit =
+        gwn_ray_first_hit_bvh_impl<Width, Real, Index, StackCapacity, OverflowCallback>(
+            geometry, bvh, aabb_tree, ray_ox, ray_oy, ray_oz, ray_dx, ray_dy, ray_dz,
+            arguments.t_min, arguments.t_max, overflow_callback
+        );
 
     Real fill_global_t = Real(-1);
     gwn_harnack_trace_result<Real> fill_hit{};
@@ -221,10 +226,11 @@ __device__ inline gwn_hybrid_trace_result<Real, Index> gwn_hybrid_trace_ray_impl
             Real const start_oy = ray_oy + harnack_t_min * ray_dy;
             Real const start_oz = ray_oz + harnack_t_min * ray_dz;
 
-            fill_hit = gwn_harnack_trace_ray_impl<Order, Width, Real, Index, StackCapacity>(
+            fill_hit = gwn_harnack_trace_ray_impl<
+                Order, Width, Real, Index, StackCapacity, OverflowCallback>(
                 geometry, bvh, aabb_tree, moment_tree, start_ox, start_oy, start_oz, ray_dx, ray_dy,
                 ray_dz, arguments.target_winding, arguments.epsilon, arguments.max_iterations,
-                local_t_max, arguments.accuracy_scale
+                local_t_max, arguments.accuracy_scale, overflow_callback
             );
             if (fill_hit.hit())
                 fill_global_t = fill_hit.t + harnack_t_min;
@@ -284,7 +290,9 @@ __device__ inline gwn_hybrid_trace_result<Real, Index> gwn_hybrid_trace_ray_impl
     return result;
 }
 
-template <int Order, int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity>
+template <
+    int Order, int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity,
+    typename OverflowCallback = gwn_traversal_overflow_trap_callback>
 struct gwn_hybrid_trace_batch_functor {
     gwn_geometry_accessor<Real, Index> geometry{};
     gwn_bvh_topology_accessor<Width, Real, Index> bvh{};
@@ -305,12 +313,15 @@ struct gwn_hybrid_trace_batch_functor {
     cuda::std::span<Index> output_primitive_id{};
 
     gwn_hybrid_trace_arguments<Real> arguments{};
+    OverflowCallback overflow_callback{};
 
     __device__ void operator()(std::size_t const ray_id) const {
-        auto const hit = gwn_hybrid_trace_ray_impl<Order, Width, Real, Index, StackCapacity>(
-            geometry, bvh, aabb_tree, moment_tree, ray_origin_x[ray_id], ray_origin_y[ray_id],
-            ray_origin_z[ray_id], ray_dir_x[ray_id], ray_dir_y[ray_id], ray_dir_z[ray_id], arguments
-        );
+        auto const hit =
+            gwn_hybrid_trace_ray_impl<Order, Width, Real, Index, StackCapacity, OverflowCallback>(
+                geometry, bvh, aabb_tree, moment_tree, ray_origin_x[ray_id], ray_origin_y[ray_id],
+                ray_origin_z[ray_id], ray_dir_x[ray_id], ray_dir_y[ray_id], ray_dir_z[ray_id],
+                arguments, overflow_callback
+            );
         output_t[ray_id] = hit.t;
         output_normal_x[ray_id] = hit.normal_x;
         output_normal_y[ray_id] = hit.normal_y;

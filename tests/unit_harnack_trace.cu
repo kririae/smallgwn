@@ -386,6 +386,210 @@ Real cpu_boundary_edge_distance(Mesh const &mesh, Real const qx, Real const qy, 
     return best;
 }
 
+struct harnack_overflow_callback_probe {
+    int *flag{};
+
+    __device__ void operator()() const noexcept {
+        if (flag != nullptr)
+            *flag = 1;
+    }
+};
+
+enum class harnack_overflow_probe_status { k_ok, k_cuda_unavailable, k_error };
+
+harnack_overflow_probe_status run_harnack_overflow_callback_probe(bool &callback_called) {
+    using TopologyNode = gwn::gwn_bvh4_topology_node_soa<Index>;
+    using AabbNode = gwn::gwn_bvh4_aabb_node_soa<Real>;
+    using MomentNode = gwn::gwn_bvh4_taylor_node_soa<1, Real>;
+
+    callback_called = false;
+
+    std::array<Real, 3> const h_vx{Real(0), Real(1), Real(0)};
+    std::array<Real, 3> const h_vy{Real(0), Real(0), Real(1)};
+    std::array<Real, 3> const h_vz{Real(0), Real(0), Real(0)};
+    std::array<Index, 1> const h_i0{Index(0)};
+    std::array<Index, 1> const h_i1{Index(1)};
+    std::array<Index, 1> const h_i2{Index(2)};
+    std::array<Index, 1> const h_primitive_indices{Index(0)};
+
+    gwn::gwn_geometry_object<Real, Index> geometry_object;
+    gwn::gwn_status const geometry_status = gwn::gwn_upload_geometry(
+        geometry_object, cuda::std::span<Real const>(h_vx.data(), h_vx.size()),
+        cuda::std::span<Real const>(h_vy.data(), h_vy.size()),
+        cuda::std::span<Real const>(h_vz.data(), h_vz.size()),
+        cuda::std::span<Index const>(h_i0.data(), h_i0.size()),
+        cuda::std::span<Index const>(h_i1.data(), h_i1.size()),
+        cuda::std::span<Index const>(h_i2.data(), h_i2.size())
+    );
+    if (geometry_status.error() == gwn::gwn_error::cuda_runtime_error)
+        return harnack_overflow_probe_status::k_cuda_unavailable;
+    if (!geometry_status.is_ok()) {
+        ADD_FAILURE() << "geometry upload failed: "
+                      << gwn::tests::status_to_debug_string(geometry_status);
+        return harnack_overflow_probe_status::k_error;
+    }
+
+    std::array<TopologyNode, 3> h_topology{};
+    std::array<AabbNode, 3> h_aabb{};
+    std::array<MomentNode, 3> h_moment{};
+
+    std::uint8_t const invalid_kind = static_cast<std::uint8_t>(gwn::gwn_bvh_child_kind::k_invalid);
+    std::uint8_t const leaf_kind = static_cast<std::uint8_t>(gwn::gwn_bvh_child_kind::k_leaf);
+    std::uint8_t const internal_kind =
+        static_cast<std::uint8_t>(gwn::gwn_bvh_child_kind::k_internal);
+    for (auto &node : h_topology) {
+        for (int i = 0; i < 4; ++i) {
+            node.child_index[i] = Index(0);
+            node.child_count[i] = Index(0);
+            node.child_kind[i] = invalid_kind;
+        }
+    }
+    h_topology[0].child_index[0] = Index(0);
+    h_topology[0].child_count[0] = Index(1);
+    h_topology[0].child_kind[0] = leaf_kind;
+    h_topology[0].child_index[1] = Index(1);
+    h_topology[0].child_kind[1] = internal_kind;
+    h_topology[0].child_index[2] = Index(2);
+    h_topology[0].child_kind[2] = internal_kind;
+
+    for (auto &node : h_aabb) {
+        for (int i = 0; i < 4; ++i) {
+            node.child_min_x[i] = Real(10);
+            node.child_min_y[i] = Real(10);
+            node.child_min_z[i] = Real(10);
+            node.child_max_x[i] = Real(11);
+            node.child_max_y[i] = Real(11);
+            node.child_max_z[i] = Real(11);
+        }
+    }
+    h_aabb[0].child_min_x[0] = Real(0);
+    h_aabb[0].child_min_y[0] = Real(0);
+    h_aabb[0].child_min_z[0] = Real(-0.1);
+    h_aabb[0].child_max_x[0] = Real(1);
+    h_aabb[0].child_max_y[0] = Real(1);
+    h_aabb[0].child_max_z[0] = Real(0.1);
+
+    for (int slot = 0; slot < 4; ++slot) {
+        h_moment[0].child_max_p_dist2[slot] = Real(1e6);
+        h_moment[0].child_average_x[slot] = Real(0);
+        h_moment[0].child_average_y[slot] = Real(0);
+        h_moment[0].child_average_z[slot] = Real(0);
+        h_moment[0].child_n_x[slot] = Real(0);
+        h_moment[0].child_n_y[slot] = Real(0);
+        h_moment[0].child_n_z[slot] = Real(0);
+        h_moment[0].child_nij_xx[slot] = Real(0);
+        h_moment[0].child_nij_yy[slot] = Real(0);
+        h_moment[0].child_nij_zz[slot] = Real(0);
+        h_moment[0].child_nxy_nyx[slot] = Real(0);
+        h_moment[0].child_nyz_nzy[slot] = Real(0);
+        h_moment[0].child_nzx_nxz[slot] = Real(0);
+    }
+
+    gwn::gwn_device_array<TopologyNode> d_topology;
+    gwn::gwn_device_array<AabbNode> d_aabb;
+    gwn::gwn_device_array<Index> d_primitive_indices;
+    gwn::gwn_device_array<MomentNode> d_moment;
+    gwn::gwn_device_array<Real> d_ox, d_oy, d_oz, d_dx, d_dy, d_dz;
+    gwn::gwn_device_array<Real> d_t, d_nx, d_ny, d_nz;
+    gwn::gwn_device_array<int> d_callback_flag;
+
+    bool const allocation_ok =
+        d_topology.resize(h_topology.size()).is_ok() && d_aabb.resize(h_aabb.size()).is_ok() &&
+        d_primitive_indices.resize(h_primitive_indices.size()).is_ok() &&
+        d_moment.resize(h_moment.size()).is_ok() && d_ox.resize(1).is_ok() &&
+        d_oy.resize(1).is_ok() && d_oz.resize(1).is_ok() && d_dx.resize(1).is_ok() &&
+        d_dy.resize(1).is_ok() && d_dz.resize(1).is_ok() && d_t.resize(1).is_ok() &&
+        d_nx.resize(1).is_ok() && d_ny.resize(1).is_ok() && d_nz.resize(1).is_ok() &&
+        d_callback_flag.resize(1).is_ok();
+    if (!allocation_ok) {
+        ADD_FAILURE() << "device allocation failed";
+        return harnack_overflow_probe_status::k_error;
+    }
+
+    std::array<Real, 1> const h_ox{Real(0.25)};
+    std::array<Real, 1> const h_oy{Real(0.25)};
+    std::array<Real, 1> const h_oz{Real(-1)};
+    std::array<Real, 1> const h_dx{Real(0)};
+    std::array<Real, 1> const h_dy{Real(0)};
+    std::array<Real, 1> const h_dz{Real(1)};
+    std::array<int, 1> h_callback_flag{0};
+
+    bool const upload_ok =
+        d_topology
+            .copy_from_host(
+                cuda::std::span<TopologyNode const>(h_topology.data(), h_topology.size())
+            )
+            .is_ok() &&
+        d_aabb.copy_from_host(cuda::std::span<AabbNode const>(h_aabb.data(), h_aabb.size()))
+            .is_ok() &&
+        d_primitive_indices
+            .copy_from_host(
+                cuda::std::span<Index const>(h_primitive_indices.data(), h_primitive_indices.size())
+            )
+            .is_ok() &&
+        d_moment.copy_from_host(cuda::std::span<MomentNode const>(h_moment.data(), h_moment.size()))
+            .is_ok() &&
+        d_ox.copy_from_host(cuda::std::span<Real const>(h_ox.data(), h_ox.size())).is_ok() &&
+        d_oy.copy_from_host(cuda::std::span<Real const>(h_oy.data(), h_oy.size())).is_ok() &&
+        d_oz.copy_from_host(cuda::std::span<Real const>(h_oz.data(), h_oz.size())).is_ok() &&
+        d_dx.copy_from_host(cuda::std::span<Real const>(h_dx.data(), h_dx.size())).is_ok() &&
+        d_dy.copy_from_host(cuda::std::span<Real const>(h_dy.data(), h_dy.size())).is_ok() &&
+        d_dz.copy_from_host(cuda::std::span<Real const>(h_dz.data(), h_dz.size())).is_ok() &&
+        d_callback_flag
+            .copy_from_host(
+                cuda::std::span<int const>(h_callback_flag.data(), h_callback_flag.size())
+            )
+            .is_ok();
+    if (!upload_ok) {
+        ADD_FAILURE() << "device upload failed";
+        return harnack_overflow_probe_status::k_error;
+    }
+
+    gwn::gwn_bvh4_topology_accessor<Real, Index> bvh{};
+    bvh.nodes = d_topology.span();
+    bvh.primitive_indices = d_primitive_indices.span();
+    bvh.root_kind = gwn::gwn_bvh_child_kind::k_internal;
+    bvh.root_index = Index(0);
+    bvh.root_count = Index(0);
+
+    gwn::gwn_bvh4_aabb_accessor<Real, Index> aabb{};
+    aabb.nodes = d_aabb.span();
+
+    gwn::gwn_bvh4_moment_accessor<1, Real, Index> moment{};
+    moment.nodes = d_moment.span();
+
+    auto const callback = harnack_overflow_callback_probe{d_callback_flag.span().data()};
+    gwn::gwn_status const query_status = gwn::gwn_compute_harnack_trace_batch_bvh_taylor<
+        1, Real, Index, 1, harnack_overflow_callback_probe>(
+        geometry_object.accessor(), bvh, aabb, moment, d_ox.span(), d_oy.span(), d_oz.span(),
+        d_dx.span(), d_dy.span(), d_dz.span(), d_t.span(), d_nx.span(), d_ny.span(), d_nz.span(),
+        Real(0.5), Real(1e-3), 2, Real(4), Real(2), gwn::gwn_default_stream(), callback
+    );
+    if (!query_status.is_ok()) {
+        ADD_FAILURE() << "harnack query failed: "
+                      << gwn::tests::status_to_debug_string(query_status);
+        return harnack_overflow_probe_status::k_error;
+    }
+    if (cudaDeviceSynchronize() != cudaSuccess) {
+        ADD_FAILURE() << "CUDA synchronize failed after harnack overflow probe";
+        return harnack_overflow_probe_status::k_error;
+    }
+
+    if (!d_callback_flag
+             .copy_to_host(cuda::std::span<int>(h_callback_flag.data(), h_callback_flag.size()))
+             .is_ok()) {
+        ADD_FAILURE() << "callback flag copy failed";
+        return harnack_overflow_probe_status::k_error;
+    }
+    if (cudaDeviceSynchronize() != cudaSuccess) {
+        ADD_FAILURE() << "CUDA synchronize failed after callback copy";
+        return harnack_overflow_probe_status::k_error;
+    }
+
+    callback_called = h_callback_flag[0] != 0;
+    return harnack_overflow_probe_status::k_ok;
+}
+
 } // namespace
 
 // Test 1: Harnack step-size formula (CPU-only math validation).
@@ -617,6 +821,18 @@ TEST_F(CudaFixture, harnack_batch_rejects_invalid_accessors) {
         d_dy.span(), d_dz.span(), d_t.span(), d_nx.span(), d_ny.span(), d_nz.span()
     );
     EXPECT_EQ(s.error(), gwn::gwn_error::invalid_argument);
+}
+
+TEST_F(CudaFixture, harnack_batch_forwards_overflow_callback) {
+    bool callback_called = false;
+    harnack_overflow_probe_status const probe_status =
+        run_harnack_overflow_callback_probe(callback_called);
+    if (probe_status == harnack_overflow_probe_status::k_cuda_unavailable)
+        GTEST_SKIP() << "CUDA unavailable";
+
+    ASSERT_EQ(probe_status, harnack_overflow_probe_status::k_ok)
+        << "harnack overflow probe execution failed";
+    EXPECT_TRUE(callback_called);
 }
 
 TEST_F(CudaFixture, boundary_edge_distance_closed_cube_is_infinite) {
