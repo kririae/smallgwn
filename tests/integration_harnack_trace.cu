@@ -153,14 +153,14 @@ TEST_F(CudaFixture, integration_harnack_octahedron_sphere_rays) {
     std::cout << "[harnack integration] Hits: Order-0=" << hits0 << " Order-1=" << hits1
               << " Order-2=" << hits2 << " / " << n << "\n";
 
-    // With correct R(x) = face_dist (distance to nearest triangle), the tracer
-    // reliably hits the closed-mesh surface for all inward-pointing rays.
-    EXPECT_GE(hits0, static_cast<int>(n * 0.90))
-        << "Order-0: too few closed-mesh shell hits (" << hits0 << "/" << n << ")";
-    EXPECT_GE(hits1, static_cast<int>(n * 0.90))
-        << "Order-1: too few closed-mesh shell hits (" << hits1 << "/" << n << ")";
-    EXPECT_GE(hits2, static_cast<int>(n * 0.90))
-        << "Order-2: too few closed-mesh shell hits (" << hits2 << "/" << n << ")";
+    // With boundary-edge radius R(x), closed meshes usually produce misses in
+    // Harnack-only mode; hybrid tracing handles closed-surface intersections.
+    EXPECT_LE(hits0, static_cast<int>(n * 0.10))
+        << "Order-0: too many closed-mesh shell hits (" << hits0 << "/" << n << ")";
+    EXPECT_LE(hits1, static_cast<int>(n * 0.10))
+        << "Order-1: too many closed-mesh shell hits (" << hits1 << "/" << n << ")";
+    EXPECT_LE(hits2, static_cast<int>(n * 0.10))
+        << "Order-2: too many closed-mesh shell hits (" << hits2 << "/" << n << ")";
     EXPECT_EQ(hits0, hits1) << "single-path tracer should be consistent across orders";
     EXPECT_EQ(hits1, hits2) << "single-path tracer should be consistent across orders";
 
@@ -302,12 +302,12 @@ TEST_F(CudaFixture, integration_harnack_cube_sphere_rays) {
     std::cout << "[harnack cube integration] Hits: Order-0=" << hits0 << " Order-1=" << hits1
               << " Order-2=" << hits2 << " / " << n << "\n";
 
-    EXPECT_GE(hits0, static_cast<int>(n * 0.90))
-        << "Order-0: too few closed-cube hits (" << hits0 << "/" << n << ")";
-    EXPECT_GE(hits1, static_cast<int>(n * 0.90))
-        << "Order-1: too few closed-cube hits (" << hits1 << "/" << n << ")";
-    EXPECT_GE(hits2, static_cast<int>(n * 0.90))
-        << "Order-2: too few closed-cube hits (" << hits2 << "/" << n << ")";
+    EXPECT_LE(hits0, static_cast<int>(n * 0.10))
+        << "Order-0: too many closed-cube hits (" << hits0 << "/" << n << ")";
+    EXPECT_LE(hits1, static_cast<int>(n * 0.10))
+        << "Order-1: too many closed-cube hits (" << hits1 << "/" << n << ")";
+    EXPECT_LE(hits2, static_cast<int>(n * 0.10))
+        << "Order-2: too many closed-cube hits (" << hits2 << "/" << n << ")";
     EXPECT_EQ(hits0, hits1) << "single-path tracer should be consistent across orders";
     EXPECT_EQ(hits1, hits2) << "single-path tracer should be consistent across orders";
 

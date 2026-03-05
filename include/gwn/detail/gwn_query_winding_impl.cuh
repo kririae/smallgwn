@@ -2,10 +2,12 @@
 
 #include <cmath>
 #include <cstddef>
+#include <limits>
 #include <type_traits>
 
 #include "../gwn_bvh.cuh"
 #include "../gwn_geometry.cuh"
+#include "gwn_query_common_impl.cuh"
 #include "gwn_query_geometry_impl.cuh"
 #include "gwn_query_vec3_impl.cuh"
 
@@ -96,13 +98,16 @@ template <gwn_real_type Real> struct gwn_winding_and_gradient_result {
     gwn_query_vec3<Real> gradient{};
 };
 
-template <int Order, int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity>
+template <
+    int Order, int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity,
+    typename OverflowCallback = gwn_traversal_overflow_trap_callback>
 __device__ inline gwn_winding_and_gradient_result<Real>
 gwn_winding_and_gradient_point_bvh_taylor_impl(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
     gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &data_tree, Real const qx,
-    Real const qy, Real const qz, Real const accuracy_scale
+    Real const qy, Real const qz, Real const accuracy_scale,
+    OverflowCallback const &overflow_callback = {}
 ) noexcept {
     static_assert(
         Order == 0 || Order == 1 || Order == 2,
@@ -130,6 +135,17 @@ gwn_winding_and_gradient_point_bvh_taylor_impl(
     Real omega_sum = Real(0);
     gwn_query_vec3<Real> grad_sum(Real(0), Real(0), Real(0));
     Real const accuracy_scale2 = accuracy_scale * accuracy_scale;
+    auto const set_overflow_nan_result = [&]() noexcept {
+        Real const nan = std::numeric_limits<Real>::quiet_NaN();
+        result.winding = nan;
+        result.gradient = gwn_query_vec3<Real>(nan, nan, nan);
+    };
+    auto const finalize_result = [&]() noexcept {
+        result.winding = omega_sum / (Real(4) * k_pi);
+        result.gradient = gwn_query_vec3<Real>(
+            grad_sum.x * k_inv_4pi, grad_sum.y * k_inv_4pi, grad_sum.z * k_inv_4pi
+        );
+    };
 
     // Handle root-is-leaf case.
     if (bvh.root_kind == gwn_bvh_child_kind::k_leaf) {
@@ -325,8 +341,11 @@ gwn_winding_and_gradient_point_bvh_taylor_impl(
             }
 
             if (child_kind == gwn_bvh_child_kind::k_internal) {
-                if (stack_size >= StackCapacity)
-                    gwn_trap();
+                if (stack_size >= StackCapacity) {
+                    overflow_callback();
+                    set_overflow_nan_result();
+                    return result;
+                }
                 stack[stack_size++] = node.child_index[child_slot];
                 continue;
             }
@@ -351,18 +370,17 @@ gwn_winding_and_gradient_point_bvh_taylor_impl(
         }
     }
 
-    result.winding = omega_sum / (Real(4) * k_pi);
-    result.gradient = gwn_query_vec3<Real>(
-        grad_sum.x * k_inv_4pi, grad_sum.y * k_inv_4pi, grad_sum.z * k_inv_4pi
-    );
+    finalize_result();
     return result;
 }
 
-template <int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity>
+template <
+    int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity,
+    typename OverflowCallback = gwn_traversal_overflow_trap_callback>
 __device__ inline Real gwn_winding_number_point_bvh_exact_impl(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh, Real const qx, Real const qy,
-    Real const qz
+    Real const qz, OverflowCallback const &overflow_callback = {}
 ) noexcept {
     static_assert(Width >= 2, "BVH width must be at least 2.");
     static_assert(StackCapacity > 0, "Traversal stack capacity must be positive.");
@@ -409,8 +427,10 @@ __device__ inline Real gwn_winding_number_point_bvh_exact_impl(
                 continue;
 
             if (child_kind == gwn_bvh_child_kind::k_internal) {
-                if (stack_size >= StackCapacity)
-                    gwn_trap();
+                if (stack_size >= StackCapacity) {
+                    overflow_callback();
+                    return std::numeric_limits<Real>::quiet_NaN();
+                }
                 stack[stack_size++] = node.child_index[child_slot];
                 continue;
             }
@@ -436,20 +456,26 @@ __device__ inline Real gwn_winding_number_point_bvh_exact_impl(
     return omega_sum / (Real(4) * k_pi);
 }
 
-template <int Order, int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity>
+template <
+    int Order, int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity,
+    typename OverflowCallback = gwn_traversal_overflow_trap_callback>
 __device__ inline Real gwn_winding_number_point_bvh_taylor_impl(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
     gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &data_tree, Real const qx,
-    Real const qy, Real const qz, Real const accuracy_scale
+    Real const qy, Real const qz, Real const accuracy_scale,
+    OverflowCallback const &overflow_callback = {}
 ) noexcept {
-    return gwn_winding_and_gradient_point_bvh_taylor_impl<Order, Width, Real, Index, StackCapacity>(
-               geometry, bvh, data_tree, qx, qy, qz, accuracy_scale
+    return gwn_winding_and_gradient_point_bvh_taylor_impl<
+               Order, Width, Real, Index, StackCapacity, OverflowCallback>(
+               geometry, bvh, data_tree, qx, qy, qz, accuracy_scale, overflow_callback
     )
         .winding;
 }
 
-template <int Order, int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity>
+template <
+    int Order, int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity,
+    typename OverflowCallback = gwn_traversal_overflow_trap_callback>
 struct gwn_winding_number_batch_bvh_taylor_functor {
     gwn_geometry_accessor<Real, Index> geometry{};
     gwn_bvh_topology_accessor<Width, Real, Index> bvh{};
@@ -459,13 +485,14 @@ struct gwn_winding_number_batch_bvh_taylor_functor {
     cuda::std::span<Real const> query_z{};
     cuda::std::span<Real> out_winding{};
     Real accuracy_scale{};
+    OverflowCallback overflow_callback{};
 
     __device__ void operator()(std::size_t const query_id) const {
-        out_winding[query_id] =
-            gwn_winding_number_point_bvh_taylor_impl<Order, Width, Real, Index, StackCapacity>(
-                geometry, bvh, data_tree, query_x[query_id], query_y[query_id], query_z[query_id],
-                accuracy_scale
-            );
+        out_winding[query_id] = gwn_winding_number_point_bvh_taylor_impl<
+            Order, Width, Real, Index, StackCapacity, OverflowCallback>(
+            geometry, bvh, data_tree, query_x[query_id], query_y[query_id], query_z[query_id],
+            accuracy_scale, overflow_callback
+        );
     }
 };
 

@@ -32,14 +32,19 @@ These instructions apply to the `smallgwn/` project tree.
 - Detail entrypoints use `_impl` suffix to avoid public/internal naming collisions.
 
 ## Formatting Rules
-- Use `clang-format` with Chromium style via `smallgwn/.clang-format`.
-- Run format after each code change touching C++/CUDA files.
+- Format with `clang-format` using the project `.clang-format` (LLVM-based).
+  **MUST** run `clang-format` on every changed C++/CUDA file before committing.
 - **Internal `#include` paths must always be relative**:
   - `include/gwn/`: bare names (`"gwn_bvh.cuh"`).
   - `include/gwn/detail/`: bare names for siblings, `../` for parent-level.
   - Never use the rooted `"gwn/..."` form inside library headers.
 
 ## Architecture & Design Rules
+
+### Public / Detail Split
+- Public headers under `include/gwn/` expose the minimal API surface.
+  Implementation lives in `include/gwn/detail/`; public headers may `#include` detail headers
+  (required for header-only templates), but users should never `#include` detail headers directly.
 
 ### Geometry
 - SoA layout (`x/y/z`, `i0/i1/i2`).
@@ -64,8 +69,8 @@ These instructions apply to the `smallgwn/` project tree.
   - `gwn_ray_first_hit_bvh` / `gwn_compute_ray_first_hit_batch_bvh` — ray first-hit
   - `gwn_harnack_trace_ray_bvh_taylor` / `gwn_compute_harnack_trace_batch_bvh_taylor` — Harnack trace
 - Internal math uses `gwn_query_vec3` (no Eigen dependency); public alias `gwn::gwn_vec3<Real>`.
-- Traversal stack capacity: template `StackCapacity` (default `k_gwn_default_traversal_stack_capacity = 64`);
-  device-side overflow calls `gwn_trap()`.
+- Traversal stack capacity: template `StackCapacity` (default `k_gwn_default_traversal_stack_capacity = 64`).
+  Query APIs accept an optional device-side overflow callback; default callback traps via `gwn_trap()`.
 
 ### Stream & Memory
 - Stream binding is explicit via `gwn_stream_mixin`.
@@ -74,6 +79,17 @@ These instructions apply to the `smallgwn/` project tree.
 - Memory: stream allocator path only (`cudaMallocAsync`/`cudaFreeAsync`), no synchronous fallback.
 - `gwn_device_array<T>`: all methods are `noexcept`; remembers bound stream; `resize` rebinds even when size matches.
 - For span handoff to accessors/objects, prefer span primitives over `gwn_device_array`.
+
+### Span Rules
+- Always use `cuda::std::span`, never bare `std::span`.
+- East const on element type: `span<T const>`, never `span<const T>`.
+- Pass spans **by value** with top-level `const`:
+  - Input: `cuda::std::span<T const> const`
+  - Output: `cuda::std::span<T> const`
+  - Exception: `gwn_allocate_span` / `gwn_free_span` take `cuda::std::span<T> &` (must mutate the span itself).
+- Accessor struct members store mutable spans (`span<T>`). Functor members distinguish
+  `span<T const>` (input) vs `span<T>` (output).
+- `const_cast` is prohibited except where `cuda::atomic_ref` mandates a mutable reference for load-only operations.
 
 ### Index Type
 - Default public `Index` is `std::uint32_t`, but all templates must work with `uint64_t` too.

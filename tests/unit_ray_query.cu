@@ -105,6 +105,223 @@ struct single_ray_api_uv_functor {
     }
 };
 
+struct ray_overflow_callback_probe {
+    int *flag{};
+
+    __device__ void operator()() const noexcept {
+        if (flag != nullptr)
+            *flag = 1;
+    }
+};
+
+struct single_ray_overflow_callback_functor {
+    gwn::gwn_geometry_accessor<Real, Index> geometry{};
+    gwn::gwn_bvh4_topology_accessor<Real, Index> bvh{};
+    gwn::gwn_bvh4_aabb_accessor<Real, Index> aabb{};
+    cuda::std::span<Real const> ox{};
+    cuda::std::span<Real const> oy{};
+    cuda::std::span<Real const> oz{};
+    cuda::std::span<Real const> dx{};
+    cuda::std::span<Real const> dy{};
+    cuda::std::span<Real const> dz{};
+    cuda::std::span<int> callback_flag{};
+    cuda::std::span<Real> out_t{};
+    cuda::std::span<Index> out_pi{};
+    cuda::std::span<std::uint8_t> out_status{};
+
+    __device__ void operator()(std::size_t const i) const {
+        auto const callback = ray_overflow_callback_probe{callback_flag.data()};
+        auto const hit = gwn::gwn_ray_first_hit_bvh<4, Real, Index, 1>(
+            geometry, bvh, aabb, ox[i], oy[i], oz[i], dx[i], dy[i], dz[i], Real(0),
+            std::numeric_limits<Real>::infinity(), callback
+        );
+        out_t[i] = hit.t;
+        out_pi[i] = hit.primitive_id;
+        out_status[i] = static_cast<std::uint8_t>(hit.status);
+    }
+};
+
+bool run_ray_first_hit_overflow_callback_probe(
+    bool &callback_called, Real &out_t, Index &out_pi, std::uint8_t &out_status
+) {
+    using TopologyNode = gwn::gwn_bvh4_topology_node_soa<Index>;
+    using AabbNode = gwn::gwn_bvh4_aabb_node_soa<Real>;
+
+    std::array<Real, 3> const h_vx{Real(0), Real(1), Real(0)};
+    std::array<Real, 3> const h_vy{Real(0), Real(0), Real(1)};
+    std::array<Real, 3> const h_vz{Real(0), Real(0), Real(0)};
+    std::array<Index, 1> const h_i0{Index(0)};
+    std::array<Index, 1> const h_i1{Index(1)};
+    std::array<Index, 1> const h_i2{Index(2)};
+    std::array<Index, 1> const h_primitive_indices{Index(0)};
+
+    gwn::gwn_geometry_object<Real, Index> geometry_object;
+    gwn::gwn_status const geometry_status = gwn::gwn_upload_geometry(
+        geometry_object, cuda::std::span<Real const>(h_vx.data(), h_vx.size()),
+        cuda::std::span<Real const>(h_vy.data(), h_vy.size()),
+        cuda::std::span<Real const>(h_vz.data(), h_vz.size()),
+        cuda::std::span<Index const>(h_i0.data(), h_i0.size()),
+        cuda::std::span<Index const>(h_i1.data(), h_i1.size()),
+        cuda::std::span<Index const>(h_i2.data(), h_i2.size())
+    );
+    if (!geometry_status.is_ok())
+        return false;
+
+    std::array<TopologyNode, 3> h_topology{};
+    std::array<AabbNode, 3> h_aabb{};
+    std::uint8_t const invalid_kind = static_cast<std::uint8_t>(gwn::gwn_bvh_child_kind::k_invalid);
+    std::uint8_t const leaf_kind = static_cast<std::uint8_t>(gwn::gwn_bvh_child_kind::k_leaf);
+    std::uint8_t const internal_kind =
+        static_cast<std::uint8_t>(gwn::gwn_bvh_child_kind::k_internal);
+
+    for (auto &node : h_topology) {
+        for (int i = 0; i < 4; ++i) {
+            node.child_index[i] = Index(0);
+            node.child_count[i] = Index(0);
+            node.child_kind[i] = invalid_kind;
+        }
+    }
+    h_topology[0].child_index[0] = Index(0);
+    h_topology[0].child_count[0] = Index(1);
+    h_topology[0].child_kind[0] = leaf_kind;
+    h_topology[0].child_index[1] = Index(1);
+    h_topology[0].child_kind[1] = internal_kind;
+    h_topology[0].child_index[2] = Index(2);
+    h_topology[0].child_kind[2] = internal_kind;
+
+    for (auto &node : h_aabb) {
+        for (int i = 0; i < 4; ++i) {
+            node.child_min_x[i] = Real(2);
+            node.child_min_y[i] = Real(2);
+            node.child_min_z[i] = Real(2);
+            node.child_max_x[i] = Real(3);
+            node.child_max_y[i] = Real(3);
+            node.child_max_z[i] = Real(3);
+        }
+    }
+    h_aabb[0].child_min_x[0] = Real(0);
+    h_aabb[0].child_min_y[0] = Real(0);
+    h_aabb[0].child_min_z[0] = Real(-1);
+    h_aabb[0].child_max_x[0] = Real(1);
+    h_aabb[0].child_max_y[0] = Real(1);
+    h_aabb[0].child_max_z[0] = Real(1);
+    for (int child_slot = 1; child_slot < 3; ++child_slot) {
+        h_aabb[0].child_min_x[child_slot] = Real(-1);
+        h_aabb[0].child_min_y[child_slot] = Real(-1);
+        h_aabb[0].child_min_z[child_slot] = Real(-2);
+        h_aabb[0].child_max_x[child_slot] = Real(1);
+        h_aabb[0].child_max_y[child_slot] = Real(1);
+        h_aabb[0].child_max_z[child_slot] = Real(2);
+    }
+
+    gwn::gwn_device_array<TopologyNode> d_topology;
+    gwn::gwn_device_array<AabbNode> d_aabb;
+    gwn::gwn_device_array<Index> d_primitive_indices;
+    if (!d_topology.resize(h_topology.size()).is_ok() || !d_aabb.resize(h_aabb.size()).is_ok() ||
+        !d_primitive_indices.resize(h_primitive_indices.size()).is_ok()) {
+        return false;
+    }
+    if (!d_topology
+             .copy_from_host(
+                 cuda::std::span<TopologyNode const>(h_topology.data(), h_topology.size())
+             )
+             .is_ok() ||
+        !d_aabb.copy_from_host(cuda::std::span<AabbNode const>(h_aabb.data(), h_aabb.size()))
+             .is_ok() ||
+        !d_primitive_indices
+             .copy_from_host(
+                 cuda::std::span<Index const>(
+                     h_primitive_indices.data(), h_primitive_indices.size()
+                 )
+             )
+             .is_ok()) {
+        return false;
+    }
+
+    gwn::gwn_geometry_accessor<Real, Index> const geometry = geometry_object.accessor();
+    gwn::gwn_bvh4_topology_accessor<Real, Index> bvh{};
+    bvh.nodes = d_topology.span();
+    bvh.primitive_indices = d_primitive_indices.span();
+    bvh.root_kind = gwn::gwn_bvh_child_kind::k_internal;
+    bvh.root_index = Index(0);
+    bvh.root_count = Index(0);
+    gwn::gwn_bvh4_aabb_accessor<Real, Index> aabb{};
+    aabb.nodes = d_aabb.span();
+
+    std::array<Real, 1> const h_ox{Real(0)};
+    std::array<Real, 1> const h_oy{Real(0)};
+    std::array<Real, 1> const h_oz{Real(-10)};
+    std::array<Real, 1> const h_dx{Real(0)};
+    std::array<Real, 1> const h_dy{Real(0)};
+    std::array<Real, 1> const h_dz{Real(1)};
+    std::array<Real, 1> h_t{Real(123)};
+    std::array<Index, 1> h_pi{Index(7)};
+    std::array<std::uint8_t, 1> h_status{std::uint8_t(0)};
+    std::array<int, 1> h_callback_flag{0};
+
+    gwn::gwn_device_array<Real> d_ox, d_oy, d_oz, d_dx, d_dy, d_dz, d_t;
+    gwn::gwn_device_array<Index> d_pi;
+    gwn::gwn_device_array<std::uint8_t> d_status;
+    gwn::gwn_device_array<int> d_callback_flag;
+    bool const allocation_ok = d_ox.resize(1).is_ok() && d_oy.resize(1).is_ok() &&
+                               d_oz.resize(1).is_ok() && d_dx.resize(1).is_ok() &&
+                               d_dy.resize(1).is_ok() && d_dz.resize(1).is_ok() &&
+                               d_t.resize(1).is_ok() && d_pi.resize(1).is_ok() &&
+                               d_status.resize(1).is_ok() && d_callback_flag.resize(1).is_ok();
+    if (!allocation_ok)
+        return false;
+
+    bool const upload_ok =
+        d_ox.copy_from_host(cuda::std::span<Real const>(h_ox.data(), h_ox.size())).is_ok() &&
+        d_oy.copy_from_host(cuda::std::span<Real const>(h_oy.data(), h_oy.size())).is_ok() &&
+        d_oz.copy_from_host(cuda::std::span<Real const>(h_oz.data(), h_oz.size())).is_ok() &&
+        d_dx.copy_from_host(cuda::std::span<Real const>(h_dx.data(), h_dx.size())).is_ok() &&
+        d_dy.copy_from_host(cuda::std::span<Real const>(h_dy.data(), h_dy.size())).is_ok() &&
+        d_dz.copy_from_host(cuda::std::span<Real const>(h_dz.data(), h_dz.size())).is_ok() &&
+        d_t.copy_from_host(cuda::std::span<Real const>(h_t.data(), h_t.size())).is_ok() &&
+        d_pi.copy_from_host(cuda::std::span<Index const>(h_pi.data(), h_pi.size())).is_ok() &&
+        d_status
+            .copy_from_host(cuda::std::span<std::uint8_t const>(h_status.data(), h_status.size()))
+            .is_ok() &&
+        d_callback_flag
+            .copy_from_host(
+                cuda::std::span<int const>(h_callback_flag.data(), h_callback_flag.size())
+            )
+            .is_ok();
+    if (!upload_ok)
+        return false;
+
+    constexpr int k_block_size = gwn::detail::k_gwn_default_block_size;
+    gwn::gwn_status const launch_status = gwn::detail::gwn_launch_linear_kernel<k_block_size>(
+        1, single_ray_overflow_callback_functor{
+               geometry, bvh, aabb, d_ox.span(), d_oy.span(), d_oz.span(), d_dx.span(), d_dy.span(),
+               d_dz.span(), d_callback_flag.span(), d_t.span(), d_pi.span(), d_status.span()
+           }
+    );
+    if (!launch_status.is_ok())
+        return false;
+    if (cudaDeviceSynchronize() != cudaSuccess)
+        return false;
+
+    if (!d_t.copy_to_host(cuda::std::span<Real>(h_t.data(), h_t.size())).is_ok() ||
+        !d_pi.copy_to_host(cuda::std::span<Index>(h_pi.data(), h_pi.size())).is_ok() ||
+        !d_status.copy_to_host(cuda::std::span<std::uint8_t>(h_status.data(), h_status.size()))
+             .is_ok() ||
+        !d_callback_flag
+             .copy_to_host(cuda::std::span<int>(h_callback_flag.data(), h_callback_flag.size()))
+             .is_ok()) {
+        return false;
+    }
+    if (cudaDeviceSynchronize() != cudaSuccess)
+        return false;
+
+    callback_called = h_callback_flag[0] != 0;
+    out_t = h_t[0];
+    out_pi = h_pi[0];
+    out_status = h_status[0];
+    return true;
+}
+
 template <class Mesh>
 bool run_ray_first_hit_query(
     Mesh const &mesh, std::vector<Real> const &ox, std::vector<Real> const &oy,
@@ -864,6 +1081,22 @@ TEST_F(CudaFixture, ray_first_hit_benchmark_mix_contains_hits_and_misses) {
     double const hit_ratio = static_cast<double>(hit_count) / static_cast<double>(t.size());
     EXPECT_GT(hit_ratio, 0.05) << "hit ratio too small -> benchmark mix degenerates to misses";
     EXPECT_LT(hit_ratio, 0.95) << "hit ratio too large -> benchmark mix degenerates to hits";
+}
+
+TEST_F(CudaFixture, ray_first_hit_stack_overflow_calls_callback_and_reports_overflow_status) {
+    bool callback_called = false;
+    Real hit_t = Real(0);
+    Index hit_pi = Index(0);
+    std::uint8_t hit_status = std::uint8_t(0);
+
+    ASSERT_TRUE(
+        run_ray_first_hit_overflow_callback_probe(callback_called, hit_t, hit_pi, hit_status)
+    ) << "overflow probe execution failed";
+
+    EXPECT_TRUE(callback_called);
+    EXPECT_EQ(hit_status, static_cast<std::uint8_t>(gwn::gwn_ray_first_hit_status::k_overflow));
+    EXPECT_NEAR(hit_t, Real(10), Real(1e-5));
+    EXPECT_EQ(hit_pi, Index(0));
 }
 
 TEST(ray_query_vec3, component_access_via_subscript_operator) {
