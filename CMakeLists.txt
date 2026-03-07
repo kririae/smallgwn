@@ -28,8 +28,6 @@ function(smallgwn_apply_strict_warnings TARGET_NAME)
         return()
     endif()
 
-    target_compile_definitions(${TARGET_NAME} PRIVATE GWN_STRICT_WARNINGS)
-
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(${TARGET_NAME}
             PRIVATE
@@ -177,6 +175,18 @@ if(SMALLGWN_BUILD_TESTS)
             )
         endfunction()
 
+        function(smallgwn_add_tbb_test TARGET_NAME)
+            if(NOT TBB_FOUND)
+                message(STATUS "Skipping ${TARGET_NAME}: requires TBB.")
+                return()
+            endif()
+            smallgwn_add_test_base(
+                ${TARGET_NAME}
+                ${ARGN}
+                EXTRA_LIBRARIES TBB::tbb
+            )
+        endfunction()
+
         function(smallgwn_add_libigl_test TARGET_NAME)
             if(NOT libigl_FOUND)
                 message(STATUS "Skipping ${TARGET_NAME}: requires libigl.")
@@ -256,7 +266,7 @@ if(SMALLGWN_BUILD_TESTS)
             LABELS "integration;cuda;perf;slow"
             SOURCES tests/integration_hploc_performance.cu)
 
-        smallgwn_add_eigen_tbb_test(smallgwn_integration_taylor_matrix
+        smallgwn_add_tbb_test(smallgwn_integration_taylor_matrix
             NO_CTEST
             NO_STRICT_WARNINGS
             SOURCES tests/integration_taylor_matrix.cu
