@@ -157,6 +157,7 @@ if(SMALLGWN_BUILD_TESTS)
             LABELS "unit;cuda"
             SOURCES tests/unit_winding_gradient.cu)
         smallgwn_add_cuda_test(smallgwn_unit_harnack_trace  LABELS "unit;cuda" SOURCES tests/unit_harnack_trace.cu)
+        smallgwn_add_cuda_test(smallgwn_unit_edge_distance  LABELS "unit;cuda" SOURCES tests/unit_edge_distance.cu)
         smallgwn_add_cuda_test(smallgwn_unit_ray_query      LABELS "unit;cuda" SOURCES tests/unit_ray_query.cu)
         smallgwn_add_cuda_test(smallgwn_unit_hybrid_trace   LABELS "unit;cuda" SOURCES tests/unit_hybrid_trace.cu)
 

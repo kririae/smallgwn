@@ -818,6 +818,86 @@ TEST_F(CudaFixture, hybrid_batch_forwards_overflow_callback) {
     EXPECT_TRUE(callback_called);
 }
 
+TEST_F(CudaFixture, hybrid_batch_rejects_invalid_accessors) {
+    gwn::gwn_geometry_accessor<Real, Index> geometry{};
+    gwn::gwn_bvh4_topology_accessor<Real, Index> bvh{};
+    gwn::gwn_bvh4_aabb_accessor<Real, Index> aabb{};
+    gwn::gwn_bvh4_moment_accessor<1, Real, Index> moment{};
+
+    gwn::gwn_device_array<Real> d_ox, d_oy, d_oz, d_dx, d_dy, d_dz;
+    gwn::gwn_device_array<Real> d_t, d_nx, d_ny, d_nz;
+    gwn::gwn_device_array<Index> d_pi;
+    if (!gwn::tests::resize_device_arrays(
+            1u, d_ox, d_oy, d_oz, d_dx, d_dy, d_dz, d_t, d_nx, d_ny, d_nz, d_pi
+        )) {
+        GTEST_SKIP() << "CUDA unavailable";
+    }
+
+    gwn::gwn_status const status = gwn::gwn_compute_hybrid_trace_batch_bvh_taylor<1, Real, Index>(
+        geometry, bvh, aabb, moment, d_ox.span(), d_oy.span(), d_oz.span(), d_dx.span(),
+        d_dy.span(), d_dz.span(), d_t.span(), d_nx.span(), d_ny.span(), d_nz.span(), d_pi.span()
+    );
+    EXPECT_EQ(status.error(), gwn::gwn_error::invalid_argument);
+}
+
+TEST_F(CudaFixture, hybrid_batch_rejects_invalid_interval) {
+    CubeMesh mesh;
+    gwn::gwn_geometry_object<Real, Index> geometry;
+    gwn::gwn_bvh4_topology_object<Real, Index> bvh;
+    gwn::gwn_bvh4_aabb_object<Real, Index> aabb;
+    gwn::gwn_bvh4_moment_object<1, Real, Index> moment;
+    if (!build_scene<1>(mesh, geometry, bvh, aabb, moment))
+        GTEST_SKIP() << "CUDA unavailable or build failed";
+
+    gwn::gwn_device_array<Real> d_ox, d_oy, d_oz, d_dx, d_dy, d_dz;
+    gwn::gwn_device_array<Real> d_t, d_nx, d_ny, d_nz;
+    gwn::gwn_device_array<Index> d_pi;
+    if (!gwn::tests::resize_device_arrays(
+            1u, d_ox, d_oy, d_oz, d_dx, d_dy, d_dz, d_t, d_nx, d_ny, d_nz, d_pi
+        )) {
+        GTEST_SKIP() << "CUDA unavailable";
+    }
+
+    gwn::gwn_hybrid_trace_arguments<Real> args{};
+    gwn::gwn_init_hybrid_trace_arguments(args);
+    args.t_min = Real(2);
+    args.t_max = Real(1);
+
+    gwn::gwn_status const status = gwn::gwn_compute_hybrid_trace_batch_bvh_taylor<1, Real, Index>(
+        geometry.accessor(), bvh.accessor(), aabb.accessor(), moment.accessor(), d_ox.span(),
+        d_oy.span(), d_oz.span(), d_dx.span(), d_dy.span(), d_dz.span(), d_t.span(), d_nx.span(),
+        d_ny.span(), d_nz.span(), d_pi.span(), args
+    );
+    EXPECT_EQ(status.error(), gwn::gwn_error::invalid_argument);
+}
+
+TEST_F(CudaFixture, hybrid_batch_rejects_mismatched_spans) {
+    CubeMesh mesh;
+    gwn::gwn_geometry_object<Real, Index> geometry;
+    gwn::gwn_bvh4_topology_object<Real, Index> bvh;
+    gwn::gwn_bvh4_aabb_object<Real, Index> aabb;
+    gwn::gwn_bvh4_moment_object<1, Real, Index> moment;
+    if (!build_scene<1>(mesh, geometry, bvh, aabb, moment))
+        GTEST_SKIP() << "CUDA unavailable or build failed";
+
+    gwn::gwn_device_array<Real> d_ox, d_oy, d_oz, d_dx, d_dy, d_dz;
+    gwn::gwn_device_array<Real> d_t, d_nx, d_ny, d_nz;
+    gwn::gwn_device_array<Index> d_pi;
+    bool const allocate_ok = gwn::tests::resize_device_arrays(
+                                 1u, d_ox, d_oy, d_oz, d_dx, d_dy, d_dz, d_nx, d_ny, d_nz, d_pi
+                             ) &&
+                             d_t.resize(2u).is_ok();
+    if (!allocate_ok)
+        GTEST_SKIP() << "CUDA unavailable";
+
+    gwn::gwn_status const status = gwn::gwn_compute_hybrid_trace_batch_bvh_taylor<1, Real, Index>(
+        geometry.accessor(), bvh.accessor(), aabb.accessor(), moment.accessor(), d_ox.span(),
+        d_oy.span(), d_oz.span(), d_dx.span(), d_dy.span(), d_dz.span(), d_t.span(), d_nx.span(),
+        d_ny.span(), d_nz.span(), d_pi.span()
+    );
+    EXPECT_EQ(status.error(), gwn::gwn_error::invalid_argument);
+}
+
 TEST_F(CudaFixture, hybrid_triangle_branch_does_not_populate_winding) {
     CubeMesh mesh;
 
