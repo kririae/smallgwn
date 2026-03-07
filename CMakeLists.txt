@@ -65,8 +65,9 @@ if(SMALLGWN_BUILD_TESTS)
 
     find_package(GTest QUIET)
     if(GTest_FOUND)
-        find_package(Eigen3 REQUIRED)
-        find_package(TBB REQUIRED COMPONENTS tbb)
+        find_package(Eigen3 QUIET)
+        find_package(TBB QUIET COMPONENTS tbb)
+        find_package(libigl QUIET HINTS /usr/lib/cmake/igl)
 
         # ---------------------------------------------------------------
         # Common include directories for all test targets.
@@ -79,11 +80,23 @@ if(SMALLGWN_BUILD_TESTS)
         # ---------------------------------------------------------------
         # Helper: define a unit/integration test target.
         # ---------------------------------------------------------------
-        function(smallgwn_add_test TARGET_NAME)
-            cmake_parse_arguments(ARG "NO_CTEST;RUN_SERIAL" "" "SOURCES;EXTRA_SOURCES;LABELS" ${ARGN})
+        function(smallgwn_add_test_base TARGET_NAME)
+            cmake_parse_arguments(
+                ARG
+                "NO_CTEST;RUN_SERIAL"
+                ""
+                "SOURCES;EXTRA_SOURCES;LABELS;EXTRA_LIBRARIES"
+                ${ARGN}
+            )
             add_executable(${TARGET_NAME} ${ARG_SOURCES} ${ARG_EXTRA_SOURCES})
-            target_link_libraries(${TARGET_NAME} PRIVATE gwn::smallgwn Eigen3::Eigen GTest::gtest GTest::gtest_main)
-            target_link_libraries(${TARGET_NAME} PRIVATE TBB::tbb)
+            target_link_libraries(
+                ${TARGET_NAME}
+                PRIVATE
+                    gwn::smallgwn
+                    GTest::gtest
+                    GTest::gtest_main
+                    ${ARG_EXTRA_LIBRARIES}
+            )
             target_compile_definitions(${TARGET_NAME} PRIVATE GWN_ENABLE_ASSERTS)
             target_include_directories(${TARGET_NAME} PRIVATE ${SMALLGWN_TEST_INCLUDE_DIRS})
             if(NOT ARG_NO_CTEST)
@@ -97,64 +110,90 @@ if(SMALLGWN_BUILD_TESTS)
             endif()
         endfunction()
 
+        function(smallgwn_add_cuda_test TARGET_NAME)
+            smallgwn_add_test_base(${TARGET_NAME} ${ARGN})
+        endfunction()
+
+        function(smallgwn_add_eigen_tbb_test TARGET_NAME)
+            if(NOT Eigen3_FOUND OR NOT TBB_FOUND)
+                message(STATUS "Skipping ${TARGET_NAME}: requires Eigen3 and TBB.")
+                return()
+            endif()
+            smallgwn_add_test_base(
+                ${TARGET_NAME}
+                ${ARGN}
+                EXTRA_LIBRARIES Eigen3::Eigen TBB::tbb
+            )
+        endfunction()
+
+        function(smallgwn_add_libigl_test TARGET_NAME)
+            if(NOT libigl_FOUND)
+                message(STATUS "Skipping ${TARGET_NAME}: requires libigl.")
+                return()
+            endif()
+            smallgwn_add_test_base(
+                ${TARGET_NAME}
+                ${ARGN}
+                EXTRA_LIBRARIES igl::igl_core
+            )
+        endfunction()
+
         # ---------------------------------------------------------------
         # Unit tests.
         # ---------------------------------------------------------------
-        smallgwn_add_test(smallgwn_unit_assert         LABELS "unit;cuda" SOURCES tests/unit_assert.cu)
-        smallgwn_add_test(smallgwn_unit_status         LABELS "unit;cuda" SOURCES tests/unit_status.cu)
-        smallgwn_add_test(smallgwn_unit_device_array   LABELS "unit;cuda" SOURCES tests/unit_device_array.cu)
-        smallgwn_add_test(smallgwn_unit_kernel_utils   LABELS "unit;cuda" SOURCES tests/unit_kernel_utils.cu)
-        smallgwn_add_test(smallgwn_unit_stream_mixin   LABELS "unit;cuda" SOURCES tests/unit_stream_mixin.cu)
-        smallgwn_add_test(smallgwn_unit_geometry       LABELS "unit;cuda" SOURCES tests/unit_geometry.cu)
-        smallgwn_add_test(smallgwn_unit_bvh_topology   LABELS "unit;cuda" SOURCES tests/unit_bvh_topology.cu)
-        smallgwn_add_test(smallgwn_unit_uint64_compile LABELS "unit;cuda" SOURCES tests/unit_uint64_compile.cu)
-        smallgwn_add_test(smallgwn_unit_bvh_taylor     LABELS "unit;cuda" SOURCES tests/unit_bvh_taylor.cu)
-        smallgwn_add_test(smallgwn_unit_winding_taylor LABELS "unit;cuda" SOURCES tests/unit_winding_taylor.cu)
-        smallgwn_add_test(smallgwn_unit_winding_gradient LABELS "unit;cuda" SOURCES tests/unit_winding_gradient.cu)
-        smallgwn_add_test(smallgwn_unit_harnack_trace    LABELS "unit;cuda" SOURCES tests/unit_harnack_trace.cu)
-        smallgwn_add_test(smallgwn_unit_ray_query        LABELS "unit;cuda" SOURCES tests/unit_ray_query.cu)
-        smallgwn_add_test(smallgwn_unit_hybrid_trace     LABELS "unit;cuda" SOURCES tests/unit_hybrid_trace.cu)
+        smallgwn_add_cuda_test(smallgwn_unit_assert         LABELS "unit;cuda" SOURCES tests/unit_assert.cu)
+        smallgwn_add_cuda_test(smallgwn_unit_status         LABELS "unit;cuda" SOURCES tests/unit_status.cu)
+        smallgwn_add_cuda_test(smallgwn_unit_device_array   LABELS "unit;cuda" SOURCES tests/unit_device_array.cu)
+        smallgwn_add_cuda_test(smallgwn_unit_kernel_utils   LABELS "unit;cuda" SOURCES tests/unit_kernel_utils.cu)
+        smallgwn_add_cuda_test(smallgwn_unit_stream_mixin   LABELS "unit;cuda" SOURCES tests/unit_stream_mixin.cu)
+        smallgwn_add_cuda_test(smallgwn_unit_geometry       LABELS "unit;cuda" SOURCES tests/unit_geometry.cu)
+        smallgwn_add_cuda_test(smallgwn_unit_bvh_topology   LABELS "unit;cuda" SOURCES tests/unit_bvh_topology.cu)
+        smallgwn_add_cuda_test(smallgwn_unit_uint64_compile LABELS "unit;cuda" SOURCES tests/unit_uint64_compile.cu)
+        smallgwn_add_cuda_test(smallgwn_unit_bvh_taylor     LABELS "unit;cuda" SOURCES tests/unit_bvh_taylor.cu)
+        smallgwn_add_eigen_tbb_test(smallgwn_unit_winding_taylor
+            LABELS "unit;cuda"
+            SOURCES tests/unit_winding_taylor.cu)
+        smallgwn_add_eigen_tbb_test(smallgwn_unit_winding_gradient
+            LABELS "unit;cuda"
+            SOURCES tests/unit_winding_gradient.cu)
+        smallgwn_add_cuda_test(smallgwn_unit_harnack_trace  LABELS "unit;cuda" SOURCES tests/unit_harnack_trace.cu)
+        smallgwn_add_cuda_test(smallgwn_unit_ray_query      LABELS "unit;cuda" SOURCES tests/unit_ray_query.cu)
+        smallgwn_add_cuda_test(smallgwn_unit_hybrid_trace   LABELS "unit;cuda" SOURCES tests/unit_hybrid_trace.cu)
 
         # SDF tests (libigl parity).
-        find_package(libigl QUIET HINTS /usr/lib/cmake/igl)
-        if(libigl_FOUND)
-            smallgwn_add_test(smallgwn_unit_sdf
-                LABELS "unit;cuda;libigl"
-                SOURCES tests/unit_sdf.cu
-                EXTRA_SOURCES tests/libigl_reference.cpp)
-            target_link_libraries(smallgwn_unit_sdf PRIVATE igl::igl_core)
-        else()
-            message(STATUS "libigl not found; SDF parity tests are skipped.")
-        endif()
+        smallgwn_add_libigl_test(smallgwn_unit_sdf
+            LABELS "unit;cuda;libigl"
+            SOURCES tests/unit_sdf.cu
+            EXTRA_SOURCES tests/libigl_reference.cpp)
 
         # ---------------------------------------------------------------
         # Integration tests.
         # ---------------------------------------------------------------
-        smallgwn_add_test(smallgwn_integration_model_parity
+        smallgwn_add_eigen_tbb_test(smallgwn_integration_model_parity
             LABELS "integration;cuda;models;slow"
             SOURCES tests/integration_model_parity.cu
             EXTRA_SOURCES tests/reference_hdk/UT_Array.cpp tests/reference_hdk/UT_SolidAngle.cpp)
-        smallgwn_add_test(smallgwn_integration_correctness
+        smallgwn_add_eigen_tbb_test(smallgwn_integration_correctness
             LABELS "integration;cuda;models;slow"
             SOURCES tests/integration_correctness.cu)
-        smallgwn_add_test(smallgwn_integration_gradient
+        smallgwn_add_eigen_tbb_test(smallgwn_integration_gradient
             LABELS "integration;cuda"
             SOURCES tests/integration_gradient.cu)
-        smallgwn_add_test(smallgwn_integration_harnack_trace
+        smallgwn_add_cuda_test(smallgwn_integration_harnack_trace
             LABELS "integration;cuda"
             SOURCES tests/integration_harnack_trace.cu)
-        smallgwn_add_test(smallgwn_integration_harnack_behavior_match
+        smallgwn_add_cuda_test(smallgwn_integration_harnack_behavior_match
             LABELS "integration;cuda"
             SOURCES tests/integration_harnack_behavior_match.cu)
-        smallgwn_add_test(smallgwn_integration_harnack_iteration_stats
+        smallgwn_add_cuda_test(smallgwn_integration_harnack_iteration_stats
             LABELS "integration;cuda"
             SOURCES tests/integration_harnack_iteration_stats.cu)
-        smallgwn_add_test(smallgwn_integration_hploc_performance
+        smallgwn_add_cuda_test(smallgwn_integration_hploc_performance
             RUN_SERIAL
             LABELS "integration;cuda;perf;slow"
             SOURCES tests/integration_hploc_performance.cu)
 
-        smallgwn_add_test(smallgwn_integration_taylor_matrix NO_CTEST
+        smallgwn_add_cuda_test(smallgwn_integration_taylor_matrix NO_CTEST
             SOURCES tests/integration_taylor_matrix.cu
             EXTRA_SOURCES tests/reference_hdk/UT_Array.cpp tests/reference_hdk/UT_SolidAngle.cpp)
 
