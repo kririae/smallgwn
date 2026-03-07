@@ -28,7 +28,9 @@ These instructions apply to the `smallgwn/` project tree.
 - Default public index type is `std::uint32_t` unless explicitly overridden.
 - Width-4 convenience aliases: `gwn_bvh4_<kind>_<role>` (e.g. `gwn_bvh4_topology_object`).
 - Moment types carry `Order` as a compile-time template parameter (after `Width`).
-- Owning-object state query: unified `has_data()` predicate.
+- Owning-object state queries are converging on a unified `has_data()` predicate; BVH owning
+  objects already expose `has_data()`, while `gwn_geometry_object` currently reports state via
+  accessor validity and count accessors.
 - Detail entrypoints use `_impl` suffix to avoid public/internal naming collisions.
 
 ## Formatting Rules
@@ -65,9 +67,12 @@ These instructions apply to the `smallgwn/` project tree.
   - `gwn_compute_winding_number_batch_bvh_taylor<Order,...>` — Taylor winding number
   - `gwn_compute_winding_gradient_batch_bvh_taylor<Order,...>` — winding gradient
   - `gwn_unsigned_distance_point_bvh` / `gwn_signed_distance_point_bvh` — point distance (device)
-  - `gwn_compute_unsigned_edge_distance_batch_bvh` — unsigned edge distance (batch)
+  - `gwn_compute_unsigned_boundary_edge_distance_batch_bvh` — unsigned boundary-edge distance
+    (batch)
   - `gwn_ray_first_hit_bvh` / `gwn_compute_ray_first_hit_batch_bvh` — ray first-hit
   - `gwn_harnack_trace_ray_bvh_taylor` / `gwn_compute_harnack_trace_batch_bvh_taylor` — Harnack trace
+  - `gwn_hybrid_trace_ray_bvh_taylor` / `gwn_compute_hybrid_trace_batch_bvh_taylor` — hybrid
+    first-hit + conditioned Harnack trace
 - Internal math uses `gwn_query_vec3` (no Eigen dependency); public alias `gwn::gwn_vec3<Real>`.
 - Traversal stack capacity: template `StackCapacity` (default `k_gwn_default_traversal_stack_capacity = 64`).
   Query APIs accept an optional device-side overflow callback; default callback traps via `gwn_trap()`.
@@ -77,7 +82,9 @@ These instructions apply to the `smallgwn/` project tree.
   `clear()`/destructor release on the currently bound stream;
   successful stream-parameterized mutations update the bound stream.
 - Memory: stream allocator path only (`cudaMallocAsync`/`cudaFreeAsync`), no synchronous fallback.
-- `gwn_device_array<T>`: all methods are `noexcept`; remembers bound stream; `resize` rebinds even when size matches.
+- `gwn_device_array<T>`: all methods are `noexcept`; remembers the bound stream; same-size
+  `resize()` is a no-op that preserves the current stream binding, while successful reallocating
+  mutations update the bound stream.
 - For span handoff to accessors/objects, prefer span primitives over `gwn_device_array`.
 
 ### Span Rules
@@ -129,6 +136,7 @@ These instructions apply to the `smallgwn/` project tree.
 | `unit_winding_gradient.cu` | Winding gradient batch query |
 | `unit_harnack_trace.cu` | Harnack sphere-march traversal |
 | `unit_ray_query.cu` | Ray first-hit point and batch queries |
+| `unit_hybrid_trace.cu` | Hybrid first-hit + conditioned Harnack trace |
 | `unit_sdf.cu` | Point-triangle distance (requires libigl for parity) |
 
 ### Integration tests
@@ -140,7 +148,6 @@ These instructions apply to the `smallgwn/` project tree.
 | `integration_harnack_trace.cu` | Harnack trace on model files |
 | `integration_harnack_behavior_match.cu` | Harnack behavior consistency checks |
 | `integration_harnack_iteration_stats.cu` | Harnack convergence iteration statistics |
-| `integration_robust_tracing.cu` | Robust tracing edge cases |
 | `integration_hploc_performance.cu` | H-PLOC topology-build ratio gate vs LBVH |
 | `integration_taylor_matrix.cu` | Taylor order 0/1/2 matrix (`NO_CTEST`; split into `light`/`heavy` CTest entries) |
 

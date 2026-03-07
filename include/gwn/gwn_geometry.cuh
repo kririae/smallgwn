@@ -103,6 +103,8 @@ gwn_status gwn_upload_geometry(
 ///
 /// \remark `clear()` and destructor release memory on the currently bound stream.
 /// \remark The bound stream is updated after successful `gwn_upload_geometry(..., stream)`.
+/// \remark Upload state is currently observed via `accessor().is_valid()`, `vertex_count()`, and
+///         `triangle_count()`.
 template <gwn_real_type Real = float, gwn_index_type Index = std::uint32_t>
 class gwn_geometry_object final : public gwn_noncopyable, public gwn_stream_mixin {
 public:
