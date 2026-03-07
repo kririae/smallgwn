@@ -1,5 +1,8 @@
 #pragma once
 
+#include <array>
+#include <cstddef>
+
 #include <gtest/gtest.h>
 
 #include <gwn/gwn_utils.cuh>
@@ -7,6 +10,20 @@
 #include "test_utils.hpp"
 
 namespace gwn::tests {
+
+struct SingleTriangleMesh {
+    std::array<Real, 3> vx{Real(0), Real(1), Real(0)};
+    std::array<Real, 3> vy{Real(0), Real(0), Real(1)};
+    std::array<Real, 3> vz{Real(0), Real(0), Real(0)};
+    std::array<Index, 1> i0{0};
+    std::array<Index, 1> i1{1};
+    std::array<Index, 1> i2{2};
+};
+
+template <class... Arrays>
+[[nodiscard]] inline bool resize_device_arrays(std::size_t const count, Arrays &...arrays) {
+    return (... && arrays.resize(count).is_ok());
+}
 
 // CudaStreamFixture, provides two non-blocking streams and auto-cleanup.
 // Skips tests automatically when CUDA is unavailable.
