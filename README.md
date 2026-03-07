@@ -11,6 +11,7 @@ Optional:
 - **Eigen3** and **Intel TBB** enable `gwn_eigen_bridge.cuh` (and CMake helper target `gwn::smallgwn_eigen_bridge`).
 - **libigl** can be used to load the geometry.
 - Core CUDA/GTest test targets configure without these optional dependencies.
+- `smallgwn_unit_eigen_bridge` is added only when **Eigen3** and **Intel TBB** are available.
 - Tests that use `tests/reference_cpu.cuh` are added only when **Eigen3** and **Intel TBB** are available.
 - SDF parity tests are added only when **libigl** is available.
 

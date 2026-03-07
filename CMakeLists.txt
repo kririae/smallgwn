@@ -150,6 +150,9 @@ if(SMALLGWN_BUILD_TESTS)
         smallgwn_add_cuda_test(smallgwn_unit_bvh_topology   LABELS "unit;cuda" SOURCES tests/unit_bvh_topology.cu)
         smallgwn_add_cuda_test(smallgwn_unit_uint64_compile LABELS "unit;cuda" SOURCES tests/unit_uint64_compile.cu)
         smallgwn_add_cuda_test(smallgwn_unit_bvh_taylor     LABELS "unit;cuda" SOURCES tests/unit_bvh_taylor.cu)
+        smallgwn_add_eigen_tbb_test(smallgwn_unit_eigen_bridge
+            LABELS "unit;cuda"
+            SOURCES tests/unit_eigen_bridge.cu)
         smallgwn_add_eigen_tbb_test(smallgwn_unit_winding_taylor
             LABELS "unit;cuda"
             SOURCES tests/unit_winding_taylor.cu)
