@@ -352,7 +352,8 @@ public:
     /// \brief Resize the buffer (contents are not preserved).
     ///
     /// \remark When \p count equals the current size, the operation is a no-op;
-    ///         the bound stream is preserved unchanged.
+    ///         the bound stream is preserved unchanged so allocation/free pairing stays on the
+    ///         original stream.
     /// \remark When reallocation happens, new storage is allocated on \p stream while
     ///         old storage is released on the previously bound stream.
     [[nodiscard]] gwn_status

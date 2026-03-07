@@ -119,16 +119,22 @@ cmake -S . -B build
 cmake --build build
 ```
 
-Run layered integration suites with CTest labels:
+The suite is organized into unit tests, integration tests, optional libigl-backed parity checks,
+and heavier dataset/performance-oriented entries. Today the only CTest labels are the split
+Taylor-matrix integration layers:
 
 ```bash
 ctest --test-dir build -L light --output-on-failure
 ctest --test-dir build -L heavy --output-on-failure
 ```
 
-Optionally override model inputs:
+This quality pass is also introducing a broader `unit` / `integration` / `perf` label taxonomy in
+`CMakeLists.txt`; until that lands, use the explicit test names or the `light` / `heavy` labels
+above.
+
+Optionally override model inputs for the dataset-driven suites:
 
 ```bash
 SMALLGWN_MODEL_DATA_DIR=/tmp/common-3d-test-models-subset \
-ctest --test-dir build -L light --output-on-failure
+ctest --test-dir build -R smallgwn_integration_model_parity --output-on-failure
 ```

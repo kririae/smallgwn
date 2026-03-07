@@ -134,6 +134,8 @@ if(SMALLGWN_BUILD_TESTS)
             SOURCES tests/integration_taylor_matrix.cu
             EXTRA_SOURCES tests/reference_hdk/UT_Array.cpp tests/reference_hdk/UT_SolidAngle.cpp)
 
+        # The Taylor matrix target is currently the only suite with explicit CTest labels.
+        # Broader unit/integration/perf labeling is added in a later quality-oriented pass.
         add_test(NAME smallgwn_integration_taylor_matrix_light
             COMMAND smallgwn_integration_taylor_matrix --gtest_color=no
                 --gtest_filter=smallgwn_integration_taylor_matrix.light_*)

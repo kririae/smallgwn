@@ -1,7 +1,8 @@
 #pragma once
 
 /// \file gwn_query.cuh
-/// \brief Public query APIs for winding, gradients, distances, ray hits, and Harnack tracing.
+/// \brief Public query APIs for winding, gradients, distances, ray hits, Harnack tracing, and
+///        hybrid tracing.
 ///
 /// This header exposes device point queries plus host batch-query launchers
 /// over uploaded geometry and BVH data.
