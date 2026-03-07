@@ -157,7 +157,10 @@ These instructions apply to the `smallgwn/` project tree.
 - `tests/reference_hdk/*`: Vendored HDK sources (keep under `tests/`).
 - `tests/test_fixtures.hpp`, `test_utils.hpp`, `test_harnack_meshes.hpp`: shared test utilities.
 - `tests/libigl_reference.cpp/.hpp`: libigl CPU parity for SDF tests.
-- Model datasets are optional; tests `GTEST_SKIP()` when absent.
+- Repo-local `fixtures` coverage remains available on clean machines via vendored OBJ meshes under
+  `tests/data/`.
+- Some `models` / dataset-backed integration suites still require external model provisioning and
+  may fail rather than `GTEST_SKIP()` when model data is absent.
 
 ### Benchmark
 - Executable: `smallgwn_benchmark` from `benchmarks/benchmark_main.cu`.
@@ -170,6 +173,13 @@ These instructions apply to the `smallgwn/` project tree.
 ```bash
 cmake -S smallgwn -B smallgwn/build && cmake --build smallgwn/build -j
 ctest --test-dir smallgwn/build --output-on-failure
+```
+
+For clean-machine validation without external model data, prefer:
+
+```bash
+ctest --test-dir smallgwn/build -L unit --output-on-failure
+ctest --test-dir smallgwn/build -L fixtures --output-on-failure
 ```
 
 ## Contribution Workflow
