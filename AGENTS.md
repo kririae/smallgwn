@@ -28,9 +28,7 @@ These instructions apply to the `smallgwn/` project tree.
 - Default public index type is `std::uint32_t` unless explicitly overridden.
 - Width-4 convenience aliases: `gwn_bvh4_<kind>_<role>` (e.g. `gwn_bvh4_topology_object`).
 - Moment types carry `Order` as a compile-time template parameter (after `Width`).
-- Owning-object state queries are converging on a unified `has_data()` predicate; BVH owning
-  objects already expose `has_data()`, while `gwn_geometry_object` currently reports state via
-  accessor validity and count accessors.
+- Owning-object state query: unified `has_data()` predicate.
 - Detail entrypoints use `_impl` suffix to avoid public/internal naming collisions.
 
 ## Formatting Rules
