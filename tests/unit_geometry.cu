@@ -1,6 +1,6 @@
 #include <array>
-#include <type_traits>
 #include <limits>
+#include <type_traits>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -437,9 +437,36 @@ TEST_F(CudaFixture, clear_releases_geometry) {
     SMALLGWN_SKIP_IF_STATUS_CUDA_UNAVAILABLE(upload_status);
     ASSERT_TRUE(upload_status.is_ok());
 
+    EXPECT_TRUE(geometry.has_data());
     geometry.clear();
+    EXPECT_FALSE(geometry.has_data());
     EXPECT_EQ(geometry.vertex_count(), 0u);
     EXPECT_EQ(geometry.triangle_count(), 0u);
+}
+
+TEST_F(CudaFixture, has_data_tracks_upload_and_clear) {
+    std::array<Real, 3> const vx{1.0f, 0.0f, 0.0f};
+    std::array<Real, 3> const vy{0.0f, 1.0f, 0.0f};
+    std::array<Real, 3> const vz{0.0f, 0.0f, 1.0f};
+    std::array<Index, 1> const i0{0}, i1{1}, i2{2};
+
+    gwn::gwn_geometry_object<Real, Index> geometry;
+    EXPECT_FALSE(geometry.has_data());
+
+    gwn::gwn_status const upload_status = gwn::gwn_upload_geometry(
+        geometry, cuda::std::span<Real const>(vx.data(), vx.size()),
+        cuda::std::span<Real const>(vy.data(), vy.size()),
+        cuda::std::span<Real const>(vz.data(), vz.size()),
+        cuda::std::span<Index const>(i0.data(), i0.size()),
+        cuda::std::span<Index const>(i1.data(), i1.size()),
+        cuda::std::span<Index const>(i2.data(), i2.size())
+    );
+    SMALLGWN_SKIP_IF_STATUS_CUDA_UNAVAILABLE(upload_status);
+    ASSERT_TRUE(upload_status.is_ok()) << gwn::tests::status_to_debug_string(upload_status);
+
+    EXPECT_TRUE(geometry.has_data());
+    geometry.clear();
+    EXPECT_FALSE(geometry.has_data());
 }
 
 // Re-upload overwrites previous data.
@@ -505,6 +532,8 @@ TEST_F(CudaFixture, move_preserves_accessor) {
     gwn::gwn_geometry_object<Real, Index> dst(std::move(src));
     EXPECT_EQ(dst.triangle_count(), 1u);
     EXPECT_EQ(dst.vertex_count(), 3u);
+    EXPECT_TRUE(dst.has_data());
     EXPECT_TRUE(dst.accessor().is_valid());
+    EXPECT_FALSE(src.has_data());
     EXPECT_EQ(src.triangle_count(), 0u);
 }

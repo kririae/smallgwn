@@ -135,6 +135,9 @@ public:
     [[nodiscard]] accessor_type const &accessor() const noexcept { return accessor_; }
     [[nodiscard]] std::size_t vertex_count() const noexcept { return accessor_.vertex_count(); }
     [[nodiscard]] std::size_t triangle_count() const noexcept { return accessor_.triangle_count(); }
+    [[nodiscard]] bool has_data() const noexcept {
+        return accessor_.vertex_count() != 0 || accessor_.triangle_count() != 0;
+    }
 
     friend void swap(gwn_geometry_object &lhs, gwn_geometry_object &rhs) noexcept {
         using std::swap;
