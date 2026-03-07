@@ -134,14 +134,17 @@ cmake --build build
 ```
 
 The suite is organized into `unit`, `integration`, `fixtures`, `perf`, `models`, and `libigl`
-slices. The most common entry points are:
+slices. For clean-machine correctness checks, the most useful entry points are:
 
 ```bash
 ctest --test-dir build -L unit --output-on-failure
-ctest --test-dir build -L integration --output-on-failure
 ctest --test-dir build -L fixtures --output-on-failure
 ctest --test-dir build -L perf --output-on-failure
 ```
+
+The `integration` label is an umbrella that includes both the repo-local `fixtures` suite and the
+dataset-driven `models` suites, so `ctest --test-dir build -L integration` may still require
+`SMALLGWN_MODEL_DATA_DIR` for the model-backed entries.
 
 The Taylor-matrix integration target still has dedicated light/heavy splits:
 

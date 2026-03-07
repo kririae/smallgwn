@@ -130,9 +130,11 @@ These instructions apply to the `smallgwn/` project tree.
 | `unit_bvh_topology.cu` | LBVH + H-PLOC topology build, Morton stress checks |
 | `unit_uint64_compile.cu` | `Index=uint64_t` compile coverage |
 | `unit_bvh_taylor.cu` | Taylor moment refit + H-PLOC facade, order 0/1/2 |
+| `unit_eigen_bridge.cu` | `gwn_eigen_bridge.cuh` upload bridge validation |
 | `unit_winding_taylor.cu` | Taylor winding far-field parity on H-PLOC topology |
 | `unit_winding_gradient.cu` | Winding gradient batch query |
 | `unit_harnack_trace.cu` | Harnack sphere-march traversal |
+| `unit_edge_distance.cu` | Unsigned boundary-edge distance batch query |
 | `unit_ray_query.cu` | Ray first-hit point and batch queries |
 | `unit_hybrid_trace.cu` | Hybrid first-hit + conditioned Harnack trace |
 | `unit_sdf.cu` | Point-triangle distance (requires libigl for parity) |
@@ -140,6 +142,7 @@ These instructions apply to the `smallgwn/` project tree.
 ### Integration tests
 | File | Coverage |
 |------|----------|
+| `integration_builtin_models.cu` | Repo-local fixture baseline for LBVH/H-PLOC winding consistency |
 | `integration_model_parity.cu` | GPU vs HDK CPU winding parity on model files |
 | `integration_correctness.cu` | LBVH/H-PLOC cross-consistency on sampled models |
 | `integration_gradient.cu` | Gradient batch on model files |
