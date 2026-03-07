@@ -169,6 +169,9 @@ if(SMALLGWN_BUILD_TESTS)
         # ---------------------------------------------------------------
         # Integration tests.
         # ---------------------------------------------------------------
+        smallgwn_add_cuda_test(smallgwn_integration_builtin_models
+            LABELS "integration;cuda;fixtures"
+            SOURCES tests/integration_builtin_models.cu)
         smallgwn_add_eigen_tbb_test(smallgwn_integration_model_parity
             LABELS "integration;cuda;models;slow"
             SOURCES tests/integration_model_parity.cu

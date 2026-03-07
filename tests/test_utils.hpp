@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
@@ -245,6 +246,35 @@ collect_obj_model_paths(std::filesystem::path const &model_dir) {
 
     std::sort(model_paths.begin(), model_paths.end());
     model_paths.erase(std::unique(model_paths.begin(), model_paths.end()), model_paths.end());
+    return model_paths;
+}
+
+[[nodiscard]] inline std::optional<std::filesystem::path> find_builtin_fixture_dir() {
+    std::filesystem::path const fixture_dir =
+        std::filesystem::path(__FILE__).parent_path() / "data";
+    if (std::filesystem::is_directory(fixture_dir))
+        return fixture_dir;
+    return std::nullopt;
+}
+
+[[nodiscard]] inline std::vector<std::filesystem::path> collect_builtin_fixture_paths() {
+    std::optional<std::filesystem::path> const fixture_dir = find_builtin_fixture_dir();
+    if (!fixture_dir.has_value())
+        return {};
+
+    constexpr std::array<char const *, 3> k_builtin_fixture_names = {
+        "closed_cube.obj",
+        "open_cube.obj",
+        "nonplanar_closed.obj",
+    };
+
+    std::vector<std::filesystem::path> model_paths{};
+    model_paths.reserve(k_builtin_fixture_names.size());
+    for (char const *filename : k_builtin_fixture_names) {
+        std::filesystem::path const path = *fixture_dir / filename;
+        if (std::filesystem::is_regular_file(path))
+            model_paths.push_back(path);
+    }
     return model_paths;
 }
 

@@ -121,12 +121,13 @@ cmake -S . -B build
 cmake --build build
 ```
 
-The suite is organized into `unit`, `integration`, `perf`, `models`, and `libigl` slices. The
-most common entry points are:
+The suite is organized into `unit`, `integration`, `fixtures`, `perf`, `models`, and `libigl`
+slices. The most common entry points are:
 
 ```bash
 ctest --test-dir build -L unit --output-on-failure
 ctest --test-dir build -L integration --output-on-failure
+ctest --test-dir build -L fixtures --output-on-failure
 ctest --test-dir build -L perf --output-on-failure
 ```
 
@@ -143,3 +144,6 @@ Optionally override model inputs for the dataset-driven `models` suites:
 SMALLGWN_MODEL_DATA_DIR=/tmp/common-3d-test-models-subset \
 ctest --test-dir build -L models --output-on-failure
 ```
+
+The `fixtures` slice uses tiny OBJ meshes vendored under `tests/data/`, so it remains available
+even when `SMALLGWN_MODEL_DATA_DIR` is unset.
