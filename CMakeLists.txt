@@ -17,6 +17,34 @@ set(CMAKE_PCH_WARN_INVALID ON)
 
 find_package(CUDAToolkit REQUIRED)
 
+option(
+    SMALLGWN_ENABLE_STRICT_WARNINGS
+    "Enable conservative repo-local warning flags for benchmark and test targets"
+    OFF
+)
+
+function(smallgwn_apply_strict_warnings TARGET_NAME)
+    if(NOT SMALLGWN_ENABLE_STRICT_WARNINGS)
+        return()
+    endif()
+
+    target_compile_definitions(${TARGET_NAME} PRIVATE GWN_STRICT_WARNINGS)
+
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(${TARGET_NAME}
+            PRIVATE
+                $<$<COMPILE_LANGUAGE:CXX>:-Wall;-Wextra>
+                $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wall,-Wextra;-Xcudafe=--diag_suppress=177>
+        )
+    elseif(MSVC)
+        target_compile_options(${TARGET_NAME}
+            PRIVATE
+                $<$<COMPILE_LANGUAGE:CXX>:/W4>
+                $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/W4>
+        )
+    endif()
+endfunction()
+
 add_library(smallgwn INTERFACE)
 add_library(gwn::smallgwn ALIAS smallgwn)
 
@@ -56,6 +84,7 @@ if(SMALLGWN_BUILD_BENCHMARKS)
             "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests"
     )
+    smallgwn_apply_strict_warnings(smallgwn_benchmark)
 endif()
 
 option(SMALLGWN_BUILD_TESTS "Build smallgwn tests" ON)
@@ -74,6 +103,8 @@ if(SMALLGWN_BUILD_TESTS)
         # ---------------------------------------------------------------
         set(SMALLGWN_TEST_INCLUDE_DIRS
             "${CMAKE_CURRENT_SOURCE_DIR}/tests"
+        )
+        set(SMALLGWN_TEST_SYSTEM_INCLUDE_DIRS
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/reference_hdk"
         )
 
@@ -83,7 +114,7 @@ if(SMALLGWN_BUILD_TESTS)
         function(smallgwn_add_test_base TARGET_NAME)
             cmake_parse_arguments(
                 ARG
-                "NO_CTEST;RUN_SERIAL"
+                "NO_CTEST;RUN_SERIAL;NO_STRICT_WARNINGS"
                 ""
                 "SOURCES;EXTRA_SOURCES;LABELS;EXTRA_LIBRARIES"
                 ${ARGN}
@@ -99,6 +130,26 @@ if(SMALLGWN_BUILD_TESTS)
             )
             target_compile_definitions(${TARGET_NAME} PRIVATE GWN_ENABLE_ASSERTS)
             target_include_directories(${TARGET_NAME} PRIVATE ${SMALLGWN_TEST_INCLUDE_DIRS})
+            target_include_directories(${TARGET_NAME} SYSTEM PRIVATE ${SMALLGWN_TEST_SYSTEM_INCLUDE_DIRS})
+            if(SMALLGWN_ENABLE_STRICT_WARNINGS)
+                target_compile_options(${TARGET_NAME}
+                    PRIVATE
+                        $<$<COMPILE_LANGUAGE:CUDA>:-Xcudafe=--diag_suppress=177>
+                )
+                if(ARG_NO_STRICT_WARNINGS AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+                    target_compile_options(${TARGET_NAME}
+                        PRIVATE
+                            $<$<COMPILE_LANGUAGE:CXX>:-Wno-deprecated-declarations>
+                            $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wno-deprecated-declarations>
+                    )
+                endif()
+            endif()
+            if(
+                NOT ARG_NO_STRICT_WARNINGS
+                AND (ARG_LABELS MATCHES "(^|;)unit(;|$)" OR ARG_LABELS MATCHES "(^|;)fixtures(;|$)")
+            )
+                smallgwn_apply_strict_warnings(${TARGET_NAME})
+            endif()
             if(NOT ARG_NO_CTEST)
                 add_test(NAME ${TARGET_NAME} COMMAND ${TARGET_NAME})
                 if(ARG_LABELS)
@@ -154,9 +205,11 @@ if(SMALLGWN_BUILD_TESTS)
             LABELS "unit;cuda"
             SOURCES tests/unit_eigen_bridge.cu)
         smallgwn_add_eigen_tbb_test(smallgwn_unit_winding_taylor
+            NO_STRICT_WARNINGS
             LABELS "unit;cuda"
             SOURCES tests/unit_winding_taylor.cu)
         smallgwn_add_eigen_tbb_test(smallgwn_unit_winding_gradient
+            NO_STRICT_WARNINGS
             LABELS "unit;cuda"
             SOURCES tests/unit_winding_gradient.cu)
         smallgwn_add_cuda_test(smallgwn_unit_harnack_trace  LABELS "unit;cuda" SOURCES tests/unit_harnack_trace.cu)
@@ -177,13 +230,16 @@ if(SMALLGWN_BUILD_TESTS)
             LABELS "integration;cuda;fixtures"
             SOURCES tests/integration_builtin_models.cu)
         smallgwn_add_eigen_tbb_test(smallgwn_integration_model_parity
+            NO_STRICT_WARNINGS
             LABELS "integration;cuda;models;slow"
             SOURCES tests/integration_model_parity.cu
             EXTRA_SOURCES tests/reference_hdk/UT_Array.cpp tests/reference_hdk/UT_SolidAngle.cpp)
         smallgwn_add_eigen_tbb_test(smallgwn_integration_correctness
+            NO_STRICT_WARNINGS
             LABELS "integration;cuda;models;slow"
             SOURCES tests/integration_correctness.cu)
         smallgwn_add_eigen_tbb_test(smallgwn_integration_gradient
+            NO_STRICT_WARNINGS
             LABELS "integration;cuda"
             SOURCES tests/integration_gradient.cu)
         smallgwn_add_cuda_test(smallgwn_integration_harnack_trace
@@ -200,25 +256,29 @@ if(SMALLGWN_BUILD_TESTS)
             LABELS "integration;cuda;perf;slow"
             SOURCES tests/integration_hploc_performance.cu)
 
-        smallgwn_add_cuda_test(smallgwn_integration_taylor_matrix NO_CTEST
+        smallgwn_add_eigen_tbb_test(smallgwn_integration_taylor_matrix
+            NO_CTEST
+            NO_STRICT_WARNINGS
             SOURCES tests/integration_taylor_matrix.cu
             EXTRA_SOURCES tests/reference_hdk/UT_Array.cpp tests/reference_hdk/UT_SolidAngle.cpp)
 
-        add_test(NAME smallgwn_integration_taylor_matrix_light
-            COMMAND smallgwn_integration_taylor_matrix --gtest_color=no
-                --gtest_filter=smallgwn_integration_taylor_matrix.light_*)
-        set_tests_properties(smallgwn_integration_taylor_matrix_light PROPERTIES
-            LABELS "integration;cuda;models;slow;light"
-            FAIL_REGULAR_EXPRESSION "0 tests from 0 test suites;did not match any test"
-            ENVIRONMENT "SMALLGWN_MATRIX_MODEL_LIMIT=2;SMALLGWN_MATRIX_TOTAL_POINTS=200000;SMALLGWN_MATRIX_ORDER_MAX=1")
+        if(TARGET smallgwn_integration_taylor_matrix)
+            add_test(NAME smallgwn_integration_taylor_matrix_light
+                COMMAND smallgwn_integration_taylor_matrix --gtest_color=no
+                    --gtest_filter=smallgwn_integration_taylor_matrix.light_*)
+            set_tests_properties(smallgwn_integration_taylor_matrix_light PROPERTIES
+                LABELS "integration;cuda;models;slow;light"
+                FAIL_REGULAR_EXPRESSION "0 tests from 0 test suites;did not match any test"
+                ENVIRONMENT "SMALLGWN_MATRIX_MODEL_LIMIT=2;SMALLGWN_MATRIX_TOTAL_POINTS=200000;SMALLGWN_MATRIX_ORDER_MAX=1")
 
-        add_test(NAME smallgwn_integration_taylor_matrix_heavy
-            COMMAND smallgwn_integration_taylor_matrix --gtest_color=no
-                --gtest_filter=smallgwn_integration_taylor_matrix.heavy_*)
-        set_tests_properties(smallgwn_integration_taylor_matrix_heavy PROPERTIES
-            LABELS "integration;cuda;models;slow;heavy"
-            FAIL_REGULAR_EXPRESSION "0 tests from 0 test suites;did not match any test"
-            ENVIRONMENT "SMALLGWN_MATRIX_MODEL_LIMIT=8;SMALLGWN_MATRIX_TOTAL_POINTS=2000000;SMALLGWN_MATRIX_ORDER_MAX=2")
+            add_test(NAME smallgwn_integration_taylor_matrix_heavy
+                COMMAND smallgwn_integration_taylor_matrix --gtest_color=no
+                    --gtest_filter=smallgwn_integration_taylor_matrix.heavy_*)
+            set_tests_properties(smallgwn_integration_taylor_matrix_heavy PROPERTIES
+                LABELS "integration;cuda;models;slow;heavy"
+                FAIL_REGULAR_EXPRESSION "0 tests from 0 test suites;did not match any test"
+                ENVIRONMENT "SMALLGWN_MATRIX_MODEL_LIMIT=8;SMALLGWN_MATRIX_TOTAL_POINTS=2000000;SMALLGWN_MATRIX_ORDER_MAX=2")
+        endif()
     else()
         message(STATUS "GTest not found; test targets are skipped.")
     endif()

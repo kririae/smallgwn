@@ -25,6 +25,17 @@ cmake -B build
 cmake --build build
 ```
 
+For repo-local warning cleanup work, you can opt into a conservative strict-warning profile without
+changing default consumer behavior. This only affects repo-defined benchmark/test targets; the
+header-only library target remains unchanged for downstream consumers. Reference-heavy suites that
+pull in vendored HDK/TBB code keep their default diagnostics so the strict profile stays focused on
+the benchmark target plus repo-owned `unit` / `fixtures` sources:
+
+```bash
+cmake -S . -B build-strict -DSMALLGWN_ENABLE_STRICT_WARNINGS=ON
+cmake --build build-strict
+```
+
 ## Usage
 
 Include a single header:
