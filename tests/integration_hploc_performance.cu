@@ -125,8 +125,8 @@ TEST(smallgwn_integration_performance, hploc_topology_build_ratio_gate) {
     SMALLGWN_SKIP_IF_NO_CUDA();
 
     std::vector<std::filesystem::path> const model_paths = gwn::tests::collect_model_paths();
-    ASSERT_FALSE(model_paths.empty())
-        << "No model input found. Set SMALLGWN_MODEL_DATA_DIR or SMALLGWN_MODEL_PATH.";
+    if (model_paths.empty())
+        GTEST_SKIP() << "No model input found. Set SMALLGWN_MODEL_DATA_DIR or SMALLGWN_MODEL_PATH.";
 
     std::size_t const model_limit =
         gwn::tests::get_env_positive_size_t("SMALLGWN_HPLOC_PERF_MODEL_LIMIT", 3);
