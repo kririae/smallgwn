@@ -590,6 +590,8 @@ void check_threshold(
 
 TEST(smallgwn_integration_taylor_matrix, light_order1_width_index_builder_matrix) {
     SMALLGWN_SKIP_IF_NO_CUDA();
+    if (gwn::tests::collect_model_paths().empty())
+        GTEST_SKIP() << "No model input found. Set SMALLGWN_MODEL_DATA_DIR or SMALLGWN_MODEL_PATH.";
     MatrixSummary const summary = run_light_profile();
     std::size_t const expected_combo_count = k_matrix_widths.size() * 2u * k_matrix_builders.size();
 
@@ -606,6 +608,8 @@ TEST(smallgwn_integration_taylor_matrix, light_order1_width_index_builder_matrix
 
 TEST(smallgwn_integration_taylor_matrix, heavy_order1_order2_width_index_builder_matrix) {
     SMALLGWN_SKIP_IF_NO_CUDA();
+    if (gwn::tests::collect_model_paths().empty())
+        GTEST_SKIP() << "No model input found. Set SMALLGWN_MODEL_DATA_DIR or SMALLGWN_MODEL_PATH.";
     MatrixSummary const summary = run_heavy_profile();
     std::size_t const expected_combo_count = k_matrix_widths.size() * 2u * k_matrix_builders.size();
     std::size_t const expected_model_limit =

@@ -598,13 +598,15 @@ void run_integration_taylor_rebuild_consistency_on_common_models(Real const k_co
     static_assert(Order == 1 || Order == 2);
 
     std::optional<std::filesystem::path> const model_dir = gwn::tests::find_model_data_dir();
-    ASSERT_TRUE(model_dir.has_value())
-        << "Model directory not found. Set SMALLGWN_MODEL_DATA_DIR or "
-           "clone models to /tmp/common-3d-test-models/data.";
+    if (!model_dir.has_value()) {
+        GTEST_SKIP() << "Model directory not found. Set SMALLGWN_MODEL_DATA_DIR or "
+                        "clone models to /tmp/common-3d-test-models/data.";
+    }
 
     std::vector<std::filesystem::path> const model_paths =
         gwn::tests::collect_obj_model_paths(*model_dir);
-    ASSERT_FALSE(model_paths.empty()) << "No .obj models found in " << model_dir->string();
+    if (model_paths.empty())
+        GTEST_SKIP() << "No .obj models found in " << model_dir->string();
 
     constexpr Real k_accuracy_scale = Real(2);
 
@@ -708,13 +710,15 @@ TEST(smallgwn_integration_model, integration_taylor_rebuild_consistency_on_commo
 
 TEST(smallgwn_integration_model, integration_taylor_matches_hdk_cpu_order0_order1_order2) {
     std::optional<std::filesystem::path> const model_dir = gwn::tests::find_model_data_dir();
-    ASSERT_TRUE(model_dir.has_value())
-        << "Model directory not found. Set SMALLGWN_MODEL_DATA_DIR or "
-           "clone models to /tmp/common-3d-test-models/data.";
+    if (!model_dir.has_value()) {
+        GTEST_SKIP() << "Model directory not found. Set SMALLGWN_MODEL_DATA_DIR or "
+                        "clone models to /tmp/common-3d-test-models/data.";
+    }
 
     std::vector<std::filesystem::path> const model_paths =
         gwn::tests::collect_obj_model_paths(*model_dir);
-    ASSERT_FALSE(model_paths.empty()) << "No .obj models found in " << model_dir->string();
+    if (model_paths.empty())
+        GTEST_SKIP() << "No .obj models found in " << model_dir->string();
 
     constexpr Real k_accuracy_scale = Real(2);
     constexpr Real k_order0_epsilon = Real(5e-2);
