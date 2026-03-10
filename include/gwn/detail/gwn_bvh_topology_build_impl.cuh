@@ -8,6 +8,7 @@
 #include "gwn_bvh_status_helpers.cuh"
 #include "gwn_bvh_topology_build_hploc.cuh"
 #include "gwn_bvh_topology_build_lbvh.cuh"
+#include "gwn_bvh_topology_reorder_bfs.cuh"
 
 namespace gwn {
 namespace detail {
@@ -107,6 +108,15 @@ gwn_status gwn_bvh_topology_build_from_binary_impl(
                 !staging_topology.nodes.empty(),
                 "topology build: collapse produced empty wide node array"
             );
+
+            {
+                Index reorder_root = Index(0);
+                GWN_RETURN_ON_ERROR(
+                    (gwn_bvh_topology_reorder_bfs<Width, Index>(
+                        staging_topology.nodes, reorder_root, stream
+                    ))
+                );
+            }
 
             staging_topology.root_kind = gwn_bvh_child_kind::k_internal;
             staging_topology.root_index = Index(0);
