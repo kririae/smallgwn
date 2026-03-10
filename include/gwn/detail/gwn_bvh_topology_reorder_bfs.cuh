@@ -35,6 +35,7 @@ struct gwn_reorder_build_parent_functor {
     __device__ void operator()(std::size_t const node_index) const {
         auto const &node = nodes[node_index];
         auto const idx = static_cast<Index>(node_index);
+        GWN_PRAGMA_UNROLL
         for (int s = 0; s < Width; ++s) {
             if (static_cast<gwn_bvh_child_kind>(node.child_kind[s]) ==
                 gwn_bvh_child_kind::k_internal) {
@@ -95,6 +96,7 @@ struct gwn_reorder_scatter_remap_functor {
     __device__ void operator()(std::size_t const new_id) const {
         auto const old_id = static_cast<std::size_t>(permutation[new_id]);
         auto node = input[old_id];
+        GWN_PRAGMA_UNROLL
         for (int s = 0; s < Width; ++s) {
             if (static_cast<gwn_bvh_child_kind>(node.child_kind[s]) ==
                 gwn_bvh_child_kind::k_internal) {
@@ -179,14 +181,10 @@ gwn_status gwn_bvh_topology_reorder_bfs(
     GWN_RETURN_ON_ERROR(output.resize(N, stream));
 
     // --- Step 1: Build parent array ---
-    // Initialise parent to zero, then set root's parent = root_index.
+    // Initialise parent to zero (root's parent is itself, i.e. parent[0] = 0).
     GWN_RETURN_ON_ERROR(
         gwn_cuda_to_status(cudaMemsetAsync(parent.data(), 0, N * sizeof(Index), stream))
     );
-    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemcpyAsync(
-        parent.data() + static_cast<std::size_t>(root_index), &root_index, sizeof(Index),
-        cudaMemcpyHostToDevice, stream
-    )));
 
     GWN_RETURN_ON_ERROR(gwn_launch_linear_kernel<k_block>(
         N, gwn_reorder_build_parent_functor<Width, Index>{nodes, parent.data()}, stream
@@ -200,10 +198,11 @@ gwn_status gwn_bvh_topology_reorder_bfs(
             N, gwn_reorder_init_depth_functor<Index>{depth_a.data(), root_index}, stream
         ));
 
-        // Copy parent into jump_a.
+        // Copy parent into jump_a, then free parent (no longer needed).
         GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemcpyAsync(
             jump_a.data(), parent.data(), N * sizeof(Index), cudaMemcpyDeviceToDevice, stream
         )));
+        GWN_RETURN_ON_ERROR(parent.clear(stream));
     }
 
     // Pointer jumping: ceil(log2(D_max)) rounds.
