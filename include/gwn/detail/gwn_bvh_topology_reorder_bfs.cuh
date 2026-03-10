@@ -10,13 +10,13 @@
 ///
 /// The implementation uses PRAM primitives mapped to CUDA kernels:
 /// (1) build parent array, (2) pointer-jumping depth computation,
-/// (3) CUB stable radix sort by depth, (4) inverse permutation + scatter
-/// with child remap.  Everything runs on-device with zero host sync.
-
-#include <cub/device/device_radix_sort.cuh>
+/// (3) CUB stable radix sort by (depth, parent_id), (4) inverse permutation
+/// + scatter with child remap.  Everything runs on-device with zero host sync.
 
 #include <cstddef>
 #include <cstdint>
+
+#include <cub/device/device_radix_sort.cuh>
 
 #include "../gwn_bvh.cuh"
 #include "../gwn_kernel_utils.cuh"
@@ -25,10 +25,7 @@
 namespace gwn {
 namespace detail {
 
-// --------------- Kernel 1: build parent array ---------------
-
-template <int Width, gwn_index_type Index>
-struct gwn_reorder_build_parent_functor {
+template <int Width, gwn_index_type Index> struct gwn_reorder_build_parent_functor {
     cuda::std::span<gwn_bvh_topology_node_soa<Width, Index> const> nodes;
     Index *parent; // output: parent[child] = node_index
 
@@ -47,10 +44,7 @@ struct gwn_reorder_build_parent_functor {
     }
 };
 
-// --------------- Kernel 2: one round of pointer jumping ---------------
-
-template <gwn_index_type Index>
-struct gwn_reorder_pointer_jump_functor {
+template <gwn_index_type Index> struct gwn_reorder_pointer_jump_functor {
     Index const *jump_in;
     Index *jump_out;
     std::uint16_t const *depth_in;
@@ -71,10 +65,7 @@ struct gwn_reorder_pointer_jump_functor {
     }
 };
 
-// --------------- Kernel 3: build inverse permutation ---------------
-
-template <gwn_index_type Index>
-struct gwn_reorder_inverse_perm_functor {
+template <gwn_index_type Index> struct gwn_reorder_inverse_perm_functor {
     Index const *permutation; // permutation[new_id] = old_id
     Index *inverse;           // inverse[old_id] = new_id
 
@@ -84,10 +75,7 @@ struct gwn_reorder_inverse_perm_functor {
     }
 };
 
-// --------------- Kernel 4: scatter nodes + remap child indices ---------------
-
-template <int Width, gwn_index_type Index>
-struct gwn_reorder_scatter_remap_functor {
+template <int Width, gwn_index_type Index> struct gwn_reorder_scatter_remap_functor {
     cuda::std::span<gwn_bvh_topology_node_soa<Width, Index> const> input;
     gwn_bvh_topology_node_soa<Width, Index> *output;
     Index const *permutation;  // permutation[new_id] = old_id
@@ -108,10 +96,7 @@ struct gwn_reorder_scatter_remap_functor {
     }
 };
 
-// --------------- Helper functors for initialisation ---------------
-
-template <gwn_index_type Index>
-struct gwn_reorder_init_depth_functor {
+template <gwn_index_type Index> struct gwn_reorder_init_depth_functor {
     std::uint16_t *depth;
     Index root;
     __device__ void operator()(std::size_t const i) const {
@@ -119,15 +104,20 @@ struct gwn_reorder_init_depth_functor {
     }
 };
 
-template <gwn_index_type Index>
-struct gwn_reorder_iota_functor {
+template <gwn_index_type Index> struct gwn_reorder_iota_functor {
     Index *data;
-    __device__ void operator()(std::size_t const i) const {
-        data[i] = static_cast<Index>(i);
-    }
+    __device__ void operator()(std::size_t const i) const { data[i] = static_cast<Index>(i); }
 };
 
-// --------------- Orchestrator ---------------
+template <gwn_index_type Index> struct gwn_reorder_compose_sort_key_functor {
+    std::uint16_t const *depth;
+    Index const *parent;
+    std::uint32_t *sort_key;
+
+    __device__ void operator()(std::size_t const i) const {
+        sort_key[i] = (std::uint32_t(depth[i]) << 20) | std::uint32_t(parent[i]);
+    }
+};
 
 /// \brief Reorder topology nodes into breadth-first order (GPU-native).
 ///
@@ -158,14 +148,14 @@ gwn_status gwn_bvh_topology_reorder_bfs(
     std::size_t const N = nodes.size();
     auto const N_u64 = static_cast<std::uint64_t>(N);
 
-    // --- Allocate temporaries ---
     gwn_device_array<Index> parent{};
     gwn_device_array<Index> jump_a{};
     gwn_device_array<Index> jump_b{};
     gwn_device_array<std::uint16_t> depth_a{};
     gwn_device_array<std::uint16_t> depth_b{};
     gwn_device_array<Index> permutation{};
-    gwn_device_array<std::uint16_t> depth_sorted{};
+    gwn_device_array<std::uint32_t> sort_key{};
+    gwn_device_array<std::uint32_t> sort_key_sorted{};
     gwn_device_array<Index> inverse_perm{};
     gwn_device_array<node_type> output{};
     gwn_device_array<std::uint8_t> cub_temp{};
@@ -176,33 +166,31 @@ gwn_status gwn_bvh_topology_reorder_bfs(
     GWN_RETURN_ON_ERROR(depth_a.resize(N, stream));
     GWN_RETURN_ON_ERROR(depth_b.resize(N, stream));
     GWN_RETURN_ON_ERROR(permutation.resize(N, stream));
-    GWN_RETURN_ON_ERROR(depth_sorted.resize(N, stream));
+    GWN_RETURN_ON_ERROR(sort_key.resize(N, stream));
+    GWN_RETURN_ON_ERROR(sort_key_sorted.resize(N, stream));
     GWN_RETURN_ON_ERROR(inverse_perm.resize(N, stream));
     GWN_RETURN_ON_ERROR(output.resize(N, stream));
 
-    // --- Step 1: Build parent array ---
-    // Initialise parent to zero (root's parent is itself, i.e. parent[0] = 0).
     GWN_RETURN_ON_ERROR(
         gwn_cuda_to_status(cudaMemsetAsync(parent.data(), 0, N * sizeof(Index), stream))
     );
 
-    GWN_RETURN_ON_ERROR(gwn_launch_linear_kernel<k_block>(
-        N, gwn_reorder_build_parent_functor<Width, Index>{nodes, parent.data()}, stream
-    ));
+    GWN_RETURN_ON_ERROR(
+        gwn_launch_linear_kernel<k_block>(
+            N, gwn_reorder_build_parent_functor<Width, Index>{nodes, parent.data()}, stream
+        )
+    );
 
-    // --- Step 2: Pointer jumping to compute depth ---
-    // Initialise: depth = 1 for all, 0 for root.  jump = parent.
     {
-        // Set depth: root = 0, others = 1.  (memset can't set uint16 to 1.)
-        GWN_RETURN_ON_ERROR(gwn_launch_linear_kernel<k_block>(
-            N, gwn_reorder_init_depth_functor<Index>{depth_a.data(), root_index}, stream
-        ));
+        GWN_RETURN_ON_ERROR(
+            gwn_launch_linear_kernel<k_block>(
+                N, gwn_reorder_init_depth_functor<Index>{depth_a.data(), root_index}, stream
+            )
+        );
 
-        // Copy parent into jump_a, then free parent (no longer needed).
         GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemcpyAsync(
             jump_a.data(), parent.data(), N * sizeof(Index), cudaMemcpyDeviceToDevice, stream
         )));
-        GWN_RETURN_ON_ERROR(parent.clear(stream));
     }
 
     // Pointer jumping: ceil(log2(D_max)) rounds.
@@ -215,66 +203,75 @@ gwn_status gwn_bvh_topology_reorder_bfs(
     std::uint16_t *depth_dst = depth_b.data();
 
     for (int round = 0; round < k_max_rounds; ++round) {
-        GWN_RETURN_ON_ERROR(gwn_launch_linear_kernel<k_block>(
-            N,
-            gwn_reorder_pointer_jump_functor<Index>{
-                jump_src, jump_dst, depth_src, depth_dst, root_index},
-            stream
-        ));
-        // Swap src/dst for next round.
+        GWN_RETURN_ON_ERROR(
+            gwn_launch_linear_kernel<k_block>(
+                N,
+                gwn_reorder_pointer_jump_functor<Index>{
+                    jump_src, jump_dst, depth_src, depth_dst, root_index
+                },
+                stream
+            )
+        );
         using std::swap;
         swap(jump_src, jump_dst);
         swap(depth_src, depth_dst);
     }
-    // After the loop, depth_src holds final depths.
 
-    // --- Step 3: Stable radix sort by depth ---
-    // Initialise permutation to identity [0, 1, 2, ...].
     {
-        GWN_RETURN_ON_ERROR(gwn_launch_linear_kernel<k_block>(
-            N, gwn_reorder_iota_functor<Index>{permutation.data()}, stream
-        ));
+        GWN_RETURN_ON_ERROR(
+            gwn_launch_linear_kernel<k_block>(
+                N, gwn_reorder_iota_functor<Index>{permutation.data()}, stream
+            )
+        );
     }
 
-    // CUB radix sort: key = depth (uint16), value = node index.
-    // Depth range [0, 256) -> only 8 bits needed.
+    GWN_RETURN_ON_ERROR(
+        gwn_launch_linear_kernel<k_block>(
+            N,
+            gwn_reorder_compose_sort_key_functor<Index>{depth_src, parent.data(), sort_key.data()},
+            stream
+        )
+    );
+    GWN_RETURN_ON_ERROR(parent.clear(stream));
+
     {
         std::size_t cub_temp_bytes = 0;
-        GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cub::DeviceRadixSort::SortPairs(
-            nullptr, cub_temp_bytes, depth_src, depth_sorted.data(), permutation.data(),
-            inverse_perm.data(), // reuse as temp value output
-            N_u64, 0, 8, stream
-        )));
+        GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
+            cub::DeviceRadixSort::SortPairs(
+                nullptr, cub_temp_bytes, sort_key.data(), sort_key_sorted.data(),
+                permutation.data(), inverse_perm.data(), N_u64, 0, 28, stream
+            )
+        ));
         GWN_RETURN_ON_ERROR(cub_temp.resize(cub_temp_bytes, stream));
-        GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cub::DeviceRadixSort::SortPairs(
-            cub_temp.data(), cub_temp_bytes, depth_src, depth_sorted.data(), permutation.data(),
-            inverse_perm.data(), N_u64, 0, 8, stream
-        )));
+        GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
+            cub::DeviceRadixSort::SortPairs(
+                cub_temp.data(), cub_temp_bytes, sort_key.data(), sort_key_sorted.data(),
+                permutation.data(), inverse_perm.data(), N_u64, 0, 28, stream
+            )
+        ));
     }
-    // After sort: inverse_perm now holds permutation[new_id] = old_id.
-    // (We reused inverse_perm as the value output buffer.)
-    // Swap so permutation holds the result.
     {
         using std::swap;
         swap(permutation, inverse_perm);
     }
-    // Now: permutation[new_id] = old_id.
 
-    // --- Step 4a: Build inverse permutation ---
-    GWN_RETURN_ON_ERROR(gwn_launch_linear_kernel<k_block>(
-        N,
-        gwn_reorder_inverse_perm_functor<Index>{permutation.data(), inverse_perm.data()}, stream
-    ));
+    GWN_RETURN_ON_ERROR(
+        gwn_launch_linear_kernel<k_block>(
+            N, gwn_reorder_inverse_perm_functor<Index>{permutation.data(), inverse_perm.data()},
+            stream
+        )
+    );
 
-    // --- Step 4b: Scatter + remap ---
-    GWN_RETURN_ON_ERROR(gwn_launch_linear_kernel<k_block>(
-        N,
-        gwn_reorder_scatter_remap_functor<Width, Index>{
-            nodes, output.data(), permutation.data(), inverse_perm.data()},
-        stream
-    ));
+    GWN_RETURN_ON_ERROR(
+        gwn_launch_linear_kernel<k_block>(
+            N,
+            gwn_reorder_scatter_remap_functor<Width, Index>{
+                nodes, output.data(), permutation.data(), inverse_perm.data()
+            },
+            stream
+        )
+    );
 
-    // --- Copy output back into nodes ---
     GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemcpyAsync(
         nodes.data(), output.data(), N * sizeof(node_type), cudaMemcpyDeviceToDevice, stream
     )));

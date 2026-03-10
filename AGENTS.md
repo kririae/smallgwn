@@ -63,6 +63,10 @@ These instructions apply to the `smallgwn/` project tree.
 - **Public API split**: `gwn_bvh_topology_build.cuh` (topology), `gwn_bvh_refit.cuh` (payload refit),
   `gwn_bvh_facade.cuh` (composed build workflows).
 - Topology builders: LBVH and H-PLOC. Facade exposes both variants.
+- **BFS node reorder**: after collapse, `gwn_bvh_topology_reorder_bfs` reorders internal nodes
+  into breadth-first order on-device using PRAM primitives (pointer-jumping depth + radix sort
+  by composite `(depth, parent_id)` key). This makes siblings contiguous in memory and improves
+  cache locality during top-down traversal.
 - Taylor moment supports `Order=0/1/2`.
   Each `gwn_bvh_refit_moment<Order,...>` call does a full replace of the moment accessor.
 - Public BVH entrypoints are object-based; accessor-based routines are detail-only.
