@@ -17,6 +17,13 @@ These instructions apply to the `smallgwn/` project tree.
 - Use C++20 and CUDA 12+.
 - CMake defaults `CMAKE_CUDA_ARCHITECTURES` to `native` unless overridden.
 - Keep the project header-only at the library level.
+- Repo build targets use strict warnings by default; do not add opt-in warning-profile toggles for
+  benchmark/test coverage.
+- When a build toggle enables a dependency-bearing path, every `find_package(...)` in that path
+  must be `REQUIRED` and fail configure immediately on missing packages. Do not use `QUIET`,
+  `*_FOUND` fallback branches, skip-on-missing behavior, or local search hacks/workarounds.
+- Example consumers should keep normal third-party `CPMAddPackage(...)` flows for `smallgwn`;
+  avoid repo-relative source overrides in example `CMakeLists.txt` files.
 
 ## File Naming Rules
 - **`.cuh`**: Must be used if the file contains CUDA execution space specifiers, kernel launches,
