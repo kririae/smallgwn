@@ -6,15 +6,7 @@ endif()
 
 project(winding_studio LANGUAGES C CXX CUDA)
 
-option(
-    WINDING_STUDIO_ENABLE_IMGUI_TEST_ENGINE
-    "Enable Dear ImGui Test Engine based UI contract tests"
-    ON)
-set(
-    WINDING_STUDIO_IMGUI_TEST_ENGINE_SOURCE_DIR
-    ""
-    CACHE PATH
-    "Optional local path to imgui_test_engine source (skip network fetch)")
+option(WINDING_STUDIO_ENABLE_IMGUI_TEST_ENGINE "Enable Dear ImGui Test Engine based UI contract tests" ON)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -30,36 +22,18 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 include(GetCPM.cmake)
 
 # ----------------------------------------------------------
-# smallgwn (header-only CUDA winding number library)
+# smallgwn
 # ----------------------------------------------------------
-get_filename_component(
-    WINDING_STUDIO_SMALLGWN_PARENT_DEFAULT
-    "${CMAKE_CURRENT_SOURCE_DIR}/../.."
-    ABSOLUTE
-)
-set(
-    WINDING_STUDIO_SMALLGWN_SOURCE_DIR
-    "${WINDING_STUDIO_SMALLGWN_PARENT_DEFAULT}"
-    CACHE PATH
-    "Local smallgwn source path. Defaults to parent repo root. Set empty to force CPM remote fetch."
-)
 
-if(WINDING_STUDIO_SMALLGWN_SOURCE_DIR AND EXISTS "${WINDING_STUDIO_SMALLGWN_SOURCE_DIR}/CMakeLists.txt")
-    message(STATUS
-        "Using local smallgwn source from: ${WINDING_STUDIO_SMALLGWN_SOURCE_DIR}")
-    CPMAddPackage(
-        NAME smallgwn
-        SOURCE_DIR "${WINDING_STUDIO_SMALLGWN_SOURCE_DIR}"
-        OPTIONS
-            "SMALLGWN_BUILD_BENCHMARKS OFF"
-            "SMALLGWN_BUILD_APPS OFF"
-            "SMALLGWN_BUILD_TESTS OFF"
-            "SMALLGWN_BUILD_EIGEN_BRIDGE_TARGET OFF")
-else()
-    message(FATAL_ERROR
-        "Local smallgwn source not found at WINDING_STUDIO_SMALLGWN_SOURCE_DIR='"
-        "${WINDING_STUDIO_SMALLGWN_SOURCE_DIR}'. Set this cache variable to a valid smallgwn root.")
-endif()
+CPMAddPackage(
+    NAME smallgwn
+    GITHUB_REPOSITORY kririae/smallgwn
+    GIT_TAG main
+    OPTIONS
+        "SMALLGWN_BUILD_BENCHMARKS OFF"
+        "SMALLGWN_BUILD_APPS OFF"
+        "SMALLGWN_BUILD_TESTS OFF"
+        "SMALLGWN_BUILD_EIGEN_BRIDGE_TARGET OFF")
 
 # ----------------------------------------------------------
 # Eigen3
@@ -94,27 +68,15 @@ CPMAddPackage(
 # Dear ImGui Test Engine (optional, for UI contract tests)
 # ----------------------------------------------------------
 if(WINDING_STUDIO_ENABLE_IMGUI_TEST_ENGINE)
-    if(WINDING_STUDIO_IMGUI_TEST_ENGINE_SOURCE_DIR)
-        if(NOT EXISTS "${WINDING_STUDIO_IMGUI_TEST_ENGINE_SOURCE_DIR}")
-            message(FATAL_ERROR
-                "WINDING_STUDIO_IMGUI_TEST_ENGINE_SOURCE_DIR does not exist: "
-                "${WINDING_STUDIO_IMGUI_TEST_ENGINE_SOURCE_DIR}")
-        endif()
-        CPMAddPackage(
-            NAME imgui_test_engine
-            SOURCE_DIR "${WINDING_STUDIO_IMGUI_TEST_ENGINE_SOURCE_DIR}"
-            DOWNLOAD_ONLY YES)
-    else()
-        CPMAddPackage(
-            NAME imgui_test_engine
-            GITHUB_REPOSITORY ocornut/imgui_test_engine
-            GIT_TAG v1.92.6
-            DOWNLOAD_ONLY YES)
-    endif()
+    CPMAddPackage(
+        NAME imgui_test_engine
+        GITHUB_REPOSITORY ocornut/imgui_test_engine
+        GIT_TAG v1.92.6
+        DOWNLOAD_ONLY YES)
 endif()
 
 # ----------------------------------------------------------
-# stb (header-only image writing)
+# stb
 # ----------------------------------------------------------
 CPMAddPackage(
     NAME stb
