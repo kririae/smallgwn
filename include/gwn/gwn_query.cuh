@@ -425,6 +425,35 @@ gwn_status gwn_compute_winding_number_batch_bvh_taylor(
     );
 }
 
+/// \brief Compute Taylor-approximated winding-number gradient for a single
+///        query point (\c __device__ only).
+///
+/// Uses BVH traversal with Taylor moment approximation at far-field nodes
+/// and exact solid-angle gradient evaluation at near-field leaf nodes.
+/// Returns the gradient as a 3-component vector (gwn_vec3).
+///
+/// \tparam Order Taylor winding-number order (0, 1, or 2).
+template <
+    int Order, int Width, gwn_real_type Real, gwn_index_type Index,
+    int StackCapacity = k_gwn_default_traversal_stack_capacity,
+    typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
+__device__ inline gwn_vec3<Real> gwn_winding_gradient_point_bvh_taylor(
+    gwn_geometry_accessor<Real, Index> const &geometry,
+    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
+    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &data_tree, Real const qx,
+    Real const qy, Real const qz, Real const accuracy_scale = Real(2),
+    OverflowCallback const &overflow_callback = {}
+) noexcept {
+    static_assert(
+        Order == 0 || Order == 1 || Order == 2,
+        "gwn_winding_gradient_point_bvh_taylor currently supports Order 0, 1, and 2."
+    );
+    return detail::gwn_winding_gradient_point_bvh_taylor_impl<
+        Order, Width, Real, Index, StackCapacity, OverflowCallback>(
+        geometry, bvh, data_tree, qx, qy, qz, accuracy_scale, overflow_callback
+    );
+}
+
 /// \brief Compute winding-number gradient for a batch using
 ///        Taylor-accelerated BVH traversal.
 ///

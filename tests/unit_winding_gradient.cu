@@ -765,7 +765,125 @@ TEST_F(CudaFixture, gradient_overflow_returns_nan_components) {
     EXPECT_TRUE(std::isnan(grad_z));
 }
 
-// Test 9: Error-handling, mismatched output spans.
+// Test 9: Device point API for gradient query.
+// This test validates the new public device API gwn_winding_gradient_point_bvh_taylor.
+// Launch a kernel that calls the device point API and compare against batch result.
+__global__ void kernel_gradient_point_query(
+    gwn::gwn_geometry_accessor<Real, Index> const geometry,
+    gwn::gwn_bvh4_topology_accessor<Real, Index> const bvh,
+    gwn::gwn_bvh4_moment_accessor<1, Real, Index> const data_tree, Real const qx, Real const qy,
+    Real const qz, Real const accuracy_scale, Real *out_gx, Real *out_gy, Real *out_gz
+) {
+    auto const grad = gwn::gwn_winding_gradient_point_bvh_taylor<1, 4, Real, Index>(
+        geometry, bvh, data_tree, qx, qy, qz, accuracy_scale
+    );
+    *out_gx = grad.x;
+    *out_gy = grad.y;
+    *out_gz = grad.z;
+}
+
+TEST_F(CudaFixture, gradient_device_point_api_matches_batch) {
+    constexpr Real k_tol = 1e-5f;
+    constexpr Real k_accuracy_scale = Real(2);
+
+    HalfOctahedronMesh mesh;
+
+    // Single query point (far-field to use Taylor path).
+    Real const qx = 3.5f;
+    Real const qy = 0.0f;
+    Real const qz = 0.0f;
+
+    // Upload geometry and build BVH.
+    gwn::gwn_geometry_object<Real, Index> geometry;
+    gwn::gwn_status upload_status = gwn::gwn_upload_geometry(
+        geometry, cuda::std::span<Real const>(mesh.vx.data(), mesh.vx.size()),
+        cuda::std::span<Real const>(mesh.vy.data(), mesh.vy.size()),
+        cuda::std::span<Real const>(mesh.vz.data(), mesh.vz.size()),
+        cuda::std::span<Index const>(mesh.i0.data(), mesh.i0.size()),
+        cuda::std::span<Index const>(mesh.i1.data(), mesh.i1.size()),
+        cuda::std::span<Index const>(mesh.i2.data(), mesh.i2.size())
+    );
+    if (upload_status.error() == gwn::gwn_error::cuda_runtime_error)
+        GTEST_SKIP() << "CUDA unavailable";
+    ASSERT_TRUE(upload_status.is_ok())
+        << "geometry upload failed: " << gwn::tests::status_to_debug_string(upload_status);
+
+    gwn::gwn_bvh4_topology_object<Real, Index> bvh;
+    gwn::gwn_bvh4_aabb_object<Real, Index> aabb;
+    gwn::gwn_bvh4_moment_object<1, Real, Index> data;
+    gwn::gwn_status build_status =
+        gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<1, 4, Real, Index>(
+            geometry, bvh, aabb, data
+        );
+    ASSERT_TRUE(build_status.is_ok())
+        << "BVH build failed: " << gwn::tests::status_to_debug_string(build_status);
+
+    // Get batch result for reference.
+    gwn::gwn_device_array<Real> d_batch_qx, d_batch_qy, d_batch_qz;
+    gwn::gwn_device_array<Real> d_batch_gx, d_batch_gy, d_batch_gz;
+    ASSERT_TRUE(d_batch_qx.resize(1).is_ok());
+    ASSERT_TRUE(d_batch_qy.resize(1).is_ok());
+    ASSERT_TRUE(d_batch_qz.resize(1).is_ok());
+    ASSERT_TRUE(d_batch_gx.resize(1).is_ok());
+    ASSERT_TRUE(d_batch_gy.resize(1).is_ok());
+    ASSERT_TRUE(d_batch_gz.resize(1).is_ok());
+
+    Real h_q[1] = {qx};
+    ASSERT_TRUE(d_batch_qx.copy_from_host(cuda::std::span<Real const>(h_q, 1)).is_ok());
+    h_q[0] = qy;
+    ASSERT_TRUE(d_batch_qy.copy_from_host(cuda::std::span<Real const>(h_q, 1)).is_ok());
+    h_q[0] = qz;
+    ASSERT_TRUE(d_batch_qz.copy_from_host(cuda::std::span<Real const>(h_q, 1)).is_ok());
+
+    gwn::gwn_status query_status =
+        gwn::gwn_compute_winding_gradient_batch_bvh_taylor<1, Real, Index>(
+            geometry.accessor(), bvh.accessor(), data.accessor(), d_batch_qx.span(),
+            d_batch_qy.span(), d_batch_qz.span(), d_batch_gx.span(), d_batch_gy.span(),
+            d_batch_gz.span(), k_accuracy_scale
+        );
+    ASSERT_TRUE(query_status.is_ok())
+        << "batch gradient query failed: " << gwn::tests::status_to_debug_string(query_status);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    Real batch_gx = 0, batch_gy = 0, batch_gz = 0;
+    ASSERT_TRUE(d_batch_gx.copy_to_host(cuda::std::span<Real>(&batch_gx, 1)).is_ok());
+    ASSERT_TRUE(d_batch_gy.copy_to_host(cuda::std::span<Real>(&batch_gy, 1)).is_ok());
+    ASSERT_TRUE(d_batch_gz.copy_to_host(cuda::std::span<Real>(&batch_gz, 1)).is_ok());
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    // Now call the device point API from a kernel.
+    Real *d_point_gx = nullptr;
+    Real *d_point_gy = nullptr;
+    Real *d_point_gz = nullptr;
+    ASSERT_EQ(cudaMalloc(&d_point_gx, sizeof(Real)), cudaSuccess);
+    ASSERT_EQ(cudaMalloc(&d_point_gy, sizeof(Real)), cudaSuccess);
+    ASSERT_EQ(cudaMalloc(&d_point_gz, sizeof(Real)), cudaSuccess);
+
+    kernel_gradient_point_query<<<1, 1>>>(
+        geometry.accessor(), bvh.accessor(), data.accessor(), qx, qy, qz, k_accuracy_scale,
+        d_point_gx, d_point_gy, d_point_gz
+    );
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    Real point_gx = 0, point_gy = 0, point_gz = 0;
+    ASSERT_EQ(cudaMemcpy(&point_gx, d_point_gx, sizeof(Real), cudaMemcpyDeviceToHost), cudaSuccess);
+    ASSERT_EQ(cudaMemcpy(&point_gy, d_point_gy, sizeof(Real), cudaMemcpyDeviceToHost), cudaSuccess);
+    ASSERT_EQ(cudaMemcpy(&point_gz, d_point_gz, sizeof(Real), cudaMemcpyDeviceToHost), cudaSuccess);
+
+    cudaFree(d_point_gx);
+    cudaFree(d_point_gy);
+    cudaFree(d_point_gz);
+
+    // Compare device point result against batch result.
+    EXPECT_NEAR(point_gx, batch_gx, k_tol)
+        << "device point grad_x=" << point_gx << " vs batch grad_x=" << batch_gx;
+    EXPECT_NEAR(point_gy, batch_gy, k_tol)
+        << "device point grad_y=" << point_gy << " vs batch grad_y=" << batch_gy;
+    EXPECT_NEAR(point_gz, batch_gz, k_tol)
+        << "device point grad_z=" << point_gz << " vs batch grad_z=" << batch_gz;
+}
+
+// Test 10: Error-handling, mismatched output spans.
 TEST_F(CudaFixture, gradient_mismatched_output_returns_error) {
     gwn::gwn_geometry_accessor<Real, Index> accessor{};
     gwn::gwn_bvh4_topology_accessor<Real, Index> bvh{};
