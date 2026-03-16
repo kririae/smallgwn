@@ -303,6 +303,52 @@ gwn_status gwn_compute_ray_first_hit_batch_bvh(
     );
 }
 
+/// \brief Compute exact winding number for a single query point (\c __device__ only).
+///
+/// Uses BVH traversal and exact solid-angle evaluation at leaf nodes.
+/// Returns the winding number as a scalar value.
+template <
+    int Width, gwn_real_type Real, gwn_index_type Index,
+    int StackCapacity = k_gwn_default_traversal_stack_capacity,
+    typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
+__device__ inline Real gwn_winding_number_point_bvh_exact(
+    gwn_geometry_accessor<Real, Index> const &geometry,
+    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh, Real const qx, Real const qy,
+    Real const qz, OverflowCallback const &overflow_callback = {}
+) noexcept {
+    return detail::gwn_winding_number_point_bvh_exact_impl<
+        Width, Real, Index, StackCapacity, OverflowCallback>(
+        geometry, bvh, qx, qy, qz, overflow_callback
+    );
+}
+
+/// \brief Compute Taylor-approximated winding number for a single query point
+///        (\c __device__ only).
+///
+/// Uses BVH traversal with Taylor moment approximation at far-field nodes
+/// and exact solid-angle evaluation at near-field leaf nodes.
+/// Returns the winding number as a scalar value.
+template <
+    int Order, int Width, gwn_real_type Real, gwn_index_type Index,
+    int StackCapacity = k_gwn_default_traversal_stack_capacity,
+    typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
+__device__ inline Real gwn_winding_number_point_bvh_taylor(
+    gwn_geometry_accessor<Real, Index> const &geometry,
+    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
+    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &data_tree, Real const qx,
+    Real const qy, Real const qz, Real const accuracy_scale = Real(2),
+    OverflowCallback const &overflow_callback = {}
+) noexcept {
+    static_assert(
+        Order == 0 || Order == 1 || Order == 2,
+        "gwn_winding_number_point_bvh_taylor currently supports Order 0, 1, and 2."
+    );
+    return detail::gwn_winding_number_point_bvh_taylor_impl<
+        Order, Width, Real, Index, StackCapacity, OverflowCallback>(
+        geometry, bvh, data_tree, qx, qy, qz, accuracy_scale, overflow_callback
+    );
+}
+
 /// \brief Compute winding numbers for a batch using Taylor-accelerated BVH
 ///        traversal.
 template <

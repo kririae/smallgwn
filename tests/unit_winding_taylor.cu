@@ -513,11 +513,11 @@ struct single_winding_overflow_probe_functor {
 
     __device__ void operator()(std::size_t const i) const {
         auto const callback = winding_overflow_callback_probe{callback_flag.data()};
-        out_exact[i] = gwn::detail::gwn_winding_number_point_bvh_exact_impl<
+        out_exact[i] = gwn::gwn_winding_number_point_bvh_exact<
             4, Real, Index, 1, winding_overflow_callback_probe>(
             geometry, bvh, qx[i], qy[i], qz[i], callback
         );
-        out_taylor[i] = gwn::detail::gwn_winding_number_point_bvh_taylor_impl<
+        out_taylor[i] = gwn::gwn_winding_number_point_bvh_taylor<
             1, 4, Real, Index, 1, winding_overflow_callback_probe>(
             geometry, bvh, moment, qx[i], qy[i], qz[i], Real(2), callback
         );
