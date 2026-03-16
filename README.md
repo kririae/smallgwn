@@ -106,6 +106,51 @@ __global__ void compute_signed_distance_kernel(
 //     d_qx.data(), d_qy.data(), d_qz.data(), d_out.data(), n);
 ```
 
+### Query API overview
+
+Query operations are available in two forms:
+- **Device point APIs** (`__device__` functions callable from user kernels)
+- **Batch APIs** (host-callable launchers that process arrays of queries)
+
+Most query families provide both point and batch variants:
+
+| Query Family | Point API | Batch API |
+|--------------|-----------|-----------|
+| Winding number (exact) | `gwn_winding_number_point_bvh_exact` | `gwn_compute_winding_number_batch_bvh_exact` |
+| Winding number (Taylor) | `gwn_winding_number_point_bvh_taylor` | `gwn_compute_winding_number_batch_bvh_taylor` |
+| Winding gradient (Taylor) | `gwn_winding_gradient_point_bvh_taylor` | `gwn_compute_winding_gradient_batch_bvh_taylor` |
+| Unsigned distance | `gwn_unsigned_distance_point_bvh` | `gwn_compute_unsigned_distance_batch_bvh` |
+| Signed distance | `gwn_signed_distance_point_bvh` | `gwn_compute_signed_distance_batch_bvh` |
+| Boundary edge distance | `gwn_unsigned_boundary_edge_distance_point_bvh` | `gwn_compute_unsigned_boundary_edge_distance_batch_bvh` |
+| Ray first-hit | `gwn_ray_first_hit_bvh` | `gwn_compute_ray_first_hit_batch_bvh` |
+| Harnack trace | `gwn_harnack_trace_ray_bvh_taylor` | `gwn_compute_harnack_trace_batch_bvh_taylor` |
+| Hybrid trace | `gwn_hybrid_trace_ray_bvh_taylor` | `gwn_compute_hybrid_trace_batch_bvh_taylor` |
+
+Point APIs give you fine-grained control in custom kernels; batch APIs provide convenient host-side launchers.
+
+#### Example: Point vs. Batch API
+
+```cpp
+// Batch API: host launches kernel for you
+gwn::gwn_compute_winding_number_batch_bvh_exact<4>(
+    geometry.accessor(), topology.accessor(),
+    d_qx.span(), d_qy.span(), d_qz.span(), d_wn.span(), stream);
+
+// Point API: you write the kernel
+__global__ void my_winding_kernel(
+    gwn::gwn_geometry_accessor<float> geom,
+    gwn::gwn_bvh4_topology_accessor<float> topo,
+    float const *qx, float const *qy, float const *qz,
+    float *wn, int n) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < n) {
+        wn[idx] = gwn::gwn_winding_number_point_bvh_exact<4>(
+            geom, topo, qx[idx], qy[idx], qz[idx]);
+    }
+}
+// my_winding_kernel<<<...>>>(geometry.accessor(), topology.accessor(), ...);
+```
+
 ### Loading from Eigen matrices
 
 To load a mesh from an OBJ file, first parse it into Eigen matrices (or use libigl if available):

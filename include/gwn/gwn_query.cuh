@@ -4,8 +4,11 @@
 /// \brief Public query APIs for winding, gradients, distances, ray hits, Harnack tracing, and
 ///        hybrid tracing.
 ///
-/// This header exposes device point queries plus host batch-query launchers
-/// over uploaded geometry and BVH data.
+/// Query operations are available in two forms:
+/// - Device point APIs (`__device__` functions callable from user kernels)
+/// - Batch APIs (host-callable launchers that process arrays of queries)
+///
+/// Most query families provide both point and batch variants for symmetry and flexibility.
 /// Implementation details live in `include/gwn/detail/gwn_query_*_impl.cuh`.
 
 #include <cuda_runtime.h>
