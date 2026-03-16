@@ -73,15 +73,15 @@ These instructions apply to the `smallgwn/` project tree.
 
 ### Query
 - Public surface: `include/gwn/gwn_query.cuh`. Query families provide device point APIs and batch APIs:
-  - **Winding number (exact)**: `gwn_winding_number_point_bvh_exact` / `gwn_compute_winding_number_batch_bvh_exact`
-  - **Winding number (Taylor)**: `gwn_winding_number_point_bvh_taylor<Order>` / `gwn_compute_winding_number_batch_bvh_taylor<Order>`
-  - **Winding gradient (Taylor)**: `gwn_winding_gradient_point_bvh_taylor<Order>` / `gwn_compute_winding_gradient_batch_bvh_taylor<Order>`
-  - **Unsigned distance**: `gwn_unsigned_distance_point_bvh` / `gwn_compute_unsigned_distance_batch_bvh`
-  - **Signed distance**: `gwn_signed_distance_point_bvh<Order>` / `gwn_compute_signed_distance_batch_bvh<Order>`
-  - **Boundary edge distance**: `gwn_unsigned_boundary_edge_distance_point_bvh` / `gwn_compute_unsigned_boundary_edge_distance_batch_bvh`
-  - **Ray first-hit**: `gwn_ray_first_hit_bvh` / `gwn_compute_ray_first_hit_batch_bvh`
-  - **Harnack trace**: `gwn_harnack_trace_ray_bvh_taylor<Order>` / `gwn_compute_harnack_trace_batch_bvh_taylor<Order>`
-  - **Hybrid trace**: `gwn_hybrid_trace_ray_bvh_taylor<Order>` / `gwn_compute_hybrid_trace_batch_bvh_taylor<Order>`
+  - **Winding number (exact)**: `gwn_winding_number_point_bvh_exact<Width,...>` / `gwn_compute_winding_number_batch_bvh_exact<Width,...>`
+  - **Winding number (Taylor)**: `gwn_winding_number_point_bvh_taylor<Order,Width,...>` / `gwn_compute_winding_number_batch_bvh_taylor<Order,Width,...>`
+  - **Winding gradient (Taylor)**: `gwn_winding_gradient_point_bvh_taylor<Order,Width,...>` / `gwn_compute_winding_gradient_batch_bvh_taylor<Order,Width,...>`
+  - **Unsigned distance**: `gwn_unsigned_distance_point_bvh<Width,...>` / `gwn_compute_unsigned_distance_batch_bvh<Width,...>`
+  - **Signed distance**: `gwn_signed_distance_point_bvh<Order,Width,...>` / `gwn_compute_signed_distance_batch_bvh<Order,Width,...>`
+  - **Boundary edge distance**: `gwn_unsigned_boundary_edge_distance_point_bvh<Width,...>` / `gwn_compute_unsigned_boundary_edge_distance_batch_bvh<Width,...>`
+  - **Ray first-hit**: `gwn_ray_first_hit_bvh<Width,...>` / `gwn_compute_ray_first_hit_batch_bvh<Width,...>`
+  - **Harnack trace**: `gwn_harnack_trace_ray_bvh_taylor<Order,Width,...>` / `gwn_compute_harnack_trace_batch_bvh_taylor<Order,Width,...>`
+  - **Hybrid trace**: `gwn_hybrid_trace_ray_bvh_taylor<Order,Width,...>` / `gwn_compute_hybrid_trace_batch_bvh_taylor<Order,Width,...>`
 - Point APIs are `__device__` functions for use in custom kernels; batch APIs are host-callable launchers.
 - Internal math uses `gwn_query_vec3` (no Eigen dependency); public alias `gwn::gwn_vec3<Real>`.
 - Traversal stack capacity: template `StackCapacity` (default `k_gwn_default_traversal_stack_capacity = 64`).
