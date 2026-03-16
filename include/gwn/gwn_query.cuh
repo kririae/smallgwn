@@ -425,6 +425,223 @@ gwn_status gwn_compute_winding_number_batch_bvh_taylor(
     );
 }
 
+/// \brief Compute exact winding numbers for a batch using BVH traversal.
+///
+/// No moment tree or accuracy scale — every leaf is evaluated exactly.
+///
+/// \tparam Width BVH width.
+template <
+    int Width, gwn_real_type Real, gwn_index_type Index = std::uint32_t,
+    int StackCapacity = k_gwn_default_traversal_stack_capacity,
+    typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
+gwn_status gwn_compute_winding_number_batch_bvh_exact(
+    gwn_geometry_accessor<Real, Index> const &geometry,
+    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
+    cuda::std::span<Real const> const query_x, cuda::std::span<Real const> const query_y,
+    cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output,
+    cudaStream_t const stream = gwn_default_stream(), OverflowCallback const &overflow_callback = {}
+) noexcept {
+    static_assert(StackCapacity > 0, "Traversal stack capacity must be positive.");
+
+    if (!geometry.is_valid())
+        return gwn_status::invalid_argument("Geometry accessor contains mismatched span lengths.");
+    if (!bvh.is_valid())
+        return gwn_status::invalid_argument("BVH accessor is invalid.");
+    if (query_x.size() != query_y.size() || query_x.size() != query_z.size())
+        return gwn_status::invalid_argument("Query SoA spans must have identical lengths.");
+    if (query_x.size() != output.size())
+        return gwn_status::invalid_argument("Output span size must match query count.");
+    if (!gwn_span_has_storage(query_x) || !gwn_span_has_storage(query_y) ||
+        !gwn_span_has_storage(query_z) || !gwn_span_has_storage(output)) {
+        return gwn_status::invalid_argument(
+            "Query/output spans must use non-null storage when non-empty."
+        );
+    }
+    if (output.empty())
+        return gwn_status::ok();
+
+    constexpr int k_block_size = detail::k_gwn_default_block_size;
+    return detail::gwn_launch_linear_kernel<k_block_size>(
+        output.size(),
+        detail::gwn_winding_number_batch_bvh_exact_functor<
+            Width, Real, Index, StackCapacity, OverflowCallback>{
+            geometry, bvh, query_x, query_y, query_z, output, overflow_callback
+        },
+        stream
+    );
+}
+
+/// \brief Width-4 convenience wrapper for exact BVH batch winding-number queries.
+template <
+    gwn_real_type Real, gwn_index_type Index = std::uint32_t,
+    int StackCapacity = k_gwn_default_traversal_stack_capacity,
+    typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
+gwn_status gwn_compute_winding_number_batch_bvh_exact(
+    gwn_geometry_accessor<Real, Index> const &geometry,
+    gwn_bvh4_topology_accessor<Real, Index> const &bvh, cuda::std::span<Real const> const query_x,
+    cuda::std::span<Real const> const query_y, cuda::std::span<Real const> const query_z,
+    cuda::std::span<Real> const output, cudaStream_t const stream = gwn_default_stream(),
+    OverflowCallback const &overflow_callback = {}
+) noexcept {
+    return gwn_compute_winding_number_batch_bvh_exact<
+        4, Real, Index, StackCapacity, OverflowCallback>(
+        geometry, bvh, query_x, query_y, query_z, output, stream, overflow_callback
+    );
+}
+
+/// \brief Compute unsigned point-to-mesh distances for a batch.
+///
+/// \tparam Width BVH width.
+template <
+    int Width, gwn_real_type Real, gwn_index_type Index = std::uint32_t,
+    int StackCapacity = k_gwn_default_traversal_stack_capacity,
+    typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
+gwn_status gwn_compute_unsigned_distance_batch_bvh(
+    gwn_geometry_accessor<Real, Index> const &geometry,
+    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
+    gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree,
+    cuda::std::span<Real const> const query_x, cuda::std::span<Real const> const query_y,
+    cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output,
+    Real const culling_band = std::numeric_limits<Real>::infinity(),
+    cudaStream_t const stream = gwn_default_stream(), OverflowCallback const &overflow_callback = {}
+) noexcept {
+    static_assert(StackCapacity > 0, "Traversal stack capacity must be positive.");
+
+    if (!geometry.is_valid())
+        return gwn_status::invalid_argument("Geometry accessor contains mismatched span lengths.");
+    if (!bvh.is_valid())
+        return gwn_status::invalid_argument("BVH accessor is invalid.");
+    if (!aabb_tree.is_valid_for(bvh))
+        return gwn_status::invalid_argument("BVH AABB tree is invalid for the given topology.");
+    if (query_x.size() != query_y.size() || query_x.size() != query_z.size())
+        return gwn_status::invalid_argument("Query SoA spans must have identical lengths.");
+    if (query_x.size() != output.size())
+        return gwn_status::invalid_argument("Output span size must match query count.");
+    if (!gwn_span_has_storage(query_x) || !gwn_span_has_storage(query_y) ||
+        !gwn_span_has_storage(query_z) || !gwn_span_has_storage(output)) {
+        return gwn_status::invalid_argument(
+            "Query/output spans must use non-null storage when non-empty."
+        );
+    }
+    if (output.empty())
+        return gwn_status::ok();
+
+    constexpr int k_block_size = detail::k_gwn_default_block_size;
+    return detail::gwn_launch_linear_kernel<k_block_size>(
+        output.size(),
+        detail::gwn_unsigned_distance_batch_bvh_functor<
+            Width, Real, Index, StackCapacity, OverflowCallback>{
+            geometry, bvh, aabb_tree, query_x, query_y, query_z, output, culling_band,
+            overflow_callback
+        },
+        stream
+    );
+}
+
+/// \brief Width-4 convenience wrapper for batch unsigned distance queries.
+template <
+    gwn_real_type Real, gwn_index_type Index = std::uint32_t,
+    int StackCapacity = k_gwn_default_traversal_stack_capacity,
+    typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
+gwn_status gwn_compute_unsigned_distance_batch_bvh(
+    gwn_geometry_accessor<Real, Index> const &geometry,
+    gwn_bvh4_topology_accessor<Real, Index> const &bvh,
+    gwn_bvh4_aabb_accessor<Real, Index> const &aabb_tree, cuda::std::span<Real const> const query_x,
+    cuda::std::span<Real const> const query_y, cuda::std::span<Real const> const query_z,
+    cuda::std::span<Real> const output,
+    Real const culling_band = std::numeric_limits<Real>::infinity(),
+    cudaStream_t const stream = gwn_default_stream(), OverflowCallback const &overflow_callback = {}
+) noexcept {
+    return gwn_compute_unsigned_distance_batch_bvh<4, Real, Index, StackCapacity, OverflowCallback>(
+        geometry, bvh, aabb_tree, query_x, query_y, query_z, output, culling_band, stream,
+        overflow_callback
+    );
+}
+
+/// \brief Compute signed point-to-mesh distances for a batch using
+///        winding-number sign.
+///
+/// \tparam Order Taylor winding-number order (0, 1, or 2).
+/// \tparam Width BVH width.
+template <
+    int Order, int Width, gwn_real_type Real, gwn_index_type Index = std::uint32_t,
+    int StackCapacity = k_gwn_default_traversal_stack_capacity,
+    typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
+gwn_status gwn_compute_signed_distance_batch_bvh(
+    gwn_geometry_accessor<Real, Index> const &geometry,
+    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
+    gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree,
+    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &moment_tree,
+    cuda::std::span<Real const> const query_x, cuda::std::span<Real const> const query_y,
+    cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output,
+    Real const winding_number_threshold = Real(0.5),
+    Real const culling_band = std::numeric_limits<Real>::infinity(),
+    Real const accuracy_scale = Real(2), cudaStream_t const stream = gwn_default_stream(),
+    OverflowCallback const &overflow_callback = {}
+) noexcept {
+    static_assert(
+        Order == 0 || Order == 1 || Order == 2,
+        "gwn_compute_signed_distance_batch_bvh currently supports Order 0, 1, and 2."
+    );
+    static_assert(StackCapacity > 0, "Traversal stack capacity must be positive.");
+
+    if (!geometry.is_valid())
+        return gwn_status::invalid_argument("Geometry accessor contains mismatched span lengths.");
+    if (!bvh.is_valid())
+        return gwn_status::invalid_argument("BVH accessor is invalid.");
+    if (!aabb_tree.is_valid_for(bvh))
+        return gwn_status::invalid_argument("BVH AABB tree is invalid for the given topology.");
+    if (!moment_tree.is_valid_for(bvh))
+        return gwn_status::invalid_argument("BVH moment tree is invalid for the given topology.");
+    if (query_x.size() != query_y.size() || query_x.size() != query_z.size())
+        return gwn_status::invalid_argument("Query SoA spans must have identical lengths.");
+    if (query_x.size() != output.size())
+        return gwn_status::invalid_argument("Output span size must match query count.");
+    if (!gwn_span_has_storage(query_x) || !gwn_span_has_storage(query_y) ||
+        !gwn_span_has_storage(query_z) || !gwn_span_has_storage(output)) {
+        return gwn_status::invalid_argument(
+            "Query/output spans must use non-null storage when non-empty."
+        );
+    }
+    if (output.empty())
+        return gwn_status::ok();
+
+    constexpr int k_block_size = detail::k_gwn_default_block_size;
+    return detail::gwn_launch_linear_kernel<k_block_size>(
+        output.size(),
+        detail::gwn_signed_distance_batch_bvh_functor<
+            Order, Width, Real, Index, StackCapacity, OverflowCallback>{
+            geometry, bvh, aabb_tree, moment_tree, query_x, query_y, query_z, output,
+            winding_number_threshold, culling_band, accuracy_scale, overflow_callback
+        },
+        stream
+    );
+}
+
+/// \brief Width-4 convenience wrapper for batch signed distance queries.
+template <
+    int Order, gwn_real_type Real, gwn_index_type Index = std::uint32_t,
+    int StackCapacity = k_gwn_default_traversal_stack_capacity,
+    typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
+gwn_status gwn_compute_signed_distance_batch_bvh(
+    gwn_geometry_accessor<Real, Index> const &geometry,
+    gwn_bvh4_topology_accessor<Real, Index> const &bvh,
+    gwn_bvh4_aabb_accessor<Real, Index> const &aabb_tree,
+    gwn_bvh4_moment_accessor<Order, Real, Index> const &moment_tree,
+    cuda::std::span<Real const> const query_x, cuda::std::span<Real const> const query_y,
+    cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output,
+    Real const winding_number_threshold = Real(0.5),
+    Real const culling_band = std::numeric_limits<Real>::infinity(),
+    Real const accuracy_scale = Real(2), cudaStream_t const stream = gwn_default_stream(),
+    OverflowCallback const &overflow_callback = {}
+) noexcept {
+    return gwn_compute_signed_distance_batch_bvh<
+        Order, 4, Real, Index, StackCapacity, OverflowCallback>(
+        geometry, bvh, aabb_tree, moment_tree, query_x, query_y, query_z, output,
+        winding_number_threshold, culling_band, accuracy_scale, stream, overflow_callback
+    );
+}
+
 /// \brief Compute Taylor-approximated winding-number gradient for a single
 ///        query point (\c __device__ only).
 ///

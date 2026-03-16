@@ -1151,3 +1151,161 @@ TEST_F(CudaFixture, sdf_overflow_returns_nan_and_closest_normal_reports_overflow
         static_cast<std::uint8_t>(gwn::gwn_closest_triangle_normal_status::k_overflow)
     );
 }
+
+// ---------------------------------------------------------------------------
+// Unsigned distance batch API tests.
+// ---------------------------------------------------------------------------
+
+TEST_F(CudaFixture, unsigned_distance_batch_matches_point_results) {
+    OctahedronMesh const mesh;
+    SdfTestContext ctx;
+    setup_octahedron_sdf(ctx, mesh);
+    if (!ctx.ready)
+        GTEST_SKIP() << "CUDA unavailable";
+
+    std::vector<Real> qx{0.0f, 2.0f, 0.0f};
+    std::vector<Real> qy{0.0f, 0.0f, 2.0f};
+    std::vector<Real> qz{0.0f, 0.0f, 0.0f};
+    std::size_t const n = qx.size();
+
+    // Reference: point-by-point via kernel.
+    std::vector<Real> ref_results;
+    gpu_unsigned_distance(ctx, qx, qy, qz, ref_results);
+    ASSERT_EQ(ref_results.size(), n);
+
+    // Batch API.
+    gwn::gwn_device_array<Real> d_qx, d_qy, d_qz, d_out;
+    ASSERT_TRUE(d_qx.resize(n).is_ok());
+    ASSERT_TRUE(d_qy.resize(n).is_ok());
+    ASSERT_TRUE(d_qz.resize(n).is_ok());
+    ASSERT_TRUE(d_out.resize(n).is_ok());
+    ASSERT_TRUE(d_qx.copy_from_host(cuda::std::span<Real const>(qx.data(), n)).is_ok());
+    ASSERT_TRUE(d_qy.copy_from_host(cuda::std::span<Real const>(qy.data(), n)).is_ok());
+    ASSERT_TRUE(d_qz.copy_from_host(cuda::std::span<Real const>(qz.data(), n)).is_ok());
+
+    gwn::gwn_status const batch_status = gwn::gwn_compute_unsigned_distance_batch_bvh<Real, Index>(
+        ctx.geometry.accessor(), ctx.bvh.accessor(), ctx.aabb.accessor(), d_qx.span(), d_qy.span(),
+        d_qz.span(), d_out.span()
+    );
+    ASSERT_TRUE(batch_status.is_ok()) << gwn::tests::status_to_debug_string(batch_status);
+    ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+
+    std::vector<Real> batch_results(n, Real(0));
+    ASSERT_TRUE(d_out.copy_to_host(cuda::std::span<Real>(batch_results.data(), n)).is_ok());
+    ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+
+    for (std::size_t i = 0; i < n; ++i)
+        EXPECT_NEAR(batch_results[i], ref_results[i], Real(1e-5f)) << "mismatch at query " << i;
+}
+
+TEST_F(CudaFixture, unsigned_distance_batch_invalid_geometry_returns_error) {
+    gwn::gwn_geometry_accessor<Real, Index> bad_geometry{};
+    gwn::gwn_bvh4_topology_accessor<Real, Index> bvh{};
+    gwn::gwn_bvh4_aabb_accessor<Real, Index> aabb{};
+    cuda::std::span<Real const> empty{};
+    cuda::std::span<Real> output{};
+
+    gwn::gwn_status const status = gwn::gwn_compute_unsigned_distance_batch_bvh<Real, Index>(
+        bad_geometry, bvh, aabb, empty, empty, empty, output
+    );
+    EXPECT_FALSE(status.is_ok());
+}
+
+TEST_F(CudaFixture, unsigned_distance_batch_span_mismatch_returns_error) {
+    OctahedronMesh const mesh;
+    SdfTestContext ctx;
+    setup_octahedron_sdf(ctx, mesh);
+    if (!ctx.ready)
+        GTEST_SKIP() << "CUDA unavailable";
+
+    cuda::std::span<Real const> empty{};
+    Real dummy[2] = {};
+    cuda::std::span<Real> output(dummy, 2);
+
+    // query size=0 but output size=2 → mismatch.
+    gwn::gwn_status const status = gwn::gwn_compute_unsigned_distance_batch_bvh<Real, Index>(
+        ctx.geometry.accessor(), ctx.bvh.accessor(), ctx.aabb.accessor(), empty, empty, empty,
+        output
+    );
+    EXPECT_FALSE(status.is_ok());
+}
+
+// ---------------------------------------------------------------------------
+// Signed distance batch API tests.
+// ---------------------------------------------------------------------------
+
+TEST_F(CudaFixture, signed_distance_batch_matches_point_results) {
+    OctahedronMesh const mesh;
+    SdfTestContext ctx;
+    setup_octahedron_sdf(ctx, mesh);
+    if (!ctx.ready)
+        GTEST_SKIP() << "CUDA unavailable";
+
+    // Interior and exterior query points.
+    std::vector<Real> qx{0.0f, 2.0f, 0.0f};
+    std::vector<Real> qy{0.0f, 0.0f, 2.0f};
+    std::vector<Real> qz{0.0f, 0.0f, 0.0f};
+    std::size_t const n = qx.size();
+
+    // Reference: point-by-point via kernel (order 1, threshold 0.5).
+    std::vector<Real> ref_results;
+    gpu_signed_distance(ctx, qx, qy, qz, ref_results);
+    ASSERT_EQ(ref_results.size(), n);
+
+    // Batch API (order 1).
+    gwn::gwn_device_array<Real> d_qx, d_qy, d_qz, d_out;
+    ASSERT_TRUE(d_qx.resize(n).is_ok());
+    ASSERT_TRUE(d_qy.resize(n).is_ok());
+    ASSERT_TRUE(d_qz.resize(n).is_ok());
+    ASSERT_TRUE(d_out.resize(n).is_ok());
+    ASSERT_TRUE(d_qx.copy_from_host(cuda::std::span<Real const>(qx.data(), n)).is_ok());
+    ASSERT_TRUE(d_qy.copy_from_host(cuda::std::span<Real const>(qy.data(), n)).is_ok());
+    ASSERT_TRUE(d_qz.copy_from_host(cuda::std::span<Real const>(qz.data(), n)).is_ok());
+
+    gwn::gwn_status const batch_status = gwn::gwn_compute_signed_distance_batch_bvh<1, Real, Index>(
+        ctx.geometry.accessor(), ctx.bvh.accessor(), ctx.aabb.accessor(), ctx.data.accessor(),
+        d_qx.span(), d_qy.span(), d_qz.span(), d_out.span(), Real(0.5)
+    );
+    ASSERT_TRUE(batch_status.is_ok()) << gwn::tests::status_to_debug_string(batch_status);
+    ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+
+    std::vector<Real> batch_results(n, Real(0));
+    ASSERT_TRUE(d_out.copy_to_host(cuda::std::span<Real>(batch_results.data(), n)).is_ok());
+    ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+
+    for (std::size_t i = 0; i < n; ++i)
+        EXPECT_NEAR(batch_results[i], ref_results[i], Real(1e-5f)) << "mismatch at query " << i;
+}
+
+TEST_F(CudaFixture, signed_distance_batch_invalid_geometry_returns_error) {
+    gwn::gwn_geometry_accessor<Real, Index> bad_geometry{};
+    gwn::gwn_bvh4_topology_accessor<Real, Index> bvh{};
+    gwn::gwn_bvh4_aabb_accessor<Real, Index> aabb{};
+    gwn::gwn_bvh4_moment_accessor<1, Real, Index> moment{};
+    cuda::std::span<Real const> empty{};
+    cuda::std::span<Real> output{};
+
+    gwn::gwn_status const status = gwn::gwn_compute_signed_distance_batch_bvh<1, Real, Index>(
+        bad_geometry, bvh, aabb, moment, empty, empty, empty, output, Real(0.5)
+    );
+    EXPECT_FALSE(status.is_ok());
+}
+
+TEST_F(CudaFixture, signed_distance_batch_span_mismatch_returns_error) {
+    OctahedronMesh const mesh;
+    SdfTestContext ctx;
+    setup_octahedron_sdf(ctx, mesh);
+    if (!ctx.ready)
+        GTEST_SKIP() << "CUDA unavailable";
+
+    cuda::std::span<Real const> empty{};
+    Real dummy[2] = {};
+    cuda::std::span<Real> output(dummy, 2);
+
+    // query size=0 but output size=2 → mismatch.
+    gwn::gwn_status const status = gwn::gwn_compute_signed_distance_batch_bvh<1, Real, Index>(
+        ctx.geometry.accessor(), ctx.bvh.accessor(), ctx.aabb.accessor(), ctx.data.accessor(),
+        empty, empty, empty, output, Real(0.5)
+    );
+    EXPECT_FALSE(status.is_ok());
+}

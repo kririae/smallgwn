@@ -496,5 +496,26 @@ struct gwn_winding_number_batch_bvh_taylor_functor {
     }
 };
 
+template <
+    int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity,
+    typename OverflowCallback = gwn_traversal_overflow_trap_callback>
+struct gwn_winding_number_batch_bvh_exact_functor {
+    gwn_geometry_accessor<Real, Index> geometry{};
+    gwn_bvh_topology_accessor<Width, Real, Index> bvh{};
+    cuda::std::span<Real const> query_x{};
+    cuda::std::span<Real const> query_y{};
+    cuda::std::span<Real const> query_z{};
+    cuda::std::span<Real> out_winding{};
+    OverflowCallback overflow_callback{};
+
+    __device__ void operator()(std::size_t const query_id) const {
+        out_winding[query_id] = gwn_winding_number_point_bvh_exact_impl<
+            Width, Real, Index, StackCapacity, OverflowCallback>(
+            geometry, bvh, query_x[query_id], query_y[query_id], query_z[query_id],
+            overflow_callback
+        );
+    }
+};
+
 } // namespace detail
 } // namespace gwn

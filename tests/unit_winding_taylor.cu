@@ -755,3 +755,90 @@ TEST_F(CudaFixture, taylor_empty_query_returns_ok) {
     // Empty accessor is invalid geometry, so this correctly returns error.
     EXPECT_FALSE(status.is_ok());
 }
+
+// ---------------------------------------------------------------------------
+// Exact winding number batch API tests.
+// ---------------------------------------------------------------------------
+
+TEST_F(CudaFixture, exact_batch_winding_matches_point_results) {
+    // Build octahedron topology (no AABB, no moment needed for exact winding).
+    std::vector<Real> vx{1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+    std::vector<Real> vy{0.0f, 0.0f, 1.0f, -1.0f, 0.0f, 0.0f};
+    std::vector<Real> vz{0.0f, 0.0f, 0.0f, 0.0f, 1.0f, -1.0f};
+    std::vector<Index> i0{0, 2, 1, 3, 2, 1, 3, 0};
+    std::vector<Index> i1{2, 1, 3, 0, 0, 2, 1, 3};
+    std::vector<Index> i2{4, 4, 4, 4, 5, 5, 5, 5};
+
+    gwn::gwn_geometry_object<Real, Index> geometry;
+    gwn::gwn_status const upload_status = gwn::gwn_upload_geometry(
+        geometry, cuda::std::span<Real const>(vx.data(), vx.size()),
+        cuda::std::span<Real const>(vy.data(), vy.size()),
+        cuda::std::span<Real const>(vz.data(), vz.size()),
+        cuda::std::span<Index const>(i0.data(), i0.size()),
+        cuda::std::span<Index const>(i1.data(), i1.size()),
+        cuda::std::span<Index const>(i2.data(), i2.size())
+    );
+    if (upload_status.error() == gwn::gwn_error::cuda_runtime_error)
+        GTEST_SKIP() << "CUDA unavailable";
+    ASSERT_TRUE(upload_status.is_ok());
+
+    gwn::gwn_bvh4_topology_object<Real, Index> bvh;
+    ASSERT_TRUE((gwn::gwn_bvh_topology_build_lbvh<4, Real, Index>(geometry, bvh).is_ok()));
+
+    // Query points: interior (winding ~1) and exterior (winding ~0).
+    std::vector<Real> qx{0.0f, 5.0f};
+    std::vector<Real> qy{0.0f, 5.0f};
+    std::vector<Real> qz{0.0f, 5.0f};
+    std::size_t const n = qx.size();
+
+    gwn::gwn_device_array<Real> d_qx, d_qy, d_qz, d_out;
+    ASSERT_TRUE(d_qx.resize(n).is_ok());
+    ASSERT_TRUE(d_qy.resize(n).is_ok());
+    ASSERT_TRUE(d_qz.resize(n).is_ok());
+    ASSERT_TRUE(d_out.resize(n).is_ok());
+    ASSERT_TRUE(d_qx.copy_from_host(cuda::std::span<Real const>(qx.data(), n)).is_ok());
+    ASSERT_TRUE(d_qy.copy_from_host(cuda::std::span<Real const>(qy.data(), n)).is_ok());
+    ASSERT_TRUE(d_qz.copy_from_host(cuda::std::span<Real const>(qz.data(), n)).is_ok());
+
+    gwn::gwn_status const batch_status =
+        gwn::gwn_compute_winding_number_batch_bvh_exact<Real, Index>(
+            geometry.accessor(), bvh.accessor(), d_qx.span(), d_qy.span(), d_qz.span(), d_out.span()
+        );
+    ASSERT_TRUE(batch_status.is_ok()) << gwn::tests::status_to_debug_string(batch_status);
+    ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+
+    std::vector<Real> results(n, Real(0));
+    ASSERT_TRUE(d_out.copy_to_host(cuda::std::span<Real>(results.data(), n)).is_ok());
+    ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+
+    // Interior query: winding number should be close to 1.
+    EXPECT_NEAR(results[0], Real(1), Real(1e-4f));
+    // Exterior query: winding number should be close to 0.
+    EXPECT_NEAR(results[1], Real(0), Real(1e-4f));
+}
+
+TEST_F(CudaFixture, exact_batch_invalid_geometry_returns_error) {
+    gwn::gwn_geometry_accessor<Real, Index> bad_geometry{};
+    gwn::gwn_bvh4_topology_accessor<Real, Index> bvh{};
+    cuda::std::span<Real const> empty{};
+    cuda::std::span<Real> output{};
+
+    gwn::gwn_status const status = gwn::gwn_compute_winding_number_batch_bvh_exact<Real, Index>(
+        bad_geometry, bvh, empty, empty, empty, output
+    );
+    EXPECT_FALSE(status.is_ok());
+}
+
+TEST_F(CudaFixture, exact_batch_span_mismatch_returns_error) {
+    gwn::gwn_geometry_accessor<Real, Index> geometry{};
+    gwn::gwn_bvh4_topology_accessor<Real, Index> bvh{};
+    cuda::std::span<Real const> empty{};
+    Real dummy[2] = {};
+    cuda::std::span<Real> output(dummy, 2);
+
+    // query_x size=0, output size=2 → mismatch.
+    gwn::gwn_status const status = gwn::gwn_compute_winding_number_batch_bvh_exact<Real, Index>(
+        geometry, bvh, empty, empty, empty, output
+    );
+    EXPECT_FALSE(status.is_ok());
+}

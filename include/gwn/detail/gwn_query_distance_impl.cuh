@@ -609,5 +609,55 @@ __device__ inline Real gwn_signed_distance_point_bvh_impl(
     return dist;
 }
 
+template <
+    int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity,
+    typename OverflowCallback = gwn_traversal_overflow_trap_callback>
+struct gwn_unsigned_distance_batch_bvh_functor {
+    gwn_geometry_accessor<Real, Index> geometry{};
+    gwn_bvh_topology_accessor<Width, Real, Index> bvh{};
+    gwn_bvh_aabb_accessor<Width, Real, Index> aabb_tree{};
+    cuda::std::span<Real const> query_x{};
+    cuda::std::span<Real const> query_y{};
+    cuda::std::span<Real const> query_z{};
+    cuda::std::span<Real> out_distance{};
+    Real culling_band{};
+    OverflowCallback overflow_callback{};
+
+    __device__ void operator()(std::size_t const query_id) const {
+        out_distance[query_id] = gwn_unsigned_distance_point_bvh_impl<
+            Width, Real, Index, StackCapacity, OverflowCallback>(
+            geometry, bvh, aabb_tree, query_x[query_id], query_y[query_id], query_z[query_id],
+            culling_band, overflow_callback
+        );
+    }
+};
+
+template <
+    int Order, int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity,
+    typename OverflowCallback = gwn_traversal_overflow_trap_callback>
+struct gwn_signed_distance_batch_bvh_functor {
+    gwn_geometry_accessor<Real, Index> geometry{};
+    gwn_bvh_topology_accessor<Width, Real, Index> bvh{};
+    gwn_bvh_aabb_accessor<Width, Real, Index> aabb_tree{};
+    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> data_tree{};
+    cuda::std::span<Real const> query_x{};
+    cuda::std::span<Real const> query_y{};
+    cuda::std::span<Real const> query_z{};
+    cuda::std::span<Real> out_distance{};
+    Real winding_number_threshold{};
+    Real culling_band{};
+    Real accuracy_scale{};
+    OverflowCallback overflow_callback{};
+
+    __device__ void operator()(std::size_t const query_id) const {
+        out_distance[query_id] = gwn_signed_distance_point_bvh_impl<
+            Order, Width, Real, Index, StackCapacity, OverflowCallback>(
+            geometry, bvh, aabb_tree, data_tree, query_x[query_id], query_y[query_id],
+            query_z[query_id], winding_number_threshold, culling_band, accuracy_scale,
+            overflow_callback
+        );
+    }
+};
+
 } // namespace detail
 } // namespace gwn
