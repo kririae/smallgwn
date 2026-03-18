@@ -179,3 +179,13 @@ TEST(smallgwn_unit_scene, BlasAccessorDataGet) {
     blas.data = cuda::std::make_tuple(42);
     EXPECT_EQ(blas.get<int>(), 42);
 }
+
+TEST(smallgwn_unit_scene, SceneAccessorDefaultConstructedIsInvalid) {
+    gwn::gwn_scene_accessor<4, Real, Index, gwn::gwn_blas_accessor<4, Real, Index>> scene{};
+    EXPECT_FALSE(scene.is_valid());
+}
+
+TEST(smallgwn_unit_scene, SceneObjectDefaultConstructedHasNoData) {
+    gwn::gwn_scene_object<4, Real, Index, gwn::gwn_blas_accessor<4, Real, Index>> scene{};
+    EXPECT_FALSE(scene.has_data());
+}
