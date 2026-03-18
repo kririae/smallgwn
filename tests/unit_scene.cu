@@ -168,3 +168,14 @@ TEST_F(CudaFixture, SimilarityTransformAABB) {
     EXPECT_NEAR(world.max_y, expected.max_y, Real(1e-6));
     EXPECT_NEAR(world.max_z, expected.max_z, Real(1e-6));
 }
+
+TEST_F(CudaFixture, BlasAccessorValid) {
+    gwn::gwn_blas_accessor<4, Real, Index> empty{};
+    EXPECT_FALSE(empty.is_valid());
+}
+
+TEST(smallgwn_unit_scene, BlasAccessorDataGet) {
+    gwn::gwn_blas_accessor<4, Real, Index, int> blas{};
+    blas.data = cuda::std::make_tuple(42);
+    EXPECT_EQ(blas.get<int>(), 42);
+}
