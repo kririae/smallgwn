@@ -115,7 +115,7 @@ private:
 };
 
 template <gwn_real_type Real, gwn_index_type Index = std::uint32_t> struct gwn_instance_record {
-    Index blas_index{};
+    Index blas_index{gwn_invalid_index<Index>()};
     gwn_similarity_transform<Real> transform{};
 };
 
@@ -140,11 +140,17 @@ struct gwn_scene_accessor {
             return false;
         if (blas_table.empty() || instances.empty())
             return false;
-        if (blas_table.data() == nullptr || instances.data() == nullptr)
+        if (!gwn_span_has_storage(blas_table) || !gwn_span_has_storage(instances))
             return false;
+
+#if defined(__CUDA_ARCH__)
         for (std::size_t i = 0; i < blas_table.size(); ++i)
             if (!blas_table[i].is_valid())
                 return false;
+        for (std::size_t i = 0; i < instances.size(); ++i)
+            if (!gwn_index_in_bounds(instances[i].blas_index, blas_table.size()))
+                return false;
+#endif
         return true;
     }
 };
