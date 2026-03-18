@@ -15,6 +15,82 @@ namespace detail {
 
 template <
     int Width, gwn_real_type Real, gwn_index_type Index, class MortonCode, class BuildBinaryFn>
+gwn_status gwn_bvh_topology_build_from_preprocess_impl(
+    char const *entry_name, gwn_topology_build_preprocess<Real, Index, MortonCode> &preprocess,
+    std::size_t const primitive_count, gwn_bvh_topology_tree_accessor<Width, Real, Index> &topology,
+    gwn_bvh_aabb_tree_accessor<Width, Real, Index> &aabb_tree, BuildBinaryFn &&build_binary_fn,
+    cudaStream_t const stream
+) noexcept {
+    return gwn_try_translate_status(entry_name, [&]() -> gwn_status {
+        gwn_device_array<gwn_binary_node<Index>> binary_nodes{};
+        gwn_device_array<Index> binary_internal_parent{};
+        gwn_device_array<gwn_aabb<Real>> binary_internal_bounds{};
+        Index root_internal_index = gwn_invalid_index<Index>();
+        GWN_RETURN_ON_ERROR(build_binary_fn(
+            preprocess, binary_nodes, binary_internal_parent, binary_internal_bounds,
+            root_internal_index
+        ));
+
+        GWN_ASSERT(
+            preprocess.sorted_primitive_indices.size() == primitive_count,
+            "topology build: sorted primitive index count mismatch"
+        );
+        if (preprocess.sorted_primitive_indices.size() != primitive_count) {
+            return gwn_bvh_internal_error(
+                k_gwn_bvh_phase_topology_build,
+                "Topology build preprocess generated mismatched primitive index count."
+            );
+        }
+        GWN_RETURN_ON_ERROR(gwn_allocate_span(topology.primitive_indices, primitive_count, stream));
+        GWN_RETURN_ON_ERROR(gwn_copy_d2d(
+            topology.primitive_indices,
+            cuda::std::span<Index const>(
+                preprocess.sorted_primitive_indices.data(),
+                preprocess.sorted_primitive_indices.size()
+            ),
+            stream
+        ));
+
+        if (primitive_count == 1) {
+            topology.root_kind = gwn_bvh_child_kind::k_leaf;
+            topology.root_index = Index(0);
+            topology.root_count = Index(1);
+            return gwn_status::ok();
+        }
+        if (!gwn_index_in_bounds(root_internal_index, binary_nodes.size()))
+            return gwn_bvh_internal_error(
+                k_gwn_bvh_phase_topology_build,
+                "Topology build binary stage produced an invalid root index."
+            );
+
+        GWN_RETURN_ON_ERROR((gwn_bvh_topology_build_collapse_binary_wide<Width, Real, Index>(
+            cuda::std::span<gwn_binary_node<Index> const>(binary_nodes.data(), binary_nodes.size()),
+            cuda::std::span<gwn_aabb<Real> const>(
+                binary_internal_bounds.data(), binary_internal_bounds.size()
+            ),
+            primitive_count, topology, root_internal_index, stream
+        )));
+        GWN_ASSERT(
+            !topology.nodes.empty(), "topology build: collapse produced empty wide node array"
+        );
+
+        {
+            Index reorder_root = Index(0);
+            GWN_RETURN_ON_ERROR(
+                (gwn_bvh_topology_reorder_bfs<Width, Index>(topology.nodes, reorder_root, stream))
+            );
+        }
+
+        GWN_RETURN_ON_ERROR(gwn_allocate_span(aabb_tree.nodes, topology.nodes.size(), stream));
+        topology.root_kind = gwn_bvh_child_kind::k_internal;
+        topology.root_index = Index(0);
+        topology.root_count = Index(0);
+        return gwn_status::ok();
+    });
+}
+
+template <
+    int Width, gwn_real_type Real, gwn_index_type Index, class MortonCode, class BuildBinaryFn>
 gwn_status gwn_bvh_topology_build_from_binary_impl(
     char const *entry_name, gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> &topology, BuildBinaryFn &&build_binary_fn,
@@ -51,77 +127,14 @@ gwn_status gwn_bvh_topology_build_from_binary_impl(
             GWN_RETURN_ON_ERROR(
                 (gwn_bvh_topology_build_preprocess<MortonCode>(geometry, preprocess, stream))
             );
-
-            gwn_device_array<gwn_binary_node<Index>> binary_nodes{};
-            gwn_device_array<Index> binary_internal_parent{};
-            gwn_device_array<gwn_aabb<Real>> binary_internal_bounds{};
-            Index root_internal_index = gwn_invalid_index<Index>();
-            GWN_RETURN_ON_ERROR(build_binary_fn(
-                preprocess, binary_nodes, binary_internal_parent, binary_internal_bounds,
-                root_internal_index
-            ));
-
-            GWN_ASSERT(
-                preprocess.sorted_primitive_indices.size() == primitive_count,
-                "topology build: sorted primitive index count mismatch"
+            gwn_bvh_aabb_tree_accessor<Width, Real, Index> staging_aabb{};
+            auto cleanup_staging_aabb = gwn_make_scope_exit([&]() noexcept {
+                gwn_release_bvh_aabb_tree_accessor(staging_aabb, stream);
+            });
+            return gwn_bvh_topology_build_from_preprocess_impl<Width, Real, Index, MortonCode>(
+                entry_name, preprocess, primitive_count, staging_topology, staging_aabb,
+                std::forward<BuildBinaryFn>(build_binary_fn), stream
             );
-            if (preprocess.sorted_primitive_indices.size() != primitive_count) {
-                return gwn_bvh_internal_error(
-                    k_gwn_bvh_phase_topology_build,
-                    "Topology build preprocess generated mismatched primitive index count."
-                );
-            }
-            GWN_RETURN_ON_ERROR(
-                gwn_allocate_span(staging_topology.primitive_indices, primitive_count, stream)
-            );
-            GWN_RETURN_ON_ERROR(gwn_copy_d2d(
-                staging_topology.primitive_indices,
-                cuda::std::span<Index const>(
-                    preprocess.sorted_primitive_indices.data(),
-                    preprocess.sorted_primitive_indices.size()
-                ),
-                stream
-            ));
-
-            if (primitive_count == 1) {
-                staging_topology.root_kind = gwn_bvh_child_kind::k_leaf;
-                staging_topology.root_index = Index(0);
-                staging_topology.root_count = Index(1);
-                return gwn_status::ok();
-            }
-            if (!gwn_index_in_bounds(root_internal_index, binary_nodes.size()))
-                return gwn_bvh_internal_error(
-                    k_gwn_bvh_phase_topology_build,
-                    "Topology build binary stage produced an invalid root index."
-                );
-
-            GWN_RETURN_ON_ERROR((gwn_bvh_topology_build_collapse_binary_wide<Width, Real, Index>(
-                cuda::std::span<gwn_binary_node<Index> const>(
-                    binary_nodes.data(), binary_nodes.size()
-                ),
-                cuda::std::span<gwn_aabb<Real> const>(
-                    binary_internal_bounds.data(), binary_internal_bounds.size()
-                ),
-                primitive_count, staging_topology, root_internal_index, stream
-            )));
-            GWN_ASSERT(
-                !staging_topology.nodes.empty(),
-                "topology build: collapse produced empty wide node array"
-            );
-
-            {
-                Index reorder_root = Index(0);
-                GWN_RETURN_ON_ERROR(
-                    (gwn_bvh_topology_reorder_bfs<Width, Index>(
-                        staging_topology.nodes, reorder_root, stream
-                    ))
-                );
-            }
-
-            staging_topology.root_kind = gwn_bvh_child_kind::k_internal;
-            staging_topology.root_index = Index(0);
-            staging_topology.root_count = Index(0);
-            return gwn_status::ok();
         };
 
         return gwn_replace_accessor_with_staging(
