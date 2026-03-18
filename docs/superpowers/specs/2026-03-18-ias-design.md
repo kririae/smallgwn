@@ -186,7 +186,12 @@ public:
     /// Produce a base accessor (no DataTrees).
     gwn_blas_accessor<Width, Real, Index> accessor() const noexcept;
 
-    /// Const-ref accessors for individual components.
+    /// Mutable sub-object accessors (for build functions to populate).
+    gwn_geometry_object<Real, Index> &geometry() noexcept;
+    gwn_bvh_topology_tree_object<Width, Real, Index> &topology() noexcept;
+    gwn_bvh_aabb_tree_object<Width, Real, Index> &aabb() noexcept;
+
+    /// Const sub-object accessors.
     gwn_geometry_object<Real, Index> const &geometry() const noexcept;
     gwn_bvh_topology_tree_object<Width, Real, Index> const &topology() const noexcept;
     gwn_bvh_aabb_tree_object<Width, Real, Index> const &aabb() const noexcept;
@@ -195,6 +200,11 @@ public:
     // Rule of Five: move, swap, destructor
 };
 ```
+
+`gwn_blas_object` is a convenience bundle; users populate it by accessing
+sub-objects directly (e.g. `blas.geometry()` for geometry upload,
+`blas.topology()` and `blas.aabb()` for facade build), matching the existing
+pattern where sub-objects are built individually.
 
 ### 4.4 Instance Record
 
@@ -325,7 +335,7 @@ gwn_status gwn_bvh_topology_build_from_preprocess_impl(
     gwn_bvh_topology_tree_accessor<Width, Real, Index> &topology,
     gwn_bvh_aabb_tree_accessor<Width, Real, Index> &aabb_tree,
     BuildBinaryFn &&build_binary_fn,
-    cudaStream_t stream) noexcept;
+    cudaStream_t const stream) noexcept;
 ```
 
 **Note on `aabb_tree` parameter:** This function writes **leaf-level AABBs** from
@@ -532,11 +542,15 @@ gwn_ray_first_hit(AccelT const &accel, ...) noexcept {
 
 ### 6.3 Two-Level Traversal (Scene Path)
 
-The scene ray traversal uses two separate stacks:
+The scene ray traversal allocates only an IAS-level stack. The BLAS stack is
+allocated inside each `gwn_ray_first_hit_bvh_impl` call (as a local array in the
+existing implementation). Total per-thread stack memory is
+`2 × StackCapacity × sizeof(Index)` (one IAS, one BLAS nested inside each
+`_bvh_impl` call).
 
 ```cpp
-Index ias_stack[StackCapacity];   // IAS node indices
-Index blas_stack[StackCapacity];  // BLAS node indices (reused per instance)
+Index ias_stack[StackCapacity];   // IAS node indices (scene-level)
+// BLAS stack lives inside gwn_ray_first_hit_bvh_impl (per-instance call)
 ```
 
 **Algorithm (ray first-hit):**
@@ -742,6 +756,8 @@ with a `gwn_blas_accessor` or `gwn_scene_accessor`.
 | `UnifiedAPI_ScenePath` | `gwn_ray_first_hit(scene_accessor, ...)` returns correct result |
 | `UnifiedBatch_BlasPath` | `gwn_compute_ray_first_hit_batch(blas, ...)` matches old API |
 | `UnifiedBatch_ScenePath` | `gwn_compute_ray_first_hit_batch(scene, ...)` multi-instance batch |
+| `UnifiedBatchWinding_ScenePath` | `gwn_compute_winding_number_batch(scene, ...)` multi-instance winding |
+| `SceneUpdateBlasTable` | Rebuild one BLAS, call `gwn_scene_update_blas_table`, verify queries |
 
 ### Integration Tests (Future)
 
