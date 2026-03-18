@@ -13,4 +13,5 @@
 #include "gwn_geometry.cuh"
 #include "gwn_kernel_utils.cuh"
 #include "gwn_query.cuh"
+#include "gwn_scene.cuh"
 #include "gwn_utils.cuh"
