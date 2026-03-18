@@ -58,7 +58,7 @@ gwn::gwn_aabb<Real> compute_expected_aabb(
 
 } // namespace
 
-TEST(smallgwn_unit_scene, SimilarityTransformIdentity) {
+TEST_F(CudaFixture, SimilarityTransformIdentity) {
     auto const transform = gwn::gwn_similarity_transform<Real>::identity();
 
     std::array<Real, 3> const point{{Real(1.5), Real(-2.0), Real(0.25)}};
@@ -86,7 +86,7 @@ TEST(smallgwn_unit_scene, SimilarityTransformIdentity) {
     EXPECT_NEAR(world.max_z, local.max_z, Real(1e-6));
 }
 
-TEST(smallgwn_unit_scene, SimilarityTransformInverse) {
+TEST_F(CudaFixture, SimilarityTransformInverse) {
     gwn::gwn_similarity_transform<Real> transform{};
     transform.rotation[0][0] = Real(0);
     transform.rotation[0][1] = Real(-1);
@@ -122,7 +122,7 @@ TEST(smallgwn_unit_scene, SimilarityTransformInverse) {
     EXPECT_NEAR(recovered_direction[2], local_direction[2], Real(1e-6));
 }
 
-TEST(smallgwn_unit_scene, SimilarityTransformAABB) {
+TEST_F(CudaFixture, SimilarityTransformAABB) {
     gwn::gwn_similarity_transform<Real> transform{};
     transform.rotation[0][0] = Real(0);
     transform.rotation[0][1] = Real(-1);
