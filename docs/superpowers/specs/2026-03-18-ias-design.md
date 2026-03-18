@@ -146,10 +146,28 @@ struct gwn_blas_accessor {
     cuda::std::tuple<DataTrees...>                       data;
 
     /// Type-safe extraction from data tuple.
+    /// static_assert fires with a clear message if T is not in DataTrees.
     template <typename T>
-    __host__ __device__ constexpr T const &get() const noexcept;
+    __host__ __device__ constexpr T const &get() const noexcept {
+        static_assert((std::is_same_v<T, DataTrees> || ...),
+                      "Requested type T is not present in DataTrees pack.");
+        return cuda::std::get<T>(data);
+    }
 
     __host__ __device__ constexpr bool is_valid() const noexcept;
+};
+```
+
+**Constructing a BLAS accessor with DataTrees** (e.g. for Taylor queries):
+
+```cpp
+// From individual objects:
+auto base = blas_object.accessor();  // gwn_blas_accessor<4, float, uint32_t>
+
+// Manually construct accessor with moment tree:
+gwn_blas_accessor<4, float, uint32_t, gwn_bvh_moment_tree_accessor<4, 2, float, uint32_t>> taylor_blas{
+    base.geometry, base.topology, base.aabb,
+    cuda::std::make_tuple(moment_tree_object.accessor())
 };
 ```
 
@@ -159,13 +177,19 @@ struct gwn_blas_accessor {
 /// RAII owning container for a single-mesh BVH (geometry + topology + AABB).
 /// Does not own DataTrees; those are managed separately.
 template <int Width, gwn_real_type Real, gwn_index_type Index>
-struct gwn_blas_object : gwn_noncopyable, gwn_stream_mixin {
-    gwn_geometry_object<Real, Index>              geometry_;
-    gwn_bvh_topology_tree_object<Width, Real, Index> topology_;
-    gwn_bvh_aabb_tree_object<Width, Real, Index>  aabb_;
+class gwn_blas_object final : public gwn_noncopyable, public gwn_stream_mixin {
+    gwn_geometry_object<Real, Index>                  geometry_;
+    gwn_bvh_topology_tree_object<Width, Real, Index>  topology_;
+    gwn_bvh_aabb_tree_object<Width, Real, Index>      aabb_;
 
+public:
     /// Produce a base accessor (no DataTrees).
     gwn_blas_accessor<Width, Real, Index> accessor() const noexcept;
+
+    /// Const-ref accessors for individual components.
+    gwn_geometry_object<Real, Index> const &geometry() const noexcept;
+    gwn_bvh_topology_tree_object<Width, Real, Index> const &topology() const noexcept;
+    gwn_bvh_aabb_tree_object<Width, Real, Index> const &aabb() const noexcept;
 
     bool has_data() const noexcept;
     // Rule of Five: move, swap, destructor
@@ -195,6 +219,8 @@ struct gwn_scene_accessor {
     cuda::std::span<BlasT const>                               blas_table;
     cuda::std::span<gwn_instance_record<Real, Index> const>    instances;
 
+    /// Validates: ias_topology.is_valid(), ias_aabb.is_valid_for(ias_topology),
+    /// !blas_table.empty(), !instances.empty(), and all blas_table[i].is_valid().
     __host__ __device__ constexpr bool is_valid() const noexcept;
 };
 ```
@@ -204,12 +230,13 @@ struct gwn_scene_accessor {
 ```cpp
 template <int Width, gwn_real_type Real, gwn_index_type Index,
           typename BlasT>
-struct gwn_scene_object : gwn_noncopyable, gwn_stream_mixin {
+class gwn_scene_object final : public gwn_noncopyable, public gwn_stream_mixin {
     gwn_bvh_topology_tree_object<Width, Real, Index>           ias_topology_;
     gwn_bvh_aabb_tree_object<Width, Real, Index>               ias_aabb_;
     gwn_device_array<BlasT>                                    blas_table_;
     gwn_device_array<gwn_instance_record<Real, Index>>         instances_;
 
+public:
     gwn_scene_accessor<Width, Real, Index, BlasT> accessor() const noexcept;
     bool has_data() const noexcept;
     // Rule of Five: move, swap, destructor
@@ -228,6 +255,23 @@ template <typename T> inline constexpr bool is_scene_accessor_v = /* ... */;
 /// True if AccelT is any traversable type (blas or scene).
 template <typename T> inline constexpr bool is_traversable_v =
     is_blas_accessor_v<T> || is_scene_accessor_v<T>;
+
+/// Extract Width, Real, Index from any traversable AccelT.
+template <typename AccelT> struct gwn_accel_traits;  // primary: undefined
+
+template <int W, gwn_real_type R, gwn_index_type I, typename... D>
+struct gwn_accel_traits<gwn_blas_accessor<W, R, I, D...>> {
+    static constexpr int Width = W;
+    using Real  = R;
+    using Index = I;
+};
+
+template <int W, gwn_real_type R, gwn_index_type I, typename B>
+struct gwn_accel_traits<gwn_scene_accessor<W, R, I, B>> {
+    static constexpr int Width = W;
+    using Real  = R;
+    using Index = I;
+};
 ```
 
 ### 4.8 Convenience Aliases (Width=4)
@@ -284,6 +328,12 @@ gwn_status gwn_bvh_topology_build_from_preprocess_impl(
     cudaStream_t stream) noexcept;
 ```
 
+**Note on `aabb_tree` parameter:** This function writes **leaf-level AABBs** from
+`preprocess.sorted_primitive_aabbs` as part of topology setup. This is distinct
+from the bottom-up AABB refit (`gwn_run_refit_pass`), which propagates leaf AABBs
+upward. The leaf AABB write is source-specific data that feeds into the
+source-agnostic bottom-up propagation.
+
 Existing mesh build paths become: validate geometry → fill preprocess → call
 `from_preprocess_impl`. Old public functions are preserved as wrappers.
 
@@ -296,19 +346,21 @@ gwn_status gwn_scene_build_lbvh(
     cuda::std::span<BlasT const> const blas_table,
     cuda::std::span<gwn_instance_record<Real, Index> const> const instances,
     gwn_scene_object<Width, Real, Index, BlasT> &scene,
-    cudaStream_t stream) noexcept;
+    cudaStream_t const stream = gwn_default_stream()) noexcept;
 
 template <int Width, gwn_real_type Real, gwn_index_type Index, typename BlasT>
 gwn_status gwn_scene_build_hploc(
     cuda::std::span<BlasT const> const blas_table,
     cuda::std::span<gwn_instance_record<Real, Index> const> const instances,
     gwn_scene_object<Width, Real, Index, BlasT> &scene,
-    cudaStream_t stream) noexcept;
+    cudaStream_t const stream = gwn_default_stream()) noexcept;
 ```
 
 **IAS preprocessing** (Stage 1 for instances):
 
-1. For each instance: read BLAS root AABB → apply `transform_aabb` → world AABB.
+1. **Validate** `blas_index` bounds: verify all `instances[i].blas_index < blas_table.size()`.
+   Return `gwn_status::invalid_argument` on out-of-bounds.
+2. For each instance: read BLAS root AABB → apply `transform_aabb` → world AABB.
 2. Compute centroid from world AABB.
 3. Morton encode centroids.
 4. Radix sort by Morton code.
@@ -324,8 +376,14 @@ template <int Width, gwn_real_type Real, gwn_index_type Index, typename BlasT>
 gwn_status gwn_scene_refit_transforms(
     cuda::std::span<gwn_instance_record<Real, Index> const> const updated_instances,
     gwn_scene_object<Width, Real, Index, BlasT> &scene,
-    cudaStream_t stream) noexcept;
+    cudaStream_t const stream = gwn_default_stream()) noexcept;
 ```
+
+**Ownership semantics:** `gwn_scene_object` owns internal copies of `blas_table`
+and `instances`. `gwn_scene_build_*` copies the input spans into the scene's
+internal storage. `gwn_scene_refit_transforms` copies `updated_instances` into
+`scene.instances_`, then recomputes IAS AABBs. After refit,
+`scene.accessor().instances` reflects the updated data.
 
 This is a standalone refit (not using `gwn_run_refit_pass`) because:
 - IAS AABB refit from instances is simpler than the mesh AABB refit
@@ -341,6 +399,36 @@ The refit:
 
 **Future (v2):** generalise `gwn_run_refit_pass` via `Traits::source_type` to
 unify mesh and IAS AABB refit into a single code path.
+
+### 5.4 Lifetime & Invalidation Rules
+
+**BLAS objects must outlive the scene.** The scene's `blas_table_` stores
+`gwn_blas_accessor` values containing `cuda::std::span` members that point into
+the BLAS objects' device memory. If any BLAS object is moved, destroyed, or
+rebuilt (triggering reallocation), the spans become dangling pointers.
+
+**Invalidation triggers:**
+
+| Event | Scene state | Required action |
+|-------|------------|-----------------|
+| BLAS object moved/destroyed | **Invalid** — dangling spans in `blas_table_` | Rebuild scene or call `gwn_scene_update_blas_table` |
+| BLAS geometry/topology rebuilt | **Invalid** — stale topology/AABB pointers | Rebuild scene or call `gwn_scene_update_blas_table` |
+| Instance transforms changed | **Stale AABBs** | Call `gwn_scene_refit_transforms` |
+| BLAS AABB refitted (mesh deformation) | **Valid** — spans still point to same allocations | No action needed (AABB data updated in-place) |
+
+**BLAS table update API (for BLAS rebuild without scene rebuild):**
+
+```cpp
+template <int Width, gwn_real_type Real, gwn_index_type Index, typename BlasT>
+gwn_status gwn_scene_update_blas_table(
+    cuda::std::span<BlasT const> const updated_blas_table,
+    gwn_scene_object<Width, Real, Index, BlasT> &scene,
+    cudaStream_t const stream = gwn_default_stream()) noexcept;
+```
+
+This copies the updated accessor span into `scene.blas_table_` and recomputes
+IAS AABBs (since BLAS root AABBs may have changed). It does **not** rebuild the
+IAS topology.
 
 ---
 
@@ -368,48 +456,73 @@ For BLAS-only queries, `instance_id` remains `gwn_invalid_index<Index>()`.
 
 ### 6.2 Unified Device Point APIs
 
+`Width`, `Real`, and `Index` are extracted from `AccelT` via `gwn_accel_traits`,
+so callers need not specify them redundantly.
+
 ```cpp
 /// Ray first-hit: works for both BLAS and scene.
-template <int Width, gwn_real_type Real, gwn_index_type Index,
-          typename AccelT,
+template <typename AccelT,
           int StackCapacity = k_gwn_default_traversal_stack_capacity,
           typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
-__device__ inline gwn_ray_hit_result<Real, Index>
+__device__ inline gwn_ray_hit_result<
+    typename gwn_accel_traits<AccelT>::Real,
+    typename gwn_accel_traits<AccelT>::Index>
 gwn_ray_first_hit(
     AccelT const &accel,
-    Real ray_ox, Real ray_oy, Real ray_oz,
-    Real ray_dx, Real ray_dy, Real ray_dz,
-    Real t_min = Real(0),
-    Real t_max = std::numeric_limits<Real>::infinity(),
+    typename gwn_accel_traits<AccelT>::Real ray_ox,
+    typename gwn_accel_traits<AccelT>::Real ray_oy,
+    typename gwn_accel_traits<AccelT>::Real ray_oz,
+    typename gwn_accel_traits<AccelT>::Real ray_dx,
+    typename gwn_accel_traits<AccelT>::Real ray_dy,
+    typename gwn_accel_traits<AccelT>::Real ray_dz,
+    typename gwn_accel_traits<AccelT>::Real t_min = typename gwn_accel_traits<AccelT>::Real(0),
+    typename gwn_accel_traits<AccelT>::Real t_max = std::numeric_limits<
+        typename gwn_accel_traits<AccelT>::Real>::infinity(),
     OverflowCallback const &overflow_callback = {}) noexcept;
 
 /// Exact winding number: works for both BLAS and scene.
-template <int Width, gwn_real_type Real, gwn_index_type Index,
-          typename AccelT,
+template <typename AccelT,
           int StackCapacity = k_gwn_default_traversal_stack_capacity,
           typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
-__device__ inline Real
+__device__ inline typename gwn_accel_traits<AccelT>::Real
 gwn_winding_number_point(
     AccelT const &accel,
-    Real qx, Real qy, Real qz,
+    typename gwn_accel_traits<AccelT>::Real qx,
+    typename gwn_accel_traits<AccelT>::Real qy,
+    typename gwn_accel_traits<AccelT>::Real qz,
     OverflowCallback const &overflow_callback = {}) noexcept;
+```
+
+**Usage (no redundant template args):**
+
+```cpp
+auto hit = gwn::gwn_ray_first_hit(scene_acc, ox, oy, oz, dx, dy, dz);
+Real wn  = gwn::gwn_winding_number_point(blas_acc, qx, qy, qz);
 ```
 
 **Internal dispatch via `if constexpr`:**
 
 ```cpp
-template <...>
-__device__ inline gwn_ray_hit_result<Real, Index>
+template <typename AccelT, int StackCapacity, typename OverflowCallback>
+__device__ inline auto
 gwn_ray_first_hit(AccelT const &accel, ...) noexcept {
+    using Traits = gwn_accel_traits<AccelT>;
+    using Real   = typename Traits::Real;
+    using Index  = typename Traits::Index;
+    constexpr int Width = Traits::Width;
+
     if constexpr (is_blas_accessor_v<AccelT>) {
         // Delegate to existing single-mesh traversal (4B stack entries)
-        auto inner = detail::gwn_ray_first_hit_bvh_impl<...>(...);
+        auto inner = detail::gwn_ray_first_hit_bvh_impl<
+            Width, Real, Index, StackCapacity, OverflowCallback>(...);
         // Convert gwn_ray_first_hit_result → gwn_ray_hit_result
-        return {inner.t, gwn_invalid_index<Index>(), inner.primitive_id,
-                inner.u, inner.v, inner.status};
+        return gwn_ray_hit_result<Real, Index>{
+            inner.t, gwn_invalid_index<Index>(), inner.primitive_id,
+            inner.u, inner.v, inner.status};
     } else if constexpr (is_scene_accessor_v<AccelT>) {
         // Two-level traversal (IAS stack + BLAS stack)
-        return detail::gwn_scene_ray_first_hit_impl<...>(...);
+        return detail::gwn_scene_ray_first_hit_impl<
+            Width, Real, Index, StackCapacity, OverflowCallback>(...);
     } else {
         static_assert(is_traversable_v<AccelT>,
             "AccelT must be gwn_blas_accessor or gwn_scene_accessor.");
@@ -469,58 +582,68 @@ return result
 
 **Winding number (exact):**
 
-```
-ias_stack.push(ias_root)
-omega_sum = 0
+For exact winding, every instance must be visited (no far-field
+approximation), so IAS BVH traversal provides no pruning benefit. A flat loop
+over instances is used instead:
 
-while ias_stack not empty:
-    node = ias_stack.pop()
-    for each child:
-        if internal: ias_stack.push(child)
-        if leaf:
-            for each instance_idx in primitive_range:
-                instance = instances[instance_idx]
-                local_q = inverse_transform(query_point, instance.transform)
-                omega_sum += gwn_winding_number_point_bvh_exact_impl(
-                    blas.geometry, blas.topology, local_q)
+```
+omega_sum = 0
+for each instance_idx in [0, instance_count):
+    instance = instances[instance_idx]
+    blas = blas_table[instance.blas_index]
+    local_q = inverse_transform(query_point, instance.transform)
+    omega_sum += gwn_winding_number_point_bvh_exact_impl(
+        blas.geometry, blas.topology, local_q)
 
 return omega_sum
 ```
 
+**Note:** When Taylor scene queries are added in v2, the IAS BVH *will* be used
+for far-field pruning against IAS-level Taylor moments. The flat loop is
+correct and optimal for exact winding only.
+
 ### 6.4 Unified Batch APIs
 
+Batch APIs follow the existing SoA output convention (separate spans per
+output field), consistent with all other batch APIs in `gwn_query.cuh`.
+
 ```cpp
-template <int Width, gwn_real_type Real, gwn_index_type Index,
-          typename AccelT,
+template <typename AccelT,
           int StackCapacity = k_gwn_default_traversal_stack_capacity,
           typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
 gwn_status gwn_compute_ray_first_hit_batch(
     AccelT const &accel,
-    cuda::std::span<Real const> const ray_origin_x,
-    cuda::std::span<Real const> const ray_origin_y,
-    cuda::std::span<Real const> const ray_origin_z,
-    cuda::std::span<Real const> const ray_dir_x,
-    cuda::std::span<Real const> const ray_dir_y,
-    cuda::std::span<Real const> const ray_dir_z,
-    cuda::std::span<gwn_ray_hit_result<Real, Index>> const results,
-    Real t_min = Real(0),
-    Real t_max = std::numeric_limits<Real>::infinity(),
-    cudaStream_t stream = gwn_default_stream(),
+    cuda::std::span<typename gwn_accel_traits<AccelT>::Real const> const ray_origin_x,
+    cuda::std::span<typename gwn_accel_traits<AccelT>::Real const> const ray_origin_y,
+    cuda::std::span<typename gwn_accel_traits<AccelT>::Real const> const ray_origin_z,
+    cuda::std::span<typename gwn_accel_traits<AccelT>::Real const> const ray_dir_x,
+    cuda::std::span<typename gwn_accel_traits<AccelT>::Real const> const ray_dir_y,
+    cuda::std::span<typename gwn_accel_traits<AccelT>::Real const> const ray_dir_z,
+    cuda::std::span<typename gwn_accel_traits<AccelT>::Real> const output_t,
+    cuda::std::span<typename gwn_accel_traits<AccelT>::Index> const output_primitive_id,
+    cuda::std::span<typename gwn_accel_traits<AccelT>::Index> const output_instance_id,
+    typename gwn_accel_traits<AccelT>::Real t_min =
+        typename gwn_accel_traits<AccelT>::Real(0),
+    typename gwn_accel_traits<AccelT>::Real t_max =
+        std::numeric_limits<typename gwn_accel_traits<AccelT>::Real>::infinity(),
+    cudaStream_t const stream = gwn_default_stream(),
     OverflowCallback const &overflow_callback = {}) noexcept;
 
-template <int Width, gwn_real_type Real, gwn_index_type Index,
-          typename AccelT,
+template <typename AccelT,
           int StackCapacity = k_gwn_default_traversal_stack_capacity,
           typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
 gwn_status gwn_compute_winding_number_batch(
     AccelT const &accel,
-    cuda::std::span<Real const> const query_x,
-    cuda::std::span<Real const> const query_y,
-    cuda::std::span<Real const> const query_z,
-    cuda::std::span<Real> const output,
-    cudaStream_t stream = gwn_default_stream(),
+    cuda::std::span<typename gwn_accel_traits<AccelT>::Real const> const query_x,
+    cuda::std::span<typename gwn_accel_traits<AccelT>::Real const> const query_y,
+    cuda::std::span<typename gwn_accel_traits<AccelT>::Real const> const query_z,
+    cuda::std::span<typename gwn_accel_traits<AccelT>::Real> const output,
+    cudaStream_t const stream = gwn_default_stream(),
     OverflowCallback const &overflow_callback = {}) noexcept;
 ```
+
+For BLAS-only batch ray queries, `output_instance_id` is filled with
+`gwn_invalid_index<Index>()`. For scene queries, it contains the instance index.
 
 ### 6.5 Overflow Callback
 
@@ -674,7 +797,7 @@ int main() try {
     // --- Query (unified API) ---
     auto scene_acc = scene.accessor();
     // In a kernel:
-    //   auto hit = gwn::gwn_ray_first_hit<4, float, uint32_t>(
+    //   auto hit = gwn::gwn_ray_first_hit(
     //       scene_acc, ox, oy, oz, dx, dy, dz, 0.f, 1e30f);
     //   if (hit.hit()) {
     //       printf("instance %u, triangle %u, t=%f\n",
