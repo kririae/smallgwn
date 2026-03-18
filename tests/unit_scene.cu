@@ -170,6 +170,11 @@ TEST_F(CudaFixture, SimilarityTransformAABB) {
 }
 
 TEST_F(CudaFixture, BlasAccessorValid) {
+    using Traits = gwn::gwn_accel_traits<gwn::gwn_blas_accessor<4, Real, Index>>;
+    static_assert(Traits::Width == 4);
+    static_assert(std::is_same_v<typename Traits::Real, Real>);
+    static_assert(std::is_same_v<typename Traits::Index, Index>);
+
     gwn::gwn_blas_accessor<4, Real, Index> empty{};
     EXPECT_FALSE(empty.is_valid());
 }

@@ -115,11 +115,15 @@ private:
 
 template <class Accel> struct gwn_accel_traits;
 
-template <int Width, gwn_real_type Real, gwn_index_type Index, class... DataTrees>
-struct gwn_accel_traits<gwn_blas_accessor<Width, Real, Index, DataTrees...>> {
-    using real_type = Real;
-    using index_type = Index;
-    static constexpr int k_width = Width;
+template <int W, gwn_real_type R, gwn_index_type I, class... DataTrees>
+struct gwn_accel_traits<gwn_blas_accessor<W, R, I, DataTrees...>> {
+    using Real = R;
+    using Index = I;
+    static constexpr int Width = W;
+
+    using real_type = R;
+    using index_type = I;
+    static constexpr int k_width = W;
 };
 
 template <class T> struct is_blas_accessor : std::false_type {};
