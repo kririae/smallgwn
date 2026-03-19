@@ -227,6 +227,18 @@ gwn_status gwn_scene_build_preprocess(
         )
     );
 
+    unsigned int host_error_flag = 0;
+    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemcpyAsync(
+        &host_error_flag, error_flag_device.data(), sizeof(unsigned int), cudaMemcpyDeviceToHost,
+        stream
+    )));
+    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaStreamSynchronize(stream)));
+    if (host_error_flag != 0) {
+        return gwn_bvh_internal_error(
+            k_gwn_scene_phase_preprocess, "Failed to compute BLAS or instance bounds on device."
+        );
+    }
+
     gwn_device_array<Real> axis_min{};
     gwn_device_array<Real> axis_max{};
     gwn_device_array<std::uint8_t> reduce_temp{};
@@ -276,18 +288,6 @@ gwn_status gwn_scene_build_preprocess(
             axis_min, axis_max, reduce_temp, ignored, scene_max_z, stream
         )
     );
-
-    unsigned int host_error_flag = 0;
-    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemcpyAsync(
-        &host_error_flag, error_flag_device.data(), sizeof(unsigned int), cudaMemcpyDeviceToHost,
-        stream
-    )));
-    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaStreamSynchronize(stream)));
-    if (host_error_flag != 0) {
-        return gwn_bvh_internal_error(
-            k_gwn_scene_phase_preprocess, "Failed to compute BLAS or instance bounds on device."
-        );
-    }
 
     auto const safe_inv = [](Real const lo, Real const hi) noexcept {
         return (hi > lo) ? Real(1) / (hi - lo) : Real(1);

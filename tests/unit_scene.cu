@@ -406,6 +406,90 @@ TEST(smallgwn_unit_scene, SceneObjectDefaultConstructedHasNoData) {
     EXPECT_FALSE(scene.has_data());
 }
 
+TEST(smallgwn_unit_scene, SceneBuildRejectsInvalidBlasAccessor) {
+    std::array<gwn::gwn_blas_accessor<4, Real, Index>, 1> const blas_table{
+        gwn::gwn_blas_accessor<4, Real, Index>{}
+    };
+    std::array<gwn::gwn_instance_record<Real, Index>, 1> instances{};
+    instances[0].blas_index = Index(0);
+
+    gwn::gwn_scene_object<4, Real, Index, gwn::gwn_blas_accessor<4, Real, Index>> scene{};
+    gwn::gwn_status const status = gwn::gwn_scene_build_lbvh<4, Real, Index>(
+        cuda::std::span<gwn::gwn_blas_accessor<4, Real, Index> const>(
+            blas_table.data(), blas_table.size()
+        ),
+        cuda::std::span<gwn::gwn_instance_record<Real, Index> const>(
+            instances.data(), instances.size()
+        ),
+        scene
+    );
+
+    EXPECT_EQ(status.error(), gwn::gwn_error::invalid_argument);
+}
+
+TEST_F(CudaFixture, SceneBuildRejectsOutOfRangeBlasIndex) {
+    gwn::tests::SingleTriangleMesh mesh{};
+    TestBlasStorage const blas = build_test_blas(
+        std::vector<Real>(mesh.vx.begin(), mesh.vx.end()),
+        std::vector<Real>(mesh.vy.begin(), mesh.vy.end()),
+        std::vector<Real>(mesh.vz.begin(), mesh.vz.end()),
+        std::vector<Index>(mesh.i0.begin(), mesh.i0.end()),
+        std::vector<Index>(mesh.i1.begin(), mesh.i1.end()),
+        std::vector<Index>(mesh.i2.begin(), mesh.i2.end())
+    );
+
+    std::array<gwn::gwn_blas_accessor<4, Real, Index>, 1> const blas_table{blas.accessor()};
+    std::array<gwn::gwn_instance_record<Real, Index>, 1> instances{};
+    instances[0].blas_index = Index(1);
+
+    gwn::gwn_scene_object<4, Real, Index, gwn::gwn_blas_accessor<4, Real, Index>> scene{};
+    gwn::gwn_status const status = gwn::gwn_scene_build_hploc<4, Real, Index>(
+        cuda::std::span<gwn::gwn_blas_accessor<4, Real, Index> const>(
+            blas_table.data(), blas_table.size()
+        ),
+        cuda::std::span<gwn::gwn_instance_record<Real, Index> const>(
+            instances.data(), instances.size()
+        ),
+        scene
+    );
+
+    EXPECT_EQ(status.error(), gwn::gwn_error::invalid_argument);
+}
+
+TEST_F(CudaFixture, SceneBuildSingleInstanceLeafRoot) {
+    gwn::tests::SingleTriangleMesh mesh{};
+    TestBlasStorage const blas = build_test_blas(
+        std::vector<Real>(mesh.vx.begin(), mesh.vx.end()),
+        std::vector<Real>(mesh.vy.begin(), mesh.vy.end()),
+        std::vector<Real>(mesh.vz.begin(), mesh.vz.end()),
+        std::vector<Index>(mesh.i0.begin(), mesh.i0.end()),
+        std::vector<Index>(mesh.i1.begin(), mesh.i1.end()),
+        std::vector<Index>(mesh.i2.begin(), mesh.i2.end())
+    );
+
+    std::array<gwn::gwn_blas_accessor<4, Real, Index>, 1> const blas_table{blas.accessor()};
+    std::array<gwn::gwn_instance_record<Real, Index>, 1> instances{};
+    instances[0].blas_index = Index(0);
+    instances[0].transform = gwn::gwn_similarity_transform<Real>::identity();
+
+    gwn::gwn_scene_object<4, Real, Index, gwn::gwn_blas_accessor<4, Real, Index>> scene{};
+    gwn::gwn_status const status = gwn::gwn_scene_build_lbvh<4, Real, Index>(
+        cuda::std::span<gwn::gwn_blas_accessor<4, Real, Index> const>(
+            blas_table.data(), blas_table.size()
+        ),
+        cuda::std::span<gwn::gwn_instance_record<Real, Index> const>(
+            instances.data(), instances.size()
+        ),
+        scene
+    );
+
+    ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
+    ASSERT_TRUE(scene.has_data());
+    EXPECT_TRUE(scene.accessor().is_valid());
+    EXPECT_EQ(scene.accessor().ias_topology.root_kind, gwn::gwn_bvh_child_kind::k_leaf);
+    EXPECT_TRUE(scene.accessor().ias_aabb.empty());
+}
+
 TEST_F(CudaFixture, SceneBuildLBVH) {
     expect_scene_build_success([](auto const blas_table, auto const instances, auto &scene) {
         return gwn::gwn_scene_build_lbvh<4, Real, Index>(blas_table, instances, scene);
