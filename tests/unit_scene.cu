@@ -8,6 +8,7 @@
 #include <gwn/gwn.cuh>
 
 #include "test_fixtures.hpp"
+#include "test_harnack_meshes.hpp"
 #include "test_utils.hpp"
 
 using Real = gwn::tests::Real;
@@ -214,6 +215,37 @@ struct unified_scene_ray_functor {
         out_instance_id[i] = hit.instance_id;
         out_u[i] = hit.u;
         out_v[i] = hit.v;
+    }
+};
+
+struct unified_scene_winding_functor {
+    gwn::gwn_scene_accessor<4, Real, Index, gwn::gwn_blas_accessor<4, Real, Index>> scene{};
+    cuda::std::span<Real const> qx{};
+    cuda::std::span<Real const> qy{};
+    cuda::std::span<Real const> qz{};
+    cuda::std::span<Real> out_winding{};
+
+    __device__ void operator()(std::size_t const i) const {
+        out_winding[i] = gwn::gwn_winding_number_point(scene, qx[i], qy[i], qz[i]);
+    }
+};
+
+struct unified_scene_and_blas_winding_functor {
+    gwn::gwn_scene_accessor<4, Real, Index, gwn::gwn_blas_accessor<4, Real, Index>> scene{};
+    gwn::gwn_blas_accessor<4, Real, Index> blas{};
+    cuda::std::span<Real const> scene_qx{};
+    cuda::std::span<Real const> scene_qy{};
+    cuda::std::span<Real const> scene_qz{};
+    cuda::std::span<Real const> blas_qx{};
+    cuda::std::span<Real const> blas_qy{};
+    cuda::std::span<Real const> blas_qz{};
+    cuda::std::span<Real> scene_winding{};
+    cuda::std::span<Real> blas_winding{};
+
+    __device__ void operator()(std::size_t const i) const {
+        scene_winding[i] =
+            gwn::gwn_winding_number_point(scene, scene_qx[i], scene_qy[i], scene_qz[i]);
+        blas_winding[i] = gwn::gwn_winding_number_point(blas, blas_qx[i], blas_qy[i], blas_qz[i]);
     }
 };
 
@@ -2310,4 +2342,421 @@ TEST_F(CudaFixture, SceneRayFirstHitNegativeIntervalInternalRoot) {
     EXPECT_NEAR(hit_t[0], Real(-1), Real(1e-6));
     EXPECT_EQ(hit_primitive_id[0], Index(0));
     EXPECT_EQ(hit_instance_id[0], Index(0));
+}
+
+TEST_F(CudaFixture, SceneWindingExactSingleInstance) {
+    gwn::tests::CubeMesh mesh{};
+    TestBlasStorage const blas = build_test_blas(
+        std::vector<Real>(mesh.vx.begin(), mesh.vx.end()),
+        std::vector<Real>(mesh.vy.begin(), mesh.vy.end()),
+        std::vector<Real>(mesh.vz.begin(), mesh.vz.end()),
+        std::vector<Index>(mesh.i0.begin(), mesh.i0.end()),
+        std::vector<Index>(mesh.i1.begin(), mesh.i1.end()),
+        std::vector<Index>(mesh.i2.begin(), mesh.i2.end())
+    );
+
+    std::array<gwn::gwn_blas_accessor<4, Real, Index>, 1> const blas_table{blas.accessor()};
+    std::array<gwn::gwn_instance_record<Real, Index>, 1> instances{};
+    instances[0].blas_index = Index(0);
+    instances[0].transform = gwn::gwn_similarity_transform<Real>::identity();
+    instances[0].transform.translation[0] = Real(3);
+    instances[0].transform.translation[1] = Real(-2);
+    instances[0].transform.translation[2] = Real(1);
+    instances[0].transform.scale = Real(1.5);
+
+    gwn::gwn_scene_object<4, Real, Index, gwn::gwn_blas_accessor<4, Real, Index>> scene{};
+    ASSERT_TRUE((gwn::gwn_scene_build_lbvh<4, Real, Index>(
+                     cuda::std::span<gwn::gwn_blas_accessor<4, Real, Index> const>(
+                         blas_table.data(), blas_table.size()
+                     ),
+                     cuda::std::span<gwn::gwn_instance_record<Real, Index> const>(
+                         instances.data(), instances.size()
+                     ),
+                     scene
+    )
+                     .is_ok()));
+    ASSERT_EQ(scene.accessor().ias_topology.root_kind, gwn::gwn_bvh_child_kind::k_leaf);
+
+    std::array<std::array<Real, 3>, 2> const local_queries{{
+        {{Real(0), Real(0), Real(0)}},
+        {{Real(3), Real(0), Real(0)}},
+    }};
+    std::array<Real, 2> scene_qx{};
+    std::array<Real, 2> scene_qy{};
+    std::array<Real, 2> scene_qz{};
+    std::array<Real, 2> blas_qx{};
+    std::array<Real, 2> blas_qy{};
+    std::array<Real, 2> blas_qz{};
+    for (std::size_t i = 0; i < local_queries.size(); ++i) {
+        auto const world = apply_point_host(instances[0].transform, local_queries[i]);
+        scene_qx[i] = world[0];
+        scene_qy[i] = world[1];
+        scene_qz[i] = world[2];
+        blas_qx[i] = local_queries[i][0];
+        blas_qy[i] = local_queries[i][1];
+        blas_qz[i] = local_queries[i][2];
+    }
+
+    gwn::gwn_device_array<Real> d_scene_qx, d_scene_qy, d_scene_qz;
+    gwn::gwn_device_array<Real> d_blas_qx, d_blas_qy, d_blas_qz;
+    gwn::gwn_device_array<Real> d_scene_point, d_blas_point, d_scene_batch, d_blas_batch;
+    expect_copy_from_host(
+        d_scene_qx, cuda::std::span<Real const>(scene_qx.data(), scene_qx.size())
+    );
+    expect_copy_from_host(
+        d_scene_qy, cuda::std::span<Real const>(scene_qy.data(), scene_qy.size())
+    );
+    expect_copy_from_host(
+        d_scene_qz, cuda::std::span<Real const>(scene_qz.data(), scene_qz.size())
+    );
+    expect_copy_from_host(d_blas_qx, cuda::std::span<Real const>(blas_qx.data(), blas_qx.size()));
+    expect_copy_from_host(d_blas_qy, cuda::std::span<Real const>(blas_qy.data(), blas_qy.size()));
+    expect_copy_from_host(d_blas_qz, cuda::std::span<Real const>(blas_qz.data(), blas_qz.size()));
+    ASSERT_TRUE(
+        gwn::tests::resize_device_arrays(
+            scene_qx.size(), d_scene_point, d_blas_point, d_scene_batch, d_blas_batch
+        )
+    );
+
+    constexpr int k_block_size = gwn::detail::k_gwn_default_block_size;
+    ASSERT_TRUE((gwn::detail::gwn_launch_linear_kernel<k_block_size>(
+                     scene_qx.size(),
+                     unified_scene_and_blas_winding_functor{
+                         scene.accessor(),
+                         blas.accessor(),
+                         d_scene_qx.span(),
+                         d_scene_qy.span(),
+                         d_scene_qz.span(),
+                         d_blas_qx.span(),
+                         d_blas_qy.span(),
+                         d_blas_qz.span(),
+                         d_scene_point.span(),
+                         d_blas_point.span(),
+                     }
+    )
+                     .is_ok()));
+    ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+
+    ASSERT_TRUE((gwn::gwn_compute_winding_number_batch(
+                     scene.accessor(), d_scene_qx.span(), d_scene_qy.span(), d_scene_qz.span(),
+                     d_scene_batch.span()
+    )
+                     .is_ok()));
+    ASSERT_TRUE((gwn::gwn_compute_winding_number_batch(
+                     blas.accessor(), d_blas_qx.span(), d_blas_qy.span(), d_blas_qz.span(),
+                     d_blas_batch.span()
+    )
+                     .is_ok()));
+    ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+
+    std::array<Real, 2> scene_point{};
+    std::array<Real, 2> blas_point{};
+    std::array<Real, 2> scene_batch{};
+    std::array<Real, 2> blas_batch{};
+    ASSERT_TRUE(d_scene_point
+                    .copy_to_host(cuda::std::span<Real>(scene_point.data(), scene_point.size()))
+                    .is_ok());
+    ASSERT_TRUE(d_blas_point
+                    .copy_to_host(cuda::std::span<Real>(blas_point.data(), blas_point.size()))
+                    .is_ok());
+    ASSERT_TRUE(d_scene_batch
+                    .copy_to_host(cuda::std::span<Real>(scene_batch.data(), scene_batch.size()))
+                    .is_ok());
+    ASSERT_TRUE(d_blas_batch
+                    .copy_to_host(cuda::std::span<Real>(blas_batch.data(), blas_batch.size()))
+                    .is_ok());
+    ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+
+    EXPECT_NEAR(scene_point[0], blas_point[0], Real(1e-4));
+    EXPECT_NEAR(scene_batch[0], blas_batch[0], Real(1e-4));
+    EXPECT_NEAR(scene_point[0], Real(1), Real(1e-4));
+    EXPECT_NEAR(scene_batch[0], Real(1), Real(1e-4));
+    EXPECT_NEAR(scene_point[1], blas_point[1], Real(1e-4));
+    EXPECT_NEAR(scene_batch[1], blas_batch[1], Real(1e-4));
+    EXPECT_NEAR(scene_point[1], Real(0), Real(1e-4));
+    EXPECT_NEAR(scene_batch[1], Real(0), Real(1e-4));
+}
+
+TEST_F(CudaFixture, SceneWindingExactMultiInstance) {
+    gwn::tests::CubeMesh mesh{};
+    TestBlasStorage const blas = build_test_blas(
+        std::vector<Real>(mesh.vx.begin(), mesh.vx.end()),
+        std::vector<Real>(mesh.vy.begin(), mesh.vy.end()),
+        std::vector<Real>(mesh.vz.begin(), mesh.vz.end()),
+        std::vector<Index>(mesh.i0.begin(), mesh.i0.end()),
+        std::vector<Index>(mesh.i1.begin(), mesh.i1.end()),
+        std::vector<Index>(mesh.i2.begin(), mesh.i2.end())
+    );
+
+    std::array<gwn::gwn_blas_accessor<4, Real, Index>, 1> const blas_table{blas.accessor()};
+    std::array<gwn::gwn_instance_record<Real, Index>, 2> instances{};
+    instances[0].blas_index = Index(0);
+    instances[0].transform = gwn::gwn_similarity_transform<Real>::identity();
+    instances[1].blas_index = Index(0);
+    instances[1].transform = gwn::gwn_similarity_transform<Real>::identity();
+
+    gwn::gwn_scene_object<4, Real, Index, gwn::gwn_blas_accessor<4, Real, Index>> scene{};
+    ASSERT_TRUE((gwn::gwn_scene_build_lbvh<4, Real, Index>(
+                     cuda::std::span<gwn::gwn_blas_accessor<4, Real, Index> const>(
+                         blas_table.data(), blas_table.size()
+                     ),
+                     cuda::std::span<gwn::gwn_instance_record<Real, Index> const>(
+                         instances.data(), instances.size()
+                     ),
+                     scene
+    )
+                     .is_ok()));
+    ASSERT_EQ(scene.accessor().ias_topology.root_kind, gwn::gwn_bvh_child_kind::k_internal);
+
+    std::array<Real, 2> const h_qx{Real(0), Real(3)};
+    std::array<Real, 2> const h_qy{Real(0), Real(0)};
+    std::array<Real, 2> const h_qz{Real(0), Real(0)};
+
+    gwn::gwn_device_array<Real> d_qx, d_qy, d_qz, d_point, d_batch;
+    expect_copy_from_host(d_qx, cuda::std::span<Real const>(h_qx.data(), h_qx.size()));
+    expect_copy_from_host(d_qy, cuda::std::span<Real const>(h_qy.data(), h_qy.size()));
+    expect_copy_from_host(d_qz, cuda::std::span<Real const>(h_qz.data(), h_qz.size()));
+    ASSERT_TRUE(gwn::tests::resize_device_arrays(h_qx.size(), d_point, d_batch));
+
+    constexpr int k_block_size = gwn::detail::k_gwn_default_block_size;
+    ASSERT_TRUE((gwn::detail::gwn_launch_linear_kernel<k_block_size>(
+                     h_qx.size(),
+                     unified_scene_winding_functor{
+                         scene.accessor(),
+                         d_qx.span(),
+                         d_qy.span(),
+                         d_qz.span(),
+                         d_point.span(),
+                     }
+    )
+                     .is_ok()));
+    ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+
+    ASSERT_TRUE((gwn::gwn_compute_winding_number_batch(
+                     scene.accessor(), d_qx.span(), d_qy.span(), d_qz.span(), d_batch.span()
+    )
+                     .is_ok()));
+    ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+
+    std::array<Real, 2> point{};
+    std::array<Real, 2> batch{};
+    ASSERT_TRUE(d_point.copy_to_host(cuda::std::span<Real>(point.data(), point.size())).is_ok());
+    ASSERT_TRUE(d_batch.copy_to_host(cuda::std::span<Real>(batch.data(), batch.size())).is_ok());
+    ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+
+    EXPECT_NEAR(point[0], Real(2), Real(1e-4));
+    EXPECT_NEAR(batch[0], Real(2), Real(1e-4));
+    EXPECT_NEAR(point[1], Real(0), Real(1e-4));
+    EXPECT_NEAR(batch[1], Real(0), Real(1e-4));
+}
+
+TEST_F(CudaFixture, SceneWindingExactDoesNotRequireBlasAabb) {
+    gwn::tests::CubeMesh mesh{};
+    TestBlasStorage const blas = build_test_blas(
+        std::vector<Real>(mesh.vx.begin(), mesh.vx.end()),
+        std::vector<Real>(mesh.vy.begin(), mesh.vy.end()),
+        std::vector<Real>(mesh.vz.begin(), mesh.vz.end()),
+        std::vector<Index>(mesh.i0.begin(), mesh.i0.end()),
+        std::vector<Index>(mesh.i1.begin(), mesh.i1.end()),
+        std::vector<Index>(mesh.i2.begin(), mesh.i2.end())
+    );
+
+    std::array<gwn::gwn_blas_accessor<4, Real, Index>, 1> const blas_table{blas.accessor()};
+    std::array<gwn::gwn_instance_record<Real, Index>, 1> instances{};
+    instances[0].blas_index = Index(0);
+    instances[0].transform = gwn::gwn_similarity_transform<Real>::identity();
+
+    gwn::gwn_scene_object<4, Real, Index, gwn::gwn_blas_accessor<4, Real, Index>> scene{};
+    ASSERT_TRUE((gwn::gwn_scene_build_lbvh<4, Real, Index>(
+                     cuda::std::span<gwn::gwn_blas_accessor<4, Real, Index> const>(
+                         blas_table.data(), blas_table.size()
+                     ),
+                     cuda::std::span<gwn::gwn_instance_record<Real, Index> const>(
+                         instances.data(), instances.size()
+                     ),
+                     scene
+    )
+                     .is_ok()));
+
+    std::array<gwn::gwn_blas_accessor<4, Real, Index>, 1> overridden_blas_table{blas.accessor()};
+    overridden_blas_table[0].aabb = {};
+    gwn::gwn_device_array<gwn::gwn_blas_accessor<4, Real, Index>> d_overridden_blas_table{};
+    expect_copy_from_host(
+        d_overridden_blas_table, cuda::std::span<gwn::gwn_blas_accessor<4, Real, Index> const>(
+                                     overridden_blas_table.data(), overridden_blas_table.size()
+                                 )
+    );
+
+    auto const built_scene = scene.accessor();
+    auto const overridden_scene =
+        gwn::gwn_scene_accessor<4, Real, Index, gwn::gwn_blas_accessor<4, Real, Index>>{
+            built_scene.ias_topology,
+            built_scene.ias_aabb,
+            d_overridden_blas_table.span(),
+            built_scene.instances,
+        };
+
+    std::array<Real, 1> const h_qx{Real(0)};
+    std::array<Real, 1> const h_qy{Real(0)};
+    std::array<Real, 1> const h_qz{Real(0)};
+
+    gwn::gwn_device_array<Real> d_qx, d_qy, d_qz, d_scene_point, d_blas_point, d_scene_batch,
+        d_blas_batch;
+    expect_copy_from_host(d_qx, cuda::std::span<Real const>(h_qx.data(), h_qx.size()));
+    expect_copy_from_host(d_qy, cuda::std::span<Real const>(h_qy.data(), h_qy.size()));
+    expect_copy_from_host(d_qz, cuda::std::span<Real const>(h_qz.data(), h_qz.size()));
+    ASSERT_TRUE(
+        gwn::tests::resize_device_arrays(
+            h_qx.size(), d_scene_point, d_blas_point, d_scene_batch, d_blas_batch
+        )
+    );
+
+    constexpr int k_block_size = gwn::detail::k_gwn_default_block_size;
+    ASSERT_TRUE((gwn::detail::gwn_launch_linear_kernel<k_block_size>(
+                     h_qx.size(),
+                     unified_scene_and_blas_winding_functor{
+                         overridden_scene,
+                         blas.accessor(),
+                         d_qx.span(),
+                         d_qy.span(),
+                         d_qz.span(),
+                         d_qx.span(),
+                         d_qy.span(),
+                         d_qz.span(),
+                         d_scene_point.span(),
+                         d_blas_point.span(),
+                     }
+    )
+                     .is_ok()));
+    ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+
+    ASSERT_TRUE((gwn::gwn_compute_winding_number_batch(
+                     overridden_scene, d_qx.span(), d_qy.span(), d_qz.span(), d_scene_batch.span()
+    )
+                     .is_ok()));
+    ASSERT_TRUE((gwn::gwn_compute_winding_number_batch(
+                     blas.accessor(), d_qx.span(), d_qy.span(), d_qz.span(), d_blas_batch.span()
+    )
+                     .is_ok()));
+    ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+
+    std::array<Real, 1> scene_point{};
+    std::array<Real, 1> blas_point{};
+    std::array<Real, 1> scene_batch{};
+    std::array<Real, 1> blas_batch{};
+    ASSERT_TRUE(d_scene_point
+                    .copy_to_host(cuda::std::span<Real>(scene_point.data(), scene_point.size()))
+                    .is_ok());
+    ASSERT_TRUE(d_blas_point
+                    .copy_to_host(cuda::std::span<Real>(blas_point.data(), blas_point.size()))
+                    .is_ok());
+    ASSERT_TRUE(d_scene_batch
+                    .copy_to_host(cuda::std::span<Real>(scene_batch.data(), scene_batch.size()))
+                    .is_ok());
+    ASSERT_TRUE(d_blas_batch
+                    .copy_to_host(cuda::std::span<Real>(blas_batch.data(), blas_batch.size()))
+                    .is_ok());
+    ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+
+    EXPECT_NEAR(scene_point[0], blas_point[0], Real(1e-4));
+    EXPECT_NEAR(scene_batch[0], blas_batch[0], Real(1e-4));
+    EXPECT_NEAR(scene_point[0], Real(1), Real(1e-4));
+    EXPECT_NEAR(scene_batch[0], Real(1), Real(1e-4));
+}
+
+TEST_F(CudaFixture, SceneWindingExactNegativeScaleFlipsSign) {
+    gwn::tests::CubeMesh mesh{};
+    TestBlasStorage const blas = build_test_blas(
+        std::vector<Real>(mesh.vx.begin(), mesh.vx.end()),
+        std::vector<Real>(mesh.vy.begin(), mesh.vy.end()),
+        std::vector<Real>(mesh.vz.begin(), mesh.vz.end()),
+        std::vector<Index>(mesh.i0.begin(), mesh.i0.end()),
+        std::vector<Index>(mesh.i1.begin(), mesh.i1.end()),
+        std::vector<Index>(mesh.i2.begin(), mesh.i2.end())
+    );
+
+    std::array<gwn::gwn_blas_accessor<4, Real, Index>, 1> const blas_table{blas.accessor()};
+    std::array<gwn::gwn_instance_record<Real, Index>, 1> instances{};
+    instances[0].blas_index = Index(0);
+    instances[0].transform = gwn::gwn_similarity_transform<Real>::identity();
+    instances[0].transform.scale = Real(-1);
+
+    gwn::gwn_scene_object<4, Real, Index, gwn::gwn_blas_accessor<4, Real, Index>> scene{};
+    ASSERT_TRUE((gwn::gwn_scene_build_lbvh<4, Real, Index>(
+                     cuda::std::span<gwn::gwn_blas_accessor<4, Real, Index> const>(
+                         blas_table.data(), blas_table.size()
+                     ),
+                     cuda::std::span<gwn::gwn_instance_record<Real, Index> const>(
+                         instances.data(), instances.size()
+                     ),
+                     scene
+    )
+                     .is_ok()));
+
+    std::array<Real, 1> const h_qx{Real(0)};
+    std::array<Real, 1> const h_qy{Real(0)};
+    std::array<Real, 1> const h_qz{Real(0)};
+
+    gwn::gwn_device_array<Real> d_qx, d_qy, d_qz, d_scene_point, d_blas_point, d_scene_batch,
+        d_blas_batch;
+    expect_copy_from_host(d_qx, cuda::std::span<Real const>(h_qx.data(), h_qx.size()));
+    expect_copy_from_host(d_qy, cuda::std::span<Real const>(h_qy.data(), h_qy.size()));
+    expect_copy_from_host(d_qz, cuda::std::span<Real const>(h_qz.data(), h_qz.size()));
+    ASSERT_TRUE(
+        gwn::tests::resize_device_arrays(
+            h_qx.size(), d_scene_point, d_blas_point, d_scene_batch, d_blas_batch
+        )
+    );
+
+    constexpr int k_block_size = gwn::detail::k_gwn_default_block_size;
+    ASSERT_TRUE((gwn::detail::gwn_launch_linear_kernel<k_block_size>(
+                     h_qx.size(),
+                     unified_scene_and_blas_winding_functor{
+                         scene.accessor(),
+                         blas.accessor(),
+                         d_qx.span(),
+                         d_qy.span(),
+                         d_qz.span(),
+                         d_qx.span(),
+                         d_qy.span(),
+                         d_qz.span(),
+                         d_scene_point.span(),
+                         d_blas_point.span(),
+                     }
+    )
+                     .is_ok()));
+    ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+
+    ASSERT_TRUE((gwn::gwn_compute_winding_number_batch(
+                     scene.accessor(), d_qx.span(), d_qy.span(), d_qz.span(), d_scene_batch.span()
+    )
+                     .is_ok()));
+    ASSERT_TRUE((gwn::gwn_compute_winding_number_batch(
+                     blas.accessor(), d_qx.span(), d_qy.span(), d_qz.span(), d_blas_batch.span()
+    )
+                     .is_ok()));
+    ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+
+    std::array<Real, 1> scene_point{};
+    std::array<Real, 1> blas_point{};
+    std::array<Real, 1> scene_batch{};
+    std::array<Real, 1> blas_batch{};
+    ASSERT_TRUE(d_scene_point
+                    .copy_to_host(cuda::std::span<Real>(scene_point.data(), scene_point.size()))
+                    .is_ok());
+    ASSERT_TRUE(d_blas_point
+                    .copy_to_host(cuda::std::span<Real>(blas_point.data(), blas_point.size()))
+                    .is_ok());
+    ASSERT_TRUE(d_scene_batch
+                    .copy_to_host(cuda::std::span<Real>(scene_batch.data(), scene_batch.size()))
+                    .is_ok());
+    ASSERT_TRUE(d_blas_batch
+                    .copy_to_host(cuda::std::span<Real>(blas_batch.data(), blas_batch.size()))
+                    .is_ok());
+    ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+
+    EXPECT_NEAR(scene_point[0], -blas_point[0], Real(1e-4));
+    EXPECT_NEAR(scene_batch[0], -blas_batch[0], Real(1e-4));
+    EXPECT_NEAR(scene_point[0], Real(-1), Real(1e-4));
+    EXPECT_NEAR(scene_batch[0], Real(-1), Real(1e-4));
 }

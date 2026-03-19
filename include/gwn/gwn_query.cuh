@@ -406,6 +406,27 @@ gwn_status gwn_compute_ray_first_hit_batch(
 /// Uses BVH traversal and exact solid-angle evaluation at leaf nodes.
 /// Returns the winding number as a scalar value.
 template <
+    class Accel, int StackCapacity = k_gwn_default_traversal_stack_capacity,
+    typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
+    requires(is_traversable_v<Accel>)
+__device__ inline typename gwn_accel_traits<Accel>::real_type gwn_winding_number_point(
+    Accel const &accel, typename gwn_accel_traits<Accel>::real_type const qx,
+    typename gwn_accel_traits<Accel>::real_type const qy,
+    typename gwn_accel_traits<Accel>::real_type const qz,
+    OverflowCallback const &overflow_callback = {}
+) noexcept {
+    static_assert(StackCapacity > 0, "Traversal stack capacity must be positive.");
+    return detail::gwn_winding_number_accel_impl<Accel, StackCapacity, OverflowCallback>(
+        accel, qx, qy, qz, overflow_callback
+    );
+}
+
+/// \brief Compute exact winding number for a single BLAS query point
+///        (\c __device__ only).
+///
+/// Uses BVH traversal and exact solid-angle evaluation at leaf nodes.
+/// Returns the winding number as a scalar value.
+template <
     int Width, gwn_real_type Real, gwn_index_type Index,
     int StackCapacity = k_gwn_default_traversal_stack_capacity,
     typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
@@ -520,6 +541,56 @@ gwn_status gwn_compute_winding_number_batch_bvh_taylor(
         Order, 4, Real, Index, StackCapacity, OverflowCallback>(
         geometry, bvh, data_tree, query_x, query_y, query_z, output, accuracy_scale, stream,
         overflow_callback
+    );
+}
+
+/// \brief Compute exact winding numbers for a batch using BVH traversal.
+///
+/// No moment tree or accuracy scale — every leaf is evaluated exactly.
+///
+/// \tparam Width BVH width.
+template <
+    class Accel, int StackCapacity = k_gwn_default_traversal_stack_capacity,
+    typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
+    requires(is_traversable_v<Accel>)
+gwn_status gwn_compute_winding_number_batch(
+    Accel const &accel,
+    cuda::std::span<typename gwn_accel_traits<Accel>::real_type const> const query_x,
+    cuda::std::span<typename gwn_accel_traits<Accel>::real_type const> const query_y,
+    cuda::std::span<typename gwn_accel_traits<Accel>::real_type const> const query_z,
+    cuda::std::span<typename gwn_accel_traits<Accel>::real_type> const output,
+    cudaStream_t const stream = gwn_default_stream(), OverflowCallback const &overflow_callback = {}
+) noexcept {
+    using Real = typename gwn_accel_traits<Accel>::real_type;
+    static_assert(StackCapacity > 0, "Traversal stack capacity must be positive.");
+
+    if constexpr (is_blas_accessor_v<Accel>) {
+        if (!accel.geometry.is_valid())
+            return gwn_status::invalid_argument(
+                "Geometry accessor contains mismatched span lengths."
+            );
+        if (!accel.topology.is_valid())
+            return gwn_status::invalid_argument("BVH accessor is invalid.");
+    } else {
+        if (!detail::gwn_scene_query_accel_has_basic_data_impl(accel))
+            return gwn_status::invalid_argument("Scene accessor is invalid.");
+    }
+
+    gwn_status const span_status = detail::gwn_validate_unified_winding_number_batch_spans<Real>(
+        query_x, query_y, query_z, output
+    );
+    if (!span_status.is_ok())
+        return span_status;
+    if (output.empty())
+        return gwn_status::ok();
+
+    constexpr int k_block_size = detail::k_gwn_default_block_size;
+    return detail::gwn_launch_linear_kernel<k_block_size>(
+        output.size(),
+        detail::gwn_winding_number_batch_accel_functor<Accel, StackCapacity, OverflowCallback>{
+            accel, query_x, query_y, query_z, output, overflow_callback
+        },
+        stream
     );
 }
 

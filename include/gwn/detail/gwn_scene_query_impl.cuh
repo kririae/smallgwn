@@ -10,6 +10,7 @@
 #include "../gwn_scene.cuh"
 #include "gwn_query_common_impl.cuh"
 #include "gwn_query_ray_impl.cuh"
+#include "gwn_query_winding_impl.cuh"
 
 namespace gwn {
 namespace detail {
@@ -30,6 +31,99 @@ gwn_scene_query_accel_has_basic_data_impl(Accel const &accel) noexcept {
         return accel.ias_topology.is_valid() && accel.ias_aabb.is_valid_for(accel.ias_topology) &&
                !accel.blas_table.empty() && !accel.instances.empty() &&
                gwn_span_has_storage(accel.blas_table) && gwn_span_has_storage(accel.instances);
+    }
+}
+
+template <class BlasAccel, int StackCapacity, typename OverflowCallback>
+[[nodiscard]] __device__ inline gwn_accel_real_t<BlasAccel> gwn_winding_number_blas_unified_impl(
+    BlasAccel const &blas, gwn_accel_real_t<BlasAccel> const qx,
+    gwn_accel_real_t<BlasAccel> const qy, gwn_accel_real_t<BlasAccel> const qz,
+    OverflowCallback const &overflow_callback = {}
+) noexcept {
+    using accel_type = std::remove_cvref_t<BlasAccel>;
+    using Real = gwn_accel_real_t<accel_type>;
+    using Index = gwn_accel_index_t<accel_type>;
+
+    return gwn_winding_number_point_bvh_exact_impl<
+        accel_type::k_width, Real, Index, StackCapacity, OverflowCallback>(
+        blas.geometry, blas.topology, qx, qy, qz, overflow_callback
+    );
+}
+
+template <class BlasAccel>
+[[nodiscard]] __host__ __device__ inline bool
+gwn_winding_query_blas_has_basic_data_impl(BlasAccel const &blas) noexcept {
+    return blas.geometry.is_valid() && blas.topology.is_valid();
+}
+
+template <gwn_real_type Real>
+[[nodiscard]] __host__ __device__ inline Real
+gwn_winding_query_orientation_sign_impl(gwn_similarity_transform<Real> const &transform) noexcept {
+    Real const det_rotation =
+        transform.rotation[0][0] * (transform.rotation[1][1] * transform.rotation[2][2] -
+                                    transform.rotation[1][2] * transform.rotation[2][1]) -
+        transform.rotation[0][1] * (transform.rotation[1][0] * transform.rotation[2][2] -
+                                    transform.rotation[1][2] * transform.rotation[2][0]) +
+        transform.rotation[0][2] * (transform.rotation[1][0] * transform.rotation[2][1] -
+                                    transform.rotation[1][1] * transform.rotation[2][0]);
+    return (det_rotation * transform.scale < Real(0)) ? Real(-1) : Real(1);
+}
+
+template <class SceneAccel, int StackCapacity, typename OverflowCallback>
+[[nodiscard]] __device__ inline gwn_accel_real_t<SceneAccel> gwn_winding_number_scene_exact_impl(
+    SceneAccel const &scene, gwn_accel_real_t<SceneAccel> const qx,
+    gwn_accel_real_t<SceneAccel> const qy, gwn_accel_real_t<SceneAccel> const qz,
+    OverflowCallback const &overflow_callback = {}
+) noexcept {
+    using scene_type = std::remove_cvref_t<SceneAccel>;
+    using Real = gwn_accel_real_t<scene_type>;
+    using Index = gwn_accel_index_t<scene_type>;
+    using blas_type = typename scene_type::blas_type;
+
+    static_assert(StackCapacity > 0, "Traversal stack capacity must be positive.");
+
+    if (!gwn_scene_query_accel_has_basic_data_impl(scene))
+        return Real(0);
+
+    Real winding = Real(0);
+    for (std::size_t instance_offset = 0; instance_offset < scene.instances.size();
+         ++instance_offset) {
+        auto const &instance = scene.instances[instance_offset];
+        if (!gwn_index_in_bounds(instance.blas_index, scene.blas_table.size()))
+            continue;
+
+        blas_type const &blas = scene.blas_table[static_cast<std::size_t>(instance.blas_index)];
+        if (!gwn_winding_query_blas_has_basic_data_impl(blas))
+            continue;
+
+        Real local_qx = Real(0);
+        Real local_qy = Real(0);
+        Real local_qz = Real(0);
+        instance.transform.inverse_apply_point(qx, qy, qz, local_qx, local_qy, local_qz);
+        Real const orientation_sign = gwn_winding_query_orientation_sign_impl(instance.transform);
+        winding += orientation_sign *
+                   gwn_winding_number_blas_unified_impl<blas_type, StackCapacity, OverflowCallback>(
+                       blas, local_qx, local_qy, local_qz, overflow_callback
+                   );
+    }
+
+    return winding;
+}
+
+template <class Accel, int StackCapacity, typename OverflowCallback>
+[[nodiscard]] __device__ inline gwn_accel_real_t<Accel> gwn_winding_number_accel_impl(
+    Accel const &accel, gwn_accel_real_t<Accel> const qx, gwn_accel_real_t<Accel> const qy,
+    gwn_accel_real_t<Accel> const qz, OverflowCallback const &overflow_callback = {}
+) noexcept {
+    using accel_type = std::remove_cvref_t<Accel>;
+    if constexpr (is_blas_accessor_v<accel_type>) {
+        return gwn_winding_number_blas_unified_impl<accel_type, StackCapacity, OverflowCallback>(
+            accel, qx, qy, qz, overflow_callback
+        );
+    } else {
+        return gwn_winding_number_scene_exact_impl<accel_type, StackCapacity, OverflowCallback>(
+            accel, qx, qy, qz, overflow_callback
+        );
     }
 }
 
@@ -336,6 +430,42 @@ inline gwn_status gwn_validate_unified_ray_first_hit_batch_spans(
     }
     return gwn_status::ok();
 }
+
+template <gwn_real_type Real>
+inline gwn_status gwn_validate_unified_winding_number_batch_spans(
+    cuda::std::span<Real const> const query_x, cuda::std::span<Real const> const query_y,
+    cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output
+) noexcept {
+    std::size_t const n = query_x.size();
+    if (query_y.size() != n || query_z.size() != n)
+        return gwn_status::invalid_argument("Query SoA spans must have identical lengths.");
+    if (output.size() != n)
+        return gwn_status::invalid_argument("Output span size must match query count.");
+    if (!gwn_span_has_storage(query_x) || !gwn_span_has_storage(query_y) ||
+        !gwn_span_has_storage(query_z) || !gwn_span_has_storage(output)) {
+        return gwn_status::invalid_argument(
+            "Query/output spans must use non-null storage when non-empty."
+        );
+    }
+    return gwn_status::ok();
+}
+
+template <class Accel, int StackCapacity, typename OverflowCallback>
+struct gwn_winding_number_batch_accel_functor {
+    Accel accel{};
+    cuda::std::span<gwn_accel_real_t<Accel> const> query_x{};
+    cuda::std::span<gwn_accel_real_t<Accel> const> query_y{};
+    cuda::std::span<gwn_accel_real_t<Accel> const> query_z{};
+    cuda::std::span<gwn_accel_real_t<Accel>> out_winding{};
+    OverflowCallback overflow_callback{};
+
+    __device__ void operator()(std::size_t const query_id) const {
+        out_winding[query_id] =
+            gwn_winding_number_accel_impl<Accel, StackCapacity, OverflowCallback>(
+                accel, query_x[query_id], query_y[query_id], query_z[query_id], overflow_callback
+            );
+    }
+};
 
 template <class Accel, int StackCapacity, typename OverflowCallback>
 struct gwn_ray_first_hit_batch_accel_functor {
