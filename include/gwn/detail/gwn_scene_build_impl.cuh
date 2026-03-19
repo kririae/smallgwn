@@ -9,6 +9,7 @@
 #include <limits>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 #include "gwn_bvh_refit_async.cuh"
 #include "gwn_bvh_status_helpers.cuh"
@@ -21,6 +22,8 @@ namespace detail {
 inline constexpr std::string_view k_gwn_scene_phase_build = "scene.build";
 inline constexpr std::string_view k_gwn_scene_phase_preprocess = "scene.build.preprocess";
 inline constexpr std::string_view k_gwn_scene_phase_refit_aabb = "scene.build.refit.aabb";
+inline constexpr std::string_view k_gwn_scene_phase_refit = "scene.refit";
+inline constexpr std::string_view k_gwn_scene_phase_update_blas_table = "scene.update_blas_table";
 
 template <gwn_real_type Real>
 [[nodiscard]] __host__ __device__ inline gwn_aabb<Real> gwn_scene_zero_aabb() noexcept {
@@ -156,6 +159,42 @@ struct gwn_compute_instance_aabbs_functor {
         max_x[instance_id] = world_bounds.max_x;
         max_y[instance_id] = world_bounds.max_y;
         max_z[instance_id] = world_bounds.max_z;
+    }
+};
+
+template <gwn_real_type Real, gwn_index_type Index, class BlasT>
+struct gwn_compute_instance_world_aabbs_functor {
+    cuda::std::span<BlasT const> blas_table{};
+    cuda::std::span<gwn_instance_record<Real, Index> const> instances{};
+    cuda::std::span<gwn_aabb<Real>> instance_aabbs{};
+    unsigned int *error_flag = nullptr;
+
+    __device__ inline void mark_error() const noexcept {
+        if (error_flag != nullptr)
+            atomicExch(error_flag, 1u);
+    }
+
+    __device__ void operator()(std::size_t const instance_id) const {
+        if (instance_id >= instances.size() || instance_id >= instance_aabbs.size()) {
+            mark_error();
+            return;
+        }
+
+        gwn_instance_record<Real, Index> const instance = instances[instance_id];
+        if (!gwn_index_in_bounds(instance.blas_index, blas_table.size())) {
+            mark_error();
+            return;
+        }
+
+        gwn_aabb<Real> local_bounds{};
+        if (!gwn_scene_compute_blas_root_aabb_device(
+                blas_table[static_cast<std::size_t>(instance.blas_index)], local_bounds
+            )) {
+            mark_error();
+            return;
+        }
+
+        instance_aabbs[instance_id] = instance.transform.transform_aabb(local_bounds);
     }
 };
 
@@ -692,6 +731,157 @@ gwn_status gwn_scene_build_ias_aabb(
     return gwn_status::ok();
 }
 
+template <int Width, gwn_real_type Real, gwn_index_type Index, class BlasT>
+gwn_status gwn_scene_refit_ias_aabb_from_owned_data(
+    cuda::std::span<BlasT const> const blas_table,
+    cuda::std::span<gwn_instance_record<Real, Index> const> const instances,
+    gwn_bvh_topology_accessor<Width, Real, Index> const &topology,
+    gwn_bvh_aabb_accessor<Width, Real, Index> &aabb_tree, cudaStream_t const stream
+) noexcept {
+    if (!topology.has_internal_root())
+        return gwn_status::ok();
+    if (topology.primitive_indices.size() != instances.size()) {
+        return gwn_bvh_internal_error(
+            k_gwn_scene_phase_refit_aabb, "IAS primitive order does not match scene instance count."
+        );
+    }
+
+    constexpr int k_block_size = k_gwn_default_block_size;
+    std::size_t const primitive_count = instances.size();
+    gwn_device_array<gwn_aabb<Real>> instance_aabbs{};
+    gwn_device_array<gwn_aabb<Real>> sorted_instance_aabbs{};
+    gwn_device_array<unsigned int> error_flag_device{};
+    GWN_RETURN_ON_ERROR(instance_aabbs.resize(primitive_count, stream));
+    GWN_RETURN_ON_ERROR(sorted_instance_aabbs.resize(primitive_count, stream));
+    GWN_RETURN_ON_ERROR(error_flag_device.resize(1, stream));
+    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
+        cudaMemsetAsync(error_flag_device.data(), 0, sizeof(unsigned int), stream)
+    ));
+
+    GWN_RETURN_ON_ERROR(
+        gwn_launch_linear_kernel<k_block_size>(
+            primitive_count,
+            gwn_compute_instance_world_aabbs_functor<Real, Index, BlasT>{
+                blas_table,
+                instances,
+                instance_aabbs.span(),
+                error_flag_device.data(),
+            },
+            stream
+        )
+    );
+    GWN_RETURN_ON_ERROR(
+        gwn_launch_linear_kernel<k_block_size>(
+            primitive_count,
+            gwn_gather_sorted_aabbs_functor<Real, Index>{
+                cuda::std::span<gwn_aabb<Real> const>(instance_aabbs.data(), instance_aabbs.size()),
+                cuda::std::span<Index const>(
+                    topology.primitive_indices.data(), topology.primitive_indices.size()
+                ),
+                sorted_instance_aabbs.span(),
+            },
+            stream
+        )
+    );
+
+    unsigned int host_error_flag = 0;
+    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemcpyAsync(
+        &host_error_flag, error_flag_device.data(), sizeof(unsigned int), cudaMemcpyDeviceToHost,
+        stream
+    )));
+    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaStreamSynchronize(stream)));
+    if (host_error_flag != 0) {
+        return gwn_bvh_internal_error(
+            k_gwn_scene_phase_refit_aabb,
+            "Failed to recompute instance AABBs from scene-owned BLAS data."
+        );
+    }
+
+    return gwn_scene_build_ias_aabb<Width, Real, Index>(
+        topology,
+        cuda::std::span<gwn_aabb<Real> const>(
+            sorted_instance_aabbs.data(), sorted_instance_aabbs.size()
+        ),
+        aabb_tree, stream
+    );
+}
+
+template <gwn_real_type Real, gwn_index_type Index, class BlasT>
+gwn_status gwn_scene_validate_initialized(
+    gwn_device_array<BlasT> const &blas_table,
+    gwn_device_array<gwn_instance_record<Real, Index>> const &instances,
+    gwn_bvh_topology_accessor<BlasT::k_width, Real, Index> const &topology,
+    gwn_bvh_aabb_accessor<BlasT::k_width, Real, Index> const &aabb
+) noexcept {
+    if (blas_table.empty() || instances.empty() || !topology.is_valid() ||
+        !aabb.is_valid_for(topology)) {
+        return gwn_bvh_invalid_argument(
+            k_gwn_scene_phase_refit, "Scene must be built before refit or BLAS table updates."
+        );
+    }
+    return gwn_status::ok();
+}
+
+template <gwn_real_type Real, gwn_index_type Index, class BlasT>
+gwn_status gwn_scene_validate_refit_inputs(
+    cuda::std::span<gwn_instance_record<Real, Index> const> const updated_instances,
+    std::size_t const current_instance_count, std::size_t const current_blas_count
+) noexcept {
+    if (!gwn_span_has_storage(updated_instances)) {
+        return gwn_bvh_invalid_argument(
+            k_gwn_scene_phase_refit, "Updated instance span has null storage."
+        );
+    }
+    if (updated_instances.size() != current_instance_count) {
+        return gwn_bvh_invalid_argument(
+            k_gwn_scene_phase_refit, "Updated instance count must match the built scene."
+        );
+    }
+    for (std::size_t i = 0; i < updated_instances.size(); ++i) {
+        if (!gwn_index_in_bounds(updated_instances[i].blas_index, current_blas_count)) {
+            return gwn_bvh_invalid_argument(
+                k_gwn_scene_phase_refit,
+                std::format("Updated instance {} has an out-of-range BLAS index.", i)
+            );
+        }
+    }
+    return gwn_status::ok();
+}
+
+template <gwn_real_type Real, gwn_index_type Index, class BlasT>
+gwn_status gwn_scene_validate_blas_table_update_inputs(
+    cuda::std::span<BlasT const> const updated_blas_table,
+    cuda::std::span<gwn_instance_record<Real, Index> const> const scene_instances
+) noexcept {
+    if (!gwn_span_has_storage(updated_blas_table)) {
+        return gwn_bvh_invalid_argument(
+            k_gwn_scene_phase_update_blas_table, "Updated BLAS table span has null storage."
+        );
+    }
+    if (updated_blas_table.empty()) {
+        return gwn_bvh_invalid_argument(
+            k_gwn_scene_phase_update_blas_table, "Updated BLAS table must not be empty."
+        );
+    }
+    for (std::size_t i = 0; i < updated_blas_table.size(); ++i) {
+        if (!updated_blas_table[i].is_valid()) {
+            return gwn_bvh_invalid_argument(
+                k_gwn_scene_phase_update_blas_table,
+                std::format("Updated BLAS table entry {} is invalid.", i)
+            );
+        }
+    }
+    for (std::size_t i = 0; i < scene_instances.size(); ++i) {
+        if (!gwn_index_in_bounds(scene_instances[i].blas_index, updated_blas_table.size())) {
+            return gwn_bvh_invalid_argument(
+                k_gwn_scene_phase_update_blas_table,
+                std::format("Updated BLAS table does not cover scene instance {} BLAS index.", i)
+            );
+        }
+    }
+    return gwn_status::ok();
+}
+
 template <
     int Width, gwn_real_type Real, gwn_index_type Index, class MortonCode, class BlasT,
     class BuildBinaryFn>
@@ -854,6 +1044,66 @@ gwn_status gwn_scene_build_hploc(
     )));
     swap(scene, staging);
     return gwn_status::ok();
+}
+
+template <int Width, gwn_real_type Real, gwn_index_type Index, typename BlasT>
+gwn_status gwn_scene_refit_transforms(
+    cuda::std::span<gwn_instance_record<Real, Index> const> const updated_instances,
+    gwn_scene_object<Width, Real, Index, BlasT> &scene, cudaStream_t const stream
+) noexcept {
+    GWN_RETURN_ON_ERROR((detail::gwn_scene_validate_initialized<Real, Index, BlasT>(
+        scene.blas_table_, scene.instances_, scene.ias_topology_.accessor(),
+        scene.ias_aabb_.accessor()
+    )));
+    GWN_RETURN_ON_ERROR((detail::gwn_scene_validate_refit_inputs<Real, Index, BlasT>(
+        updated_instances, scene.instances_.size(), scene.blas_table_.size()
+    )));
+
+    scene.set_stream(stream);
+    GWN_RETURN_ON_ERROR(scene.instances_.copy_from_host(updated_instances, stream));
+    return detail::gwn_scene_refit_ias_aabb_from_owned_data<Width, Real, Index, BlasT>(
+        cuda::std::span<BlasT const>(scene.blas_table_.data(), scene.blas_table_.size()),
+        cuda::std::span<gwn_instance_record<Real, Index> const>(
+            scene.instances_.data(), scene.instances_.size()
+        ),
+        scene.ias_topology_.accessor(), scene.ias_aabb_.accessor(), stream
+    );
+}
+
+template <int Width, gwn_real_type Real, gwn_index_type Index, typename BlasT>
+gwn_status gwn_scene_update_blas_table(
+    cuda::std::span<BlasT const> const updated_blas_table,
+    gwn_scene_object<Width, Real, Index, BlasT> &scene, cudaStream_t const stream
+) noexcept {
+    GWN_RETURN_ON_ERROR((detail::gwn_scene_validate_initialized<Real, Index, BlasT>(
+        scene.blas_table_, scene.instances_, scene.ias_topology_.accessor(),
+        scene.ias_aabb_.accessor()
+    )));
+
+    std::vector<gwn_instance_record<Real, Index>> host_instances(scene.instances_.size());
+    GWN_RETURN_ON_ERROR(scene.instances_.copy_to_host(
+        cuda::std::span<gwn_instance_record<Real, Index>>(
+            host_instances.data(), host_instances.size()
+        ),
+        stream
+    ));
+    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaStreamSynchronize(stream)));
+    GWN_RETURN_ON_ERROR((detail::gwn_scene_validate_blas_table_update_inputs<Real, Index, BlasT>(
+        updated_blas_table,
+        cuda::std::span<gwn_instance_record<Real, Index> const>(
+            host_instances.data(), host_instances.size()
+        )
+    )));
+
+    scene.set_stream(stream);
+    GWN_RETURN_ON_ERROR(scene.blas_table_.copy_from_host(updated_blas_table, stream));
+    return detail::gwn_scene_refit_ias_aabb_from_owned_data<Width, Real, Index, BlasT>(
+        cuda::std::span<BlasT const>(scene.blas_table_.data(), scene.blas_table_.size()),
+        cuda::std::span<gwn_instance_record<Real, Index> const>(
+            scene.instances_.data(), scene.instances_.size()
+        ),
+        scene.ias_topology_.accessor(), scene.ias_aabb_.accessor(), stream
+    );
 }
 
 } // namespace gwn

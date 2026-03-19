@@ -137,6 +137,20 @@ gwn_status gwn_scene_build_hploc(
     cudaStream_t const stream = gwn_default_stream()
 ) noexcept;
 
+template <int Width, gwn_real_type Real, gwn_index_type Index, typename BlasT>
+gwn_status gwn_scene_refit_transforms(
+    cuda::std::span<gwn_instance_record<Real, Index> const> const updated_instances,
+    gwn_scene_object<Width, Real, Index, BlasT> &scene,
+    cudaStream_t const stream = gwn_default_stream()
+) noexcept;
+
+template <int Width, gwn_real_type Real, gwn_index_type Index, typename BlasT>
+gwn_status gwn_scene_update_blas_table(
+    cuda::std::span<BlasT const> const updated_blas_table,
+    gwn_scene_object<Width, Real, Index, BlasT> &scene,
+    cudaStream_t const stream = gwn_default_stream()
+) noexcept;
+
 template <
     int Width, gwn_real_type Real = float, gwn_index_type Index = std::uint32_t,
     class BlasT = gwn_blas_accessor<Width, Real, Index>>
@@ -244,6 +258,18 @@ private:
         cuda::std::span<B const> const blas_table,
         cuda::std::span<gwn_instance_record<R, I> const> const instances,
         gwn_scene_object<W, R, I, B> &scene, cudaStream_t const stream
+    ) noexcept;
+
+    template <int W, gwn_real_type R, gwn_index_type I, typename B>
+    friend gwn_status gwn_scene_refit_transforms(
+        cuda::std::span<gwn_instance_record<R, I> const> const updated_instances,
+        gwn_scene_object<W, R, I, B> &scene, cudaStream_t const stream
+    ) noexcept;
+
+    template <int W, gwn_real_type R, gwn_index_type I, typename B>
+    friend gwn_status gwn_scene_update_blas_table(
+        cuda::std::span<B const> const updated_blas_table, gwn_scene_object<W, R, I, B> &scene,
+        cudaStream_t const stream
     ) noexcept;
 
     gwn_bvh_topology_tree_object<Width, Real, Index> ias_topology_{};
