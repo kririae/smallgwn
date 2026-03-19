@@ -716,3 +716,79 @@ TEST_F(CudaFixture, SceneUpdateBlasTable) {
     EXPECT_EQ(owned_blas_table[1].topology.root_index, updated_blas_table[1].topology.root_index);
     EXPECT_EQ(owned_blas_table[1].aabb.nodes.data(), updated_blas_table[1].aabb.nodes.data());
 }
+
+TEST_F(CudaFixture, SceneUpdateBlasTableFailureDoesNotMutateScene) {
+    gwn::tests::SingleTriangleMesh mesh_a{};
+    TestBlasStorage const blas_a = build_test_blas(
+        std::vector<Real>(mesh_a.vx.begin(), mesh_a.vx.end()),
+        std::vector<Real>(mesh_a.vy.begin(), mesh_a.vy.end()),
+        std::vector<Real>(mesh_a.vz.begin(), mesh_a.vz.end()),
+        std::vector<Index>(mesh_a.i0.begin(), mesh_a.i0.end()),
+        std::vector<Index>(mesh_a.i1.begin(), mesh_a.i1.end()),
+        std::vector<Index>(mesh_a.i2.begin(), mesh_a.i2.end())
+    );
+    TestBlasStorage const blas_b = build_test_blas(
+        std::vector<Real>{Real(3), Real(4), Real(3)}, std::vector<Real>{Real(2), Real(2), Real(3)},
+        std::vector<Real>{Real(1), Real(1), Real(1)}, std::vector<Index>{0}, std::vector<Index>{1},
+        std::vector<Index>{2}
+    );
+
+    std::array<gwn::gwn_blas_accessor<4, Real, Index>, 2> const blas_table{
+        blas_a.accessor(),
+        blas_b.accessor(),
+    };
+    std::array<gwn::gwn_instance_record<Real, Index>, 2> instances{};
+    instances[0].blas_index = Index(0);
+    instances[0].transform = gwn::gwn_similarity_transform<Real>::identity();
+    instances[1].blas_index = Index(1);
+    instances[1].transform = gwn::gwn_similarity_transform<Real>::identity();
+    instances[1].transform.translation[0] = Real(10);
+
+    gwn::gwn_scene_object<4, Real, Index, gwn::gwn_blas_accessor<4, Real, Index>> scene{};
+    gwn::gwn_status const build_status = gwn::gwn_scene_build_lbvh<4, Real, Index>(
+        cuda::std::span<gwn::gwn_blas_accessor<4, Real, Index> const>(
+            blas_table.data(), blas_table.size()
+        ),
+        cuda::std::span<gwn::gwn_instance_record<Real, Index> const>(
+            instances.data(), instances.size()
+        ),
+        scene
+    );
+    ASSERT_TRUE(build_status.is_ok()) << gwn::tests::status_to_debug_string(build_status);
+
+    gwn::gwn_aabb<Real> const initial_root_bounds = copy_scene_root_bounds(scene.accessor());
+    std::vector<gwn::gwn_blas_accessor<4, Real, Index>> const initial_owned_blas_table =
+        copy_device_span(scene.accessor().blas_table);
+
+    std::array<gwn::gwn_blas_accessor<4, Real, Index>, 1> const missing_blas_table{
+        blas_a.accessor()
+    };
+    gwn::gwn_status const update_status = gwn::gwn_scene_update_blas_table<4, Real, Index>(
+        cuda::std::span<gwn::gwn_blas_accessor<4, Real, Index> const>(
+            missing_blas_table.data(), missing_blas_table.size()
+        ),
+        scene
+    );
+    EXPECT_EQ(update_status.error(), gwn::gwn_error::invalid_argument);
+
+    gwn::gwn_aabb<Real> const final_root_bounds = copy_scene_root_bounds(scene.accessor());
+    expect_aabb_near(final_root_bounds, initial_root_bounds);
+
+    std::vector<gwn::gwn_blas_accessor<4, Real, Index>> const final_owned_blas_table =
+        copy_device_span(scene.accessor().blas_table);
+    ASSERT_EQ(final_owned_blas_table.size(), initial_owned_blas_table.size());
+    for (std::size_t i = 0; i < initial_owned_blas_table.size(); ++i) {
+        EXPECT_EQ(
+            final_owned_blas_table[i].geometry.vertex_x.data(),
+            initial_owned_blas_table[i].geometry.vertex_x.data()
+        );
+        EXPECT_EQ(
+            final_owned_blas_table[i].topology.root_index,
+            initial_owned_blas_table[i].topology.root_index
+        );
+        EXPECT_EQ(
+            final_owned_blas_table[i].aabb.nodes.data(),
+            initial_owned_blas_table[i].aabb.nodes.data()
+        );
+    }
+}
