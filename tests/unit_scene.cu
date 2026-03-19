@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <limits>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -64,6 +65,105 @@ gwn::gwn_aabb<Real> compute_expected_aabb(
     }
 
     return expected;
+}
+
+struct TestBlasStorage {
+    gwn::gwn_geometry_object<Real, Index> geometry{};
+    gwn::gwn_bvh4_topology_object<Real, Index> topology{};
+    gwn::gwn_bvh4_aabb_object<Real, Index> aabb{};
+
+    [[nodiscard]] gwn::gwn_blas_accessor<4, Real, Index> accessor() const noexcept {
+        return gwn::gwn_blas_accessor<4, Real, Index>{
+            geometry.accessor(),
+            topology.accessor(),
+            aabb.accessor(),
+            cuda::std::tuple<>{},
+        };
+    }
+};
+
+TestBlasStorage build_test_blas(
+    std::vector<Real> const &vx, std::vector<Real> const &vy, std::vector<Real> const &vz,
+    std::vector<Index> const &i0, std::vector<Index> const &i1, std::vector<Index> const &i2
+) {
+    TestBlasStorage blas{};
+    gwn::gwn_status const upload_status = gwn::gwn_upload_geometry(
+        blas.geometry, cuda::std::span<Real const>(vx.data(), vx.size()),
+        cuda::std::span<Real const>(vy.data(), vy.size()),
+        cuda::std::span<Real const>(vz.data(), vz.size()),
+        cuda::std::span<Index const>(i0.data(), i0.size()),
+        cuda::std::span<Index const>(i1.data(), i1.size()),
+        cuda::std::span<Index const>(i2.data(), i2.size())
+    );
+    EXPECT_TRUE(upload_status.is_ok()) << gwn::tests::status_to_debug_string(upload_status);
+    if (!upload_status.is_ok())
+        return blas;
+
+    gwn::gwn_status const build_status =
+        gwn::gwn_bvh_facade_build_topology_aabb_lbvh<4, Real, Index>(
+            blas.geometry, blas.topology, blas.aabb
+        );
+    EXPECT_TRUE(build_status.is_ok()) << gwn::tests::status_to_debug_string(build_status);
+    return blas;
+}
+
+template <class BuildSceneFn> void expect_scene_build_success(BuildSceneFn &&build_scene) {
+    gwn::tests::SingleTriangleMesh mesh_a{};
+    std::vector<Real> const vx_b{Real(3), Real(4), Real(3)};
+    std::vector<Real> const vy_b{Real(2), Real(2), Real(3)};
+    std::vector<Real> const vz_b{Real(1), Real(1), Real(1)};
+    std::vector<Index> const i0_b{0};
+    std::vector<Index> const i1_b{1};
+    std::vector<Index> const i2_b{2};
+
+    TestBlasStorage const blas_a = build_test_blas(
+        std::vector<Real>(mesh_a.vx.begin(), mesh_a.vx.end()),
+        std::vector<Real>(mesh_a.vy.begin(), mesh_a.vy.end()),
+        std::vector<Real>(mesh_a.vz.begin(), mesh_a.vz.end()),
+        std::vector<Index>(mesh_a.i0.begin(), mesh_a.i0.end()),
+        std::vector<Index>(mesh_a.i1.begin(), mesh_a.i1.end()),
+        std::vector<Index>(mesh_a.i2.begin(), mesh_a.i2.end())
+    );
+    TestBlasStorage const blas_b = build_test_blas(vx_b, vy_b, vz_b, i0_b, i1_b, i2_b);
+
+    std::array<gwn::gwn_blas_accessor<4, Real, Index>, 2> const blas_table{
+        blas_a.accessor(),
+        blas_b.accessor(),
+    };
+
+    std::array<gwn::gwn_instance_record<Real, Index>, 3> instances{};
+    instances[0].blas_index = Index(0);
+    instances[0].transform = gwn::gwn_similarity_transform<Real>::identity();
+    instances[1].blas_index = Index(1);
+    instances[1].transform = gwn::gwn_similarity_transform<Real>::identity();
+    instances[1].transform.translation[0] = Real(10);
+    instances[1].transform.translation[1] = Real(-2);
+    instances[1].transform.translation[2] = Real(1);
+    instances[2].blas_index = Index(0);
+    instances[2].transform = gwn::gwn_similarity_transform<Real>::identity();
+    instances[2].transform.translation[0] = Real(-5);
+    instances[2].transform.translation[1] = Real(3);
+    instances[2].transform.translation[2] = Real(2);
+
+    gwn::gwn_scene_object<4, Real, Index, gwn::gwn_blas_accessor<4, Real, Index>> scene{};
+    gwn::gwn_status const status = build_scene(
+        cuda::std::span<gwn::gwn_blas_accessor<4, Real, Index> const>(
+            blas_table.data(), blas_table.size()
+        ),
+        cuda::std::span<gwn::gwn_instance_record<Real, Index> const>(
+            instances.data(), instances.size()
+        ),
+        scene
+    );
+
+    ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
+    ASSERT_TRUE(scene.has_data());
+
+    auto const accessor = scene.accessor();
+    EXPECT_EQ(accessor.ias_topology.root_kind, gwn::gwn_bvh_child_kind::k_internal);
+    EXPECT_GT(accessor.ias_topology.nodes.size(), 0u);
+    EXPECT_TRUE(accessor.ias_aabb.is_valid_for(accessor.ias_topology));
+    EXPECT_EQ(accessor.ias_topology.primitive_indices.size(), 3u);
 }
 
 } // namespace
@@ -188,4 +288,16 @@ TEST(smallgwn_unit_scene, SceneAccessorDefaultConstructedIsInvalid) {
 TEST(smallgwn_unit_scene, SceneObjectDefaultConstructedHasNoData) {
     gwn::gwn_scene_object<4, Real, Index, gwn::gwn_blas_accessor<4, Real, Index>> scene{};
     EXPECT_FALSE(scene.has_data());
+}
+
+TEST_F(CudaFixture, SceneBuildLBVH) {
+    expect_scene_build_success([](auto const blas_table, auto const instances, auto &scene) {
+        return gwn::gwn_scene_build_lbvh<4, Real, Index>(blas_table, instances, scene);
+    });
+}
+
+TEST_F(CudaFixture, SceneBuildHPLOC) {
+    expect_scene_build_success([](auto const blas_table, auto const instances, auto &scene) {
+        return gwn::gwn_scene_build_hploc<4, Real, Index>(blas_table, instances, scene);
+    });
 }

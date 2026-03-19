@@ -119,6 +119,24 @@ template <gwn_real_type Real, gwn_index_type Index = std::uint32_t> struct gwn_i
     gwn_similarity_transform<Real> transform{gwn_similarity_transform<Real>::identity()};
 };
 
+template <int Width, gwn_real_type Real, gwn_index_type Index, class BlasT> class gwn_scene_object;
+
+template <int Width, gwn_real_type Real, gwn_index_type Index, typename BlasT>
+gwn_status gwn_scene_build_lbvh(
+    cuda::std::span<BlasT const> const blas_table,
+    cuda::std::span<gwn_instance_record<Real, Index> const> const instances,
+    gwn_scene_object<Width, Real, Index, BlasT> &scene,
+    cudaStream_t const stream = gwn_default_stream()
+) noexcept;
+
+template <int Width, gwn_real_type Real, gwn_index_type Index, typename BlasT>
+gwn_status gwn_scene_build_hploc(
+    cuda::std::span<BlasT const> const blas_table,
+    cuda::std::span<gwn_instance_record<Real, Index> const> const instances,
+    gwn_scene_object<Width, Real, Index, BlasT> &scene,
+    cudaStream_t const stream = gwn_default_stream()
+) noexcept;
+
 template <
     int Width, gwn_real_type Real = float, gwn_index_type Index = std::uint32_t,
     class BlasT = gwn_blas_accessor<Width, Real, Index>>
@@ -214,6 +232,20 @@ public:
     }
 
 private:
+    template <int W, gwn_real_type R, gwn_index_type I, typename B>
+    friend gwn_status gwn_scene_build_lbvh(
+        cuda::std::span<B const> const blas_table,
+        cuda::std::span<gwn_instance_record<R, I> const> const instances,
+        gwn_scene_object<W, R, I, B> &scene, cudaStream_t const stream
+    ) noexcept;
+
+    template <int W, gwn_real_type R, gwn_index_type I, typename B>
+    friend gwn_status gwn_scene_build_hploc(
+        cuda::std::span<B const> const blas_table,
+        cuda::std::span<gwn_instance_record<R, I> const> const instances,
+        gwn_scene_object<W, R, I, B> &scene, cudaStream_t const stream
+    ) noexcept;
+
     gwn_bvh_topology_tree_object<Width, Real, Index> ias_topology_{};
     gwn_bvh_aabb_tree_object<Width, Real, Index> ias_aabb_{};
     gwn_device_array<BlasT> blas_table_{};
@@ -291,3 +323,5 @@ template <
 using gwn_scene4_object = gwn_scene_object<4, Real, Index, BlasT>;
 
 } // namespace gwn
+
+#include "detail/gwn_scene_build_impl.cuh"
