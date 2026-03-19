@@ -824,12 +824,12 @@ struct gwn_scene_validate_blas_coverage_functor {
     }
 };
 
-template <gwn_real_type Real, gwn_index_type Index, class BlasT>
+template <int Width, gwn_real_type Real, gwn_index_type Index, class BlasT>
 gwn_status gwn_scene_validate_initialized(
     gwn_device_array<BlasT> const &blas_table,
     gwn_device_array<gwn_instance_record<Real, Index>> const &instances,
-    gwn_bvh_topology_accessor<BlasT::k_width, Real, Index> const &topology,
-    gwn_bvh_aabb_accessor<BlasT::k_width, Real, Index> const &aabb, std::string_view const phase
+    gwn_bvh_topology_accessor<Width, Real, Index> const &topology,
+    gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb, std::string_view const phase
 ) noexcept {
     if (blas_table.empty() || instances.empty() || !topology.is_valid() ||
         !aabb.is_valid_for(topology)) {
@@ -1131,7 +1131,7 @@ gwn_status gwn_scene_refit_transforms(
     gwn_scene_object<Width, Real, Index, BlasT> &scene, cudaStream_t const stream
 ) noexcept {
     return detail::gwn_try_translate_status("gwn_scene_refit_transforms", [&]() -> gwn_status {
-        GWN_RETURN_ON_ERROR((detail::gwn_scene_validate_initialized<Real, Index, BlasT>(
+        GWN_RETURN_ON_ERROR((detail::gwn_scene_validate_initialized<Width, Real, Index, BlasT>(
             scene.blas_table_, scene.instances_, scene.ias_topology_.accessor(),
             scene.ias_aabb_.accessor(), detail::k_gwn_scene_phase_refit
         )));
@@ -1166,7 +1166,7 @@ gwn_status gwn_scene_update_blas_table(
     gwn_scene_object<Width, Real, Index, BlasT> &scene, cudaStream_t const stream
 ) noexcept {
     return detail::gwn_try_translate_status("gwn_scene_update_blas_table", [&]() -> gwn_status {
-        GWN_RETURN_ON_ERROR((detail::gwn_scene_validate_initialized<Real, Index, BlasT>(
+        GWN_RETURN_ON_ERROR((detail::gwn_scene_validate_initialized<Width, Real, Index, BlasT>(
             scene.blas_table_, scene.instances_, scene.ias_topology_.accessor(),
             scene.ias_aabb_.accessor(), detail::k_gwn_scene_phase_update_blas_table
         )));

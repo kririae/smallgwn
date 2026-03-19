@@ -435,6 +435,27 @@ TEST(smallgwn_unit_scene, SceneObjectDefaultConstructedHasNoData) {
     EXPECT_FALSE(scene.has_data());
 }
 
+TEST(smallgwn_unit_scene, SceneTask6ApisCompileForMixedSceneAndBlasWidths) {
+    using mixed_blas_type = gwn::gwn_blas_accessor<4, Real, Index>;
+    gwn::gwn_scene_object<8, Real, Index, mixed_blas_type> scene{};
+
+    std::array<gwn::gwn_instance_record<Real, Index>, 1> instances{};
+    std::array<mixed_blas_type, 1> blas_table{};
+
+    gwn::gwn_status const refit_status = gwn::gwn_scene_refit_transforms<8, Real, Index>(
+        cuda::std::span<gwn::gwn_instance_record<Real, Index> const>(
+            instances.data(), instances.size()
+        ),
+        scene
+    );
+    EXPECT_EQ(refit_status.error(), gwn::gwn_error::invalid_argument);
+
+    gwn::gwn_status const update_status = gwn::gwn_scene_update_blas_table<8, Real, Index>(
+        cuda::std::span<mixed_blas_type const>(blas_table.data(), blas_table.size()), scene
+    );
+    EXPECT_EQ(update_status.error(), gwn::gwn_error::invalid_argument);
+}
+
 TEST(smallgwn_unit_scene, SceneBuildRejectsInvalidBlasAccessor) {
     std::array<gwn::gwn_blas_accessor<4, Real, Index>, 1> const blas_table{
         gwn::gwn_blas_accessor<4, Real, Index>{}
