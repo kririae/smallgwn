@@ -4,9 +4,11 @@
 These instructions apply to the `smallgwn/` project tree.
 
 ## Project Snapshot
-- `smallgwn` is a header-only CUDA/C++ library for geometric queries on triangle meshes,
-  including winding numbers, winding-number gradients, signed/unsigned distances, edge distances,
-  ray first-hit, and Harnack sphere-march ray tracing.
+- `smallgwn` is a header-only CUDA/C++ library for geometric queries on triangle meshes and
+  OptiX-style two-level scenes, including winding numbers, winding-number gradients,
+  signed/unsigned distances, edge distances, ray first-hit, and Harnack sphere-march ray tracing.
+- Scene support is built from BLAS tables plus similarity-transformed instance records.
+  Exact winding and ray first-hit dispatch through unified BLAS / scene query entrypoints.
 - Public surface is under `include/gwn/` with umbrella include `include/gwn/gwn.cuh`.
   The umbrella include is runtime-focused and does **not** include `gwn_eigen_bridge.cuh`.
 - `examples/` contains standalone demo projects that consume `smallgwn` as a third-party library.
@@ -34,6 +36,7 @@ These instructions apply to the `smallgwn/` project tree.
 - Use `gwn::` namespace and `gwn_` prefix for public symbols.
 - Default public index type is `std::uint32_t` unless explicitly overridden.
 - Width-4 convenience aliases: `gwn_bvh4_<kind>_<role>` (e.g. `gwn_bvh4_topology_object`).
+- Scene / BLAS convenience aliases use `gwn_blas4_*` and `gwn_scene4_*`.
 - Moment types carry `Order` as a compile-time template parameter (after `Width`).
 - Owning-object state query: unified `has_data()` predicate.
 - Detail entrypoints use `_impl` suffix to avoid public/internal naming collisions.
@@ -71,18 +74,39 @@ These instructions apply to the `smallgwn/` project tree.
   Each `gwn_bvh_refit_moment<Order,...>` call does a full replace of the moment accessor.
 - Public BVH entrypoints are object-based; accessor-based routines are detail-only.
 
+### Scene / IAS
+- Public scene surface: `include/gwn/gwn_scene.cuh`.
+- `gwn_blas_accessor<Width,...>` packages geometry + topology + AABB (+ optional payload trees).
+  `gwn_blas_object<Width,...>` is the owning BLAS convenience object.
+- `gwn_scene_accessor<Width,...>` packages IAS topology/AABB plus BLAS table + instance records.
+  `gwn_scene_object<Width,...>` owns the corresponding buffers.
+- Width-4 aliases: `gwn_blas4_accessor`, `gwn_blas4_object`, `gwn_scene4_accessor`, `gwn_scene4_object`.
+- Scene build/update entrypoints are:
+  - `gwn_scene_build_lbvh`
+  - `gwn_scene_build_hploc`
+  - `gwn_scene_refit_transforms`
+  - `gwn_scene_update_blas_table`
+- Top-level IAS topology and AABB reuse the normal BVH topology / AABB tree types; there is no
+  separate IAS tree type.
+
 ### Query
 - Public surface: `include/gwn/gwn_query.cuh`. Query families provide device point APIs and batch APIs:
-  - **Winding number (exact)**: `gwn_winding_number_point_bvh_exact<Width,...>` / `gwn_compute_winding_number_batch_bvh_exact<Width,...>`
+  - **Unified exact winding**: `gwn_winding_number_point(accel, ...)` / `gwn_compute_winding_number_batch(accel, ...)`
+    for `gwn_blas_accessor` and `gwn_scene_accessor`
   - **Winding number (Taylor)**: `gwn_winding_number_point_bvh_taylor<Order,Width,...>` / `gwn_compute_winding_number_batch_bvh_taylor<Order,Width,...>`
   - **Winding gradient (Taylor)**: `gwn_winding_gradient_point_bvh_taylor<Order,Width,...>` / `gwn_compute_winding_gradient_batch_bvh_taylor<Order,Width,...>`
   - **Unsigned distance**: `gwn_unsigned_distance_point_bvh<Width,...>` / `gwn_compute_unsigned_distance_batch_bvh<Width,...>`
   - **Signed distance**: `gwn_signed_distance_point_bvh<Order,Width,...>` / `gwn_compute_signed_distance_batch_bvh<Order,Width,...>`
   - **Boundary edge distance**: `gwn_unsigned_boundary_edge_distance_point_bvh<Width,...>` / `gwn_compute_unsigned_boundary_edge_distance_batch_bvh<Width,...>`
-  - **Ray first-hit**: `gwn_ray_first_hit_bvh<Width,...>` / `gwn_compute_ray_first_hit_batch_bvh<Width,...>`
+  - **Unified ray first-hit**: `gwn_ray_first_hit(accel, ...)` / `gwn_compute_ray_first_hit_batch(accel, ...)`
+    for `gwn_blas_accessor` and `gwn_scene_accessor`
   - **Harnack trace**: `gwn_harnack_trace_ray_bvh_taylor<Order,Width,...>` / `gwn_compute_harnack_trace_batch_bvh_taylor<Order,Width,...>`
   - **Hybrid trace**: `gwn_hybrid_trace_ray_bvh_taylor<Order,Width,...>` / `gwn_compute_hybrid_trace_batch_bvh_taylor<Order,Width,...>`
 - Point APIs are `__device__` functions for use in custom kernels; batch APIs are host-callable launchers.
+- Unified ray queries return `gwn_ray_hit_result<Real, Index>` with `t`, `primitive_id`, `instance_id`,
+  barycentrics `u/v`, and `status`.
+- Legacy BLAS-only exact-winding / ray entrypoints remain available but are deprecated in favor of
+  the unified `gwn_*` APIs.
 - Internal math uses `gwn_query_vec3` (no Eigen dependency); public alias `gwn::gwn_vec3<Real>`.
 - Traversal stack capacity: template `StackCapacity` (default `k_gwn_default_traversal_stack_capacity = 64`).
   Query APIs accept an optional device-side overflow callback; default callback traps via `gwn_trap()`.
@@ -142,6 +166,7 @@ These instructions apply to the `smallgwn/` project tree.
 | `unit_bvh_topology.cu` | LBVH + H-PLOC topology build, Morton stress checks |
 | `unit_uint64_compile.cu` | `Index=uint64_t` compile coverage |
 | `unit_bvh_taylor.cu` | Taylor moment refit + H-PLOC facade, order 0/1/2 |
+| `unit_scene.cu` | Scene / IAS accessors, build/refit/update, unified ray queries, exact winding, and unified API coverage |
 | `unit_eigen_bridge.cu` | `gwn_eigen_bridge.cuh` upload bridge validation |
 | `unit_winding_taylor.cu` | Taylor winding far-field parity on H-PLOC topology |
 | `unit_winding_gradient.cu` | Winding gradient batch query |

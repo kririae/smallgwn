@@ -1,6 +1,6 @@
 # smallgwn
 
-A header-only CUDA library implementing generalized winding-number (GWN)-related algorithms on triangle meshes, including [Fast Winding Numbers (FGWN)](https://doi.org/10.1145/3197517.3201337) and [Harnack tracking](https://doi.org/10.1145/3658201), accelerated with wide BVHs via [LBVH](https://research.nvidia.com/publication/2009-03_fast-bvh-construction-gpus) and [H-PLOC](https://doi.org/10.1145/3675377), plus Taylor multipole expansions.
+A header-only CUDA library implementing generalized winding-number (GWN)-related algorithms on triangle meshes and OptiX-style two-level scenes, including [Fast Winding Numbers (FGWN)](https://doi.org/10.1145/3197517.3201337) and [Harnack tracking](https://doi.org/10.1145/3658201), accelerated with wide BVHs via [LBVH](https://research.nvidia.com/publication/2009-03_fast-bvh-construction-gpus) and [H-PLOC](https://doi.org/10.1145/3675377), plus Taylor multipole expansions.
 
 ## Requirements
 
@@ -44,6 +44,10 @@ Include a single header:
 #include <gwn/gwn.cuh>
 ```
 
+`gwn.cuh` includes both the single-mesh BVH APIs and the scene / IAS public surface from
+`gwn_scene.cuh`. Exact winding and ray first-hit queries now use unified APIs that accept either a
+`gwn_blas_accessor` or a `gwn_scene_accessor`.
+
 ### Minimal example
 
 ```cpp
@@ -76,6 +80,14 @@ gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<
     Index  // index type, in case you are dealing with super large meshes
 >(geometry, topology, aabb, moments, stream);
 
+// Wrap geometry + topology + AABB as a BLAS accessor for unified exact-winding / ray queries
+auto const blas = gwn::gwn_blas4_accessor<Real, Index>{
+    geometry.accessor(),
+    topology.accessor(),
+    aabb.accessor(),
+    cuda::std::tuple<>{},
+};
+
 // Batch query example: compute winding numbers at a set of query points
 gwn::gwn_device_array<Real> d_qx, d_qy, d_qz, d_wn;
 // ... copy query points to d_qx, d_qy, d_qz and resize d_wn ...
@@ -106,6 +118,30 @@ __global__ void compute_signed_distance_kernel(
 //     d_qx.data(), d_qy.data(), d_qz.data(), d_out.data(), n);
 ```
 
+### Scene / IAS example
+
+```cpp
+std::array<gwn::gwn_blas4_accessor<Real, Index>, 1> const blas_table{blas};
+std::array<gwn::gwn_instance_record<Real, Index>, 1> instances{};
+instances[0].blas_index = Index(0);
+instances[0].transform = gwn::gwn_similarity_transform<Real>::identity();
+
+gwn::gwn_scene4_object<Real, Index> scene;
+gwn::gwn_scene_build_lbvh(
+    cuda::std::span<gwn::gwn_blas4_accessor<Real, Index> const>(blas_table.data(), blas_table.size()),
+    cuda::std::span<gwn::gwn_instance_record<Real, Index> const>(instances.data(), instances.size()),
+    scene,
+    stream);
+
+// The same unified batch API works for either a BLAS accessor or a scene accessor.
+gwn::gwn_compute_ray_first_hit_batch(
+    scene.accessor(),
+    d_ox.span(), d_oy.span(), d_oz.span(),
+    d_dx.span(), d_dy.span(), d_dz.span(),
+    d_t.span(), d_primitive_id.span(), d_instance_id.span(),
+    0.0f, std::numeric_limits<Real>::infinity(), stream);
+```
+
 ### Query API overview
 
 Query operations are available in two forms:
@@ -116,39 +152,50 @@ Most query families provide both point and batch variants:
 
 | Query Family | Point API | Batch API |
 |--------------|-----------|-----------|
-| Winding number (exact) | `gwn_winding_number_point_bvh_exact` | `gwn_compute_winding_number_batch_bvh_exact` |
+| Winding number (exact) | `gwn_winding_number_point` | `gwn_compute_winding_number_batch` |
 | Winding number (Taylor) | `gwn_winding_number_point_bvh_taylor` | `gwn_compute_winding_number_batch_bvh_taylor` |
 | Winding gradient (Taylor) | `gwn_winding_gradient_point_bvh_taylor` | `gwn_compute_winding_gradient_batch_bvh_taylor` |
 | Unsigned distance | `gwn_unsigned_distance_point_bvh` | `gwn_compute_unsigned_distance_batch_bvh` |
 | Signed distance | `gwn_signed_distance_point_bvh` | `gwn_compute_signed_distance_batch_bvh` |
 | Boundary edge distance | `gwn_unsigned_boundary_edge_distance_point_bvh` | `gwn_compute_unsigned_boundary_edge_distance_batch_bvh` |
-| Ray first-hit | `gwn_ray_first_hit_bvh` | `gwn_compute_ray_first_hit_batch_bvh` |
+| Ray first-hit | `gwn_ray_first_hit` | `gwn_compute_ray_first_hit_batch` |
 | Harnack trace | `gwn_harnack_trace_ray_bvh_taylor` | `gwn_compute_harnack_trace_batch_bvh_taylor` |
 | Hybrid trace | `gwn_hybrid_trace_ray_bvh_taylor` | `gwn_compute_hybrid_trace_batch_bvh_taylor` |
 
-Point APIs give you fine-grained control in custom kernels; batch APIs provide convenient host-side launchers.
+Exact winding and ray first-hit use unified entrypoints that accept either a `gwn_blas_accessor` or
+a `gwn_scene_accessor`. For ray queries the unified return type is `gwn_ray_hit_result`, which adds
+an `instance_id` field for scene hits. Legacy BLAS-only exact-winding / ray entrypoints
+(`gwn_winding_number_point_bvh_exact`, `gwn_compute_winding_number_batch_bvh_exact`,
+`gwn_ray_first_hit_bvh`, `gwn_compute_ray_first_hit_batch_bvh`) are still available but deprecated.
+
+Point APIs give you fine-grained control in custom kernels; batch APIs provide convenient host-side
+launchers.
 
 #### Example: Point vs. Batch API
 
 ```cpp
+auto const blas = gwn::gwn_blas4_accessor<float>{
+    geometry.accessor(),
+    topology.accessor(),
+    aabb.accessor(),
+    cuda::std::tuple<>{},
+};
+
 // Batch API: host launches kernel for you
-gwn::gwn_compute_winding_number_batch_bvh_exact<4>(
-    geometry.accessor(), topology.accessor(),
-    d_qx.span(), d_qy.span(), d_qz.span(), d_wn.span(), stream);
+gwn::gwn_compute_winding_number_batch(
+    blas, d_qx.span(), d_qy.span(), d_qz.span(), d_wn.span(), stream);
 
 // Point API: you write the kernel
 __global__ void my_winding_kernel(
-    gwn::gwn_geometry_accessor<float> geom,
-    gwn::gwn_bvh4_topology_accessor<float> topo,
+    gwn::gwn_blas4_accessor<float> const blas,
     float const *qx, float const *qy, float const *qz,
     float *wn, int n) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < n) {
-        wn[idx] = gwn::gwn_winding_number_point_bvh_exact<4>(
-            geom, topo, qx[idx], qy[idx], qz[idx]);
+        wn[idx] = gwn::gwn_winding_number_point(blas, qx[idx], qy[idx], qz[idx]);
     }
 }
-// my_winding_kernel<<<...>>>(geometry.accessor(), topology.accessor(), ...);
+// my_winding_kernel<<<...>>>(blas, ...);
 ```
 
 ### Loading from Eigen matrices
