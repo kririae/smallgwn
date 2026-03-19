@@ -25,9 +25,11 @@
 #include "detail/gwn_query_hybrid_impl.cuh"
 #include "detail/gwn_query_ray_impl.cuh"
 #include "detail/gwn_query_winding_impl.cuh"
+#include "detail/gwn_scene_query_impl.cuh"
 #include "gwn_bvh.cuh"
 #include "gwn_geometry.cuh"
 #include "gwn_kernel_utils.cuh"
+#include "gwn_scene.cuh"
 
 namespace gwn {
 
@@ -303,6 +305,99 @@ gwn_status gwn_compute_ray_first_hit_batch_bvh(
     return gwn_compute_ray_first_hit_batch_bvh<4, Real, Index, StackCapacity, OverflowCallback>(
         geometry, bvh, aabb_tree, ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x, ray_dir_y,
         ray_dir_z, output_t, output_primitive_id, t_min, t_max, stream, overflow_callback
+    );
+}
+
+/// \brief Compute the nearest ray-triangle hit for a single BLAS or scene ray
+///        query (\c __device__ only).
+template <
+    class Accel, int StackCapacity = k_gwn_default_traversal_stack_capacity,
+    typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
+    requires(is_traversable_v<Accel>)
+__device__ inline gwn_ray_hit_result<
+    typename gwn_accel_traits<Accel>::real_type, typename gwn_accel_traits<Accel>::index_type>
+gwn_ray_first_hit(
+    Accel const &accel, typename gwn_accel_traits<Accel>::real_type const ray_ox,
+    typename gwn_accel_traits<Accel>::real_type const ray_oy,
+    typename gwn_accel_traits<Accel>::real_type const ray_oz,
+    typename gwn_accel_traits<Accel>::real_type const ray_dx,
+    typename gwn_accel_traits<Accel>::real_type const ray_dy,
+    typename gwn_accel_traits<Accel>::real_type const ray_dz,
+    typename gwn_accel_traits<Accel>::real_type const t_min =
+        typename gwn_accel_traits<Accel>::real_type(0),
+    typename gwn_accel_traits<Accel>::real_type const t_max =
+        std::numeric_limits<typename gwn_accel_traits<Accel>::real_type>::infinity(),
+    OverflowCallback const &overflow_callback = {}
+) noexcept {
+    static_assert(StackCapacity > 0, "Traversal stack capacity must be positive.");
+    return detail::gwn_ray_first_hit_accel_impl<Accel, StackCapacity, OverflowCallback>(
+        accel, ray_ox, ray_oy, ray_oz, ray_dx, ray_dy, ray_dz, t_min, t_max, overflow_callback
+    );
+}
+
+/// \brief Compute nearest ray-triangle hits for a batch against either a BLAS
+///        accessor or a scene accessor.
+template <
+    class Accel, int StackCapacity = k_gwn_default_traversal_stack_capacity,
+    typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
+    requires(is_traversable_v<Accel>)
+gwn_status gwn_compute_ray_first_hit_batch(
+    Accel const &accel,
+    cuda::std::span<typename gwn_accel_traits<Accel>::real_type const> const ray_origin_x,
+    cuda::std::span<typename gwn_accel_traits<Accel>::real_type const> const ray_origin_y,
+    cuda::std::span<typename gwn_accel_traits<Accel>::real_type const> const ray_origin_z,
+    cuda::std::span<typename gwn_accel_traits<Accel>::real_type const> const ray_dir_x,
+    cuda::std::span<typename gwn_accel_traits<Accel>::real_type const> const ray_dir_y,
+    cuda::std::span<typename gwn_accel_traits<Accel>::real_type const> const ray_dir_z,
+    cuda::std::span<typename gwn_accel_traits<Accel>::real_type> const output_t,
+    cuda::std::span<typename gwn_accel_traits<Accel>::index_type> const output_primitive_id,
+    cuda::std::span<typename gwn_accel_traits<Accel>::index_type> const output_instance_id,
+    typename gwn_accel_traits<Accel>::real_type const t_min =
+        typename gwn_accel_traits<Accel>::real_type(0),
+    typename gwn_accel_traits<Accel>::real_type const t_max =
+        std::numeric_limits<typename gwn_accel_traits<Accel>::real_type>::infinity(),
+    cudaStream_t const stream = gwn_default_stream(), OverflowCallback const &overflow_callback = {}
+) noexcept {
+    using Real = typename gwn_accel_traits<Accel>::real_type;
+    using Index = typename gwn_accel_traits<Accel>::index_type;
+    static_assert(StackCapacity > 0, "Traversal stack capacity must be positive.");
+
+    if constexpr (is_blas_accessor_v<Accel>) {
+        if (!accel.geometry.is_valid())
+            return gwn_status::invalid_argument(
+                "Geometry accessor contains mismatched span lengths."
+            );
+        if (!accel.topology.is_valid())
+            return gwn_status::invalid_argument("BVH accessor is invalid.");
+        if (!accel.aabb.is_valid_for(accel.topology))
+            return gwn_status::invalid_argument("BVH AABB tree is invalid for the given topology.");
+    } else {
+        if (!detail::gwn_scene_query_accel_has_basic_data_impl(accel))
+            return gwn_status::invalid_argument("Scene accessor is invalid.");
+    }
+
+    gwn_status const span_status =
+        detail::gwn_validate_unified_ray_first_hit_batch_spans<Real, Index>(
+            ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x, ray_dir_y, ray_dir_z, output_t,
+            output_primitive_id, output_instance_id
+        );
+    if (!span_status.is_ok())
+        return span_status;
+
+    if (!(t_max >= t_min))
+        return gwn_status::invalid_argument("ray first-hit: requires t_max >= t_min.");
+    std::size_t const n = ray_origin_x.size();
+    if (n == 0)
+        return gwn_status::ok();
+
+    constexpr int k_block_size = detail::k_gwn_default_block_size;
+    return detail::gwn_launch_linear_kernel<k_block_size>(
+        n,
+        detail::gwn_ray_first_hit_batch_accel_functor<Accel, StackCapacity, OverflowCallback>{
+            accel, ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x, ray_dir_y, ray_dir_z,
+            output_t, output_primitive_id, output_instance_id, t_min, t_max, overflow_callback
+        },
+        stream
     );
 }
 
