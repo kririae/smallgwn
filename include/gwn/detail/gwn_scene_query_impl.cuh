@@ -64,13 +64,21 @@ gwn_ray_first_hit_blas_unified_impl(
 }
 
 template <class SceneAccel, gwn_real_type Real, gwn_index_type Index>
+[[nodiscard]] __device__ inline bool gwn_scene_ray_candidate_has_payload_impl(
+    gwn_ray_hit_result<Real, Index> const &candidate
+) noexcept {
+    return !gwn_is_invalid_index(candidate.primitive_id) && candidate.t >= Real(0);
+}
+
+template <class SceneAccel, gwn_real_type Real, gwn_index_type Index>
 __device__ inline void gwn_scene_update_ray_best_hit_impl(
     gwn_ray_hit_result<Real, Index> const &candidate, Index const instance_id,
     gwn_ray_hit_result<Real, Index> &best
 ) noexcept {
-    if (!candidate.hit())
+    if (!gwn_scene_ray_candidate_has_payload_impl<SceneAccel, Real, Index>(candidate))
         return;
-    if (!best.hit() || candidate.t < best.t) {
+    if (!gwn_scene_ray_candidate_has_payload_impl<SceneAccel, Real, Index>(best) ||
+        candidate.t < best.t) {
         best.t = candidate.t;
         best.instance_id = instance_id;
         best.primitive_id = candidate.primitive_id;
@@ -86,7 +94,8 @@ template <class SceneAccel, int StackCapacity, typename OverflowCallback>
     gwn_accel_real_t<SceneAccel> const ray_oy, gwn_accel_real_t<SceneAccel> const ray_oz,
     gwn_accel_real_t<SceneAccel> const ray_dx, gwn_accel_real_t<SceneAccel> const ray_dy,
     gwn_accel_real_t<SceneAccel> const ray_dz, gwn_accel_real_t<SceneAccel> const t_min,
-    gwn_accel_index_t<SceneAccel> const begin, gwn_accel_index_t<SceneAccel> const count,
+    gwn_accel_real_t<SceneAccel> const t_max, gwn_accel_index_t<SceneAccel> const begin,
+    gwn_accel_index_t<SceneAccel> const count,
     gwn_ray_hit_result<gwn_accel_real_t<SceneAccel>, gwn_accel_index_t<SceneAccel>> &best,
     OverflowCallback const &overflow_callback
 ) noexcept {
@@ -126,10 +135,13 @@ template <class SceneAccel, int StackCapacity, typename OverflowCallback>
             ray_dx, ray_dy, ray_dz, local_dx, local_dy, local_dz
         );
 
+        Real nested_t_max = t_max;
+        if (gwn_scene_ray_candidate_has_payload_impl<scene_type, Real, Index>(best))
+            nested_t_max = best.t < t_max ? best.t : t_max;
         auto const candidate =
             gwn_ray_first_hit_blas_unified_impl<blas_type, StackCapacity, OverflowCallback>(
                 blas, local_ox, local_oy, local_oz, local_dx, local_dy, local_dz, t_min,
-                best.hit() ? best.t : std::numeric_limits<Real>::infinity(), overflow_callback
+                nested_t_max, overflow_callback
             );
         gwn_scene_update_ray_best_hit_impl<scene_type, Real, Index>(candidate, instance_id, best);
         if (candidate.status == gwn_ray_first_hit_status::k_overflow) {
@@ -171,7 +183,7 @@ gwn_ray_first_hit_scene_impl(
     if (scene.ias_topology.root_kind == gwn_bvh_child_kind::k_leaf) {
         if (gwn_scene_visit_instance_range_for_ray_impl<
                 scene_type, StackCapacity, OverflowCallback>(
-                scene, ray_ox, ray_oy, ray_oz, ray_dx, ray_dy, ray_dz, t_min,
+                scene, ray_ox, ray_oy, ray_oz, ray_dx, ray_dy, ray_dz, t_min, t_max,
                 scene.ias_topology.root_index, scene.ias_topology.root_count, best,
                 overflow_callback
             )) {
@@ -252,7 +264,7 @@ gwn_ray_first_hit_scene_impl(
             int const slot = child_slot_order[i];
             if (gwn_scene_visit_instance_range_for_ray_impl<
                     scene_type, StackCapacity, OverflowCallback>(
-                    scene, ray_ox, ray_oy, ray_oz, ray_dx, ray_dy, ray_dz, t_min,
+                    scene, ray_ox, ray_oy, ray_oz, ray_dx, ray_dy, ray_dz, t_min, t_max,
                     topology_node.child_index[slot], topology_node.child_count[slot], best,
                     overflow_callback
                 )) {

@@ -217,9 +217,281 @@ struct unified_scene_ray_functor {
     }
 };
 
+struct ray_overflow_callback_probe {
+    int *flag{};
+
+    __device__ void operator()() const noexcept {
+        if (flag != nullptr)
+            *flag = 1;
+    }
+};
+
+template <int StackCapacity> struct unified_scene_ray_interval_functor {
+    gwn::gwn_scene_accessor<4, Real, Index, gwn::gwn_blas_accessor<4, Real, Index>> scene{};
+    cuda::std::span<Real const> ox{};
+    cuda::std::span<Real const> oy{};
+    cuda::std::span<Real const> oz{};
+    cuda::std::span<Real const> dx{};
+    cuda::std::span<Real const> dy{};
+    cuda::std::span<Real const> dz{};
+    cuda::std::span<Real> out_t{};
+    cuda::std::span<Index> out_primitive_id{};
+    cuda::std::span<Index> out_instance_id{};
+    cuda::std::span<std::uint8_t> out_status{};
+    Real t_min{};
+    Real t_max{};
+
+    __device__ void operator()(std::size_t const i) const {
+        auto const hit = gwn::gwn_ray_first_hit<
+            gwn::gwn_scene_accessor<4, Real, Index, gwn::gwn_blas_accessor<4, Real, Index>>,
+            StackCapacity>(scene, ox[i], oy[i], oz[i], dx[i], dy[i], dz[i], t_min, t_max);
+        out_t[i] = hit.t;
+        out_primitive_id[i] = hit.primitive_id;
+        out_instance_id[i] = hit.instance_id;
+        out_status[i] = static_cast<std::uint8_t>(hit.status);
+    }
+};
+
+template <int StackCapacity> struct unified_scene_ray_overflow_functor {
+    gwn::gwn_scene_accessor<4, Real, Index, gwn::gwn_blas_accessor<4, Real, Index>> scene{};
+    cuda::std::span<Real const> ox{};
+    cuda::std::span<Real const> oy{};
+    cuda::std::span<Real const> oz{};
+    cuda::std::span<Real const> dx{};
+    cuda::std::span<Real const> dy{};
+    cuda::std::span<Real const> dz{};
+    cuda::std::span<int> callback_flag{};
+    cuda::std::span<Real> out_t{};
+    cuda::std::span<Index> out_primitive_id{};
+    cuda::std::span<Index> out_instance_id{};
+    cuda::std::span<std::uint8_t> out_status{};
+    Real t_min{};
+    Real t_max{};
+
+    __device__ void operator()(std::size_t const i) const {
+        auto const callback = ray_overflow_callback_probe{callback_flag.data()};
+        auto const hit = gwn::gwn_ray_first_hit<
+            gwn::gwn_scene_accessor<4, Real, Index, gwn::gwn_blas_accessor<4, Real, Index>>,
+            StackCapacity>(scene, ox[i], oy[i], oz[i], dx[i], dy[i], dz[i], t_min, t_max, callback);
+        out_t[i] = hit.t;
+        out_primitive_id[i] = hit.primitive_id;
+        out_instance_id[i] = hit.instance_id;
+        out_status[i] = static_cast<std::uint8_t>(hit.status);
+    }
+};
+
 template <class T>
 void expect_copy_from_host(gwn::gwn_device_array<T> &dst, cuda::std::span<T const> const src) {
     ASSERT_TRUE(dst.copy_from_host(src).is_ok());
+}
+
+bool run_scene_ray_first_hit_overflow_probe(
+    bool &callback_called, Real &out_t, Index &out_primitive_id, Index &out_instance_id,
+    std::uint8_t &out_status
+) {
+    using TopologyNode = gwn::gwn_bvh4_topology_node_soa<Index>;
+    using AabbNode = gwn::gwn_bvh4_aabb_node_soa<Real>;
+
+    std::array<Real, 3> const h_vx{Real(0), Real(1), Real(0)};
+    std::array<Real, 3> const h_vy{Real(0), Real(0), Real(1)};
+    std::array<Real, 3> const h_vz{Real(0), Real(0), Real(0)};
+    std::array<Index, 1> const h_i0{Index(0)};
+    std::array<Index, 1> const h_i1{Index(1)};
+    std::array<Index, 1> const h_i2{Index(2)};
+    std::array<Index, 1> const h_primitive_indices{Index(0)};
+
+    gwn::gwn_geometry_object<Real, Index> geometry_object;
+    if (!gwn::gwn_upload_geometry(
+             geometry_object, cuda::std::span<Real const>(h_vx.data(), h_vx.size()),
+             cuda::std::span<Real const>(h_vy.data(), h_vy.size()),
+             cuda::std::span<Real const>(h_vz.data(), h_vz.size()),
+             cuda::std::span<Index const>(h_i0.data(), h_i0.size()),
+             cuda::std::span<Index const>(h_i1.data(), h_i1.size()),
+             cuda::std::span<Index const>(h_i2.data(), h_i2.size())
+        )
+             .is_ok()) {
+        return false;
+    }
+
+    std::array<TopologyNode, 3> h_topology{};
+    std::array<AabbNode, 3> h_aabb{};
+    std::uint8_t const invalid_kind = static_cast<std::uint8_t>(gwn::gwn_bvh_child_kind::k_invalid);
+    std::uint8_t const leaf_kind = static_cast<std::uint8_t>(gwn::gwn_bvh_child_kind::k_leaf);
+    std::uint8_t const internal_kind =
+        static_cast<std::uint8_t>(gwn::gwn_bvh_child_kind::k_internal);
+
+    for (auto &node : h_topology) {
+        for (int i = 0; i < 4; ++i) {
+            node.child_index[i] = Index(0);
+            node.child_count[i] = Index(0);
+            node.child_kind[i] = invalid_kind;
+        }
+    }
+    h_topology[0].child_index[0] = Index(0);
+    h_topology[0].child_count[0] = Index(1);
+    h_topology[0].child_kind[0] = leaf_kind;
+    h_topology[0].child_index[1] = Index(1);
+    h_topology[0].child_kind[1] = internal_kind;
+    h_topology[0].child_index[2] = Index(2);
+    h_topology[0].child_kind[2] = internal_kind;
+
+    for (auto &node : h_aabb) {
+        for (int i = 0; i < 4; ++i) {
+            node.child_min_x[i] = Real(2);
+            node.child_min_y[i] = Real(2);
+            node.child_min_z[i] = Real(2);
+            node.child_max_x[i] = Real(3);
+            node.child_max_y[i] = Real(3);
+            node.child_max_z[i] = Real(3);
+        }
+    }
+    h_aabb[0].child_min_x[0] = Real(0);
+    h_aabb[0].child_min_y[0] = Real(0);
+    h_aabb[0].child_min_z[0] = Real(-1);
+    h_aabb[0].child_max_x[0] = Real(1);
+    h_aabb[0].child_max_y[0] = Real(1);
+    h_aabb[0].child_max_z[0] = Real(1);
+    for (int child_slot = 1; child_slot < 3; ++child_slot) {
+        h_aabb[0].child_min_x[child_slot] = Real(-1);
+        h_aabb[0].child_min_y[child_slot] = Real(-1);
+        h_aabb[0].child_min_z[child_slot] = Real(-2);
+        h_aabb[0].child_max_x[child_slot] = Real(1);
+        h_aabb[0].child_max_y[child_slot] = Real(1);
+        h_aabb[0].child_max_z[child_slot] = Real(2);
+    }
+
+    gwn::gwn_device_array<TopologyNode> d_topology;
+    gwn::gwn_device_array<AabbNode> d_aabb;
+    gwn::gwn_device_array<Index> d_primitive_indices;
+    if (!gwn::tests::resize_device_arrays(h_topology.size(), d_topology, d_aabb) ||
+        !d_primitive_indices.resize(h_primitive_indices.size()).is_ok()) {
+        return false;
+    }
+    if (!d_topology
+             .copy_from_host(
+                 cuda::std::span<TopologyNode const>(h_topology.data(), h_topology.size())
+             )
+             .is_ok() ||
+        !d_aabb.copy_from_host(cuda::std::span<AabbNode const>(h_aabb.data(), h_aabb.size()))
+             .is_ok() ||
+        !d_primitive_indices
+             .copy_from_host(
+                 cuda::std::span<Index const>(
+                     h_primitive_indices.data(), h_primitive_indices.size()
+                 )
+             )
+             .is_ok()) {
+        return false;
+    }
+
+    gwn::gwn_blas_accessor<4, Real, Index> const overflow_blas{
+        geometry_object.accessor(),
+        gwn::gwn_bvh4_topology_accessor<Real, Index>{
+            d_topology.span(),
+            d_primitive_indices.span(),
+            gwn::gwn_bvh_child_kind::k_internal,
+            Index(0),
+            Index(0),
+        },
+        gwn::gwn_bvh4_aabb_accessor<Real, Index>{d_aabb.span()},
+        cuda::std::tuple<>{},
+    };
+
+    std::array<gwn::gwn_blas_accessor<4, Real, Index>, 1> const blas_table{overflow_blas};
+    std::array<gwn::gwn_instance_record<Real, Index>, 1> instances{};
+    instances[0].blas_index = Index(0);
+    instances[0].transform = gwn::gwn_similarity_transform<Real>::identity();
+
+    gwn::gwn_scene_object<4, Real, Index, gwn::gwn_blas_accessor<4, Real, Index>> scene{};
+    if (!gwn::gwn_scene_build_lbvh<4, Real, Index>(
+             cuda::std::span<gwn::gwn_blas_accessor<4, Real, Index> const>(
+                 blas_table.data(), blas_table.size()
+             ),
+             cuda::std::span<gwn::gwn_instance_record<Real, Index> const>(
+                 instances.data(), instances.size()
+             ),
+             scene
+        )
+             .is_ok()) {
+        return false;
+    }
+
+    std::array<Real, 1> const h_ox{Real(0)};
+    std::array<Real, 1> const h_oy{Real(0)};
+    std::array<Real, 1> const h_oz{Real(-10)};
+    std::array<Real, 1> const h_dx{Real(0)};
+    std::array<Real, 1> const h_dy{Real(0)};
+    std::array<Real, 1> const h_dz{Real(1)};
+    std::array<Real, 1> h_t{Real(123)};
+    std::array<Index, 1> h_primitive_id{Index(7)};
+    std::array<Index, 1> h_instance_id{Index(9)};
+    std::array<std::uint8_t, 1> h_status{std::uint8_t(0)};
+    std::array<int, 1> h_callback_flag{0};
+
+    gwn::gwn_device_array<Real> d_ox, d_oy, d_oz, d_dx, d_dy, d_dz, d_t;
+    gwn::gwn_device_array<Index> d_primitive_id, d_instance_id;
+    gwn::gwn_device_array<std::uint8_t> d_status;
+    gwn::gwn_device_array<int> d_callback_flag;
+    if (!gwn::tests::resize_device_arrays(
+            1, d_ox, d_oy, d_oz, d_dx, d_dy, d_dz, d_t, d_primitive_id, d_instance_id, d_status,
+            d_callback_flag
+        )) {
+        return false;
+    }
+    if (!d_ox.copy_from_host(cuda::std::span<Real const>(h_ox.data(), h_ox.size())).is_ok() ||
+        !d_oy.copy_from_host(cuda::std::span<Real const>(h_oy.data(), h_oy.size())).is_ok() ||
+        !d_oz.copy_from_host(cuda::std::span<Real const>(h_oz.data(), h_oz.size())).is_ok() ||
+        !d_dx.copy_from_host(cuda::std::span<Real const>(h_dx.data(), h_dx.size())).is_ok() ||
+        !d_dy.copy_from_host(cuda::std::span<Real const>(h_dy.data(), h_dy.size())).is_ok() ||
+        !d_dz.copy_from_host(cuda::std::span<Real const>(h_dz.data(), h_dz.size())).is_ok()) {
+        return false;
+    }
+
+    constexpr int k_block_size = gwn::detail::k_gwn_default_block_size;
+    gwn::gwn_status const launch_status = gwn::detail::gwn_launch_linear_kernel<k_block_size>(
+        1, unified_scene_ray_overflow_functor<1>{
+               scene.accessor(),
+               d_ox.span(),
+               d_oy.span(),
+               d_oz.span(),
+               d_dx.span(),
+               d_dy.span(),
+               d_dz.span(),
+               d_callback_flag.span(),
+               d_t.span(),
+               d_primitive_id.span(),
+               d_instance_id.span(),
+               d_status.span(),
+               Real(0),
+               std::numeric_limits<Real>::infinity(),
+           }
+    );
+    if (!launch_status.is_ok() || cudaDeviceSynchronize() != cudaSuccess)
+        return false;
+
+    if (!d_t.copy_to_host(cuda::std::span<Real>(h_t.data(), h_t.size())).is_ok() ||
+        !d_primitive_id
+             .copy_to_host(cuda::std::span<Index>(h_primitive_id.data(), h_primitive_id.size()))
+             .is_ok() ||
+        !d_instance_id
+             .copy_to_host(cuda::std::span<Index>(h_instance_id.data(), h_instance_id.size()))
+             .is_ok() ||
+        !d_status.copy_to_host(cuda::std::span<std::uint8_t>(h_status.data(), h_status.size()))
+             .is_ok() ||
+        !d_callback_flag
+             .copy_to_host(cuda::std::span<int>(h_callback_flag.data(), h_callback_flag.size()))
+             .is_ok()) {
+        return false;
+    }
+    if (cudaDeviceSynchronize() != cudaSuccess)
+        return false;
+
+    callback_called = h_callback_flag[0] != 0;
+    out_t = h_t[0];
+    out_primitive_id = h_primitive_id[0];
+    out_instance_id = h_instance_id[0];
+    out_status = h_status[0];
+    return true;
 }
 
 TestBlasStorage build_test_blas(
@@ -1643,4 +1915,164 @@ TEST_F(CudaFixture, SceneRayFirstHitScaledInstance) {
     EXPECT_EQ(hit_instance_id[0], Index(0));
     EXPECT_NEAR(hit_u[0], Real(0.25), Real(1e-6));
     EXPECT_NEAR(hit_v[0], Real(0.25), Real(1e-6));
+}
+
+TEST_F(CudaFixture, SceneRayFirstHitFiniteTMaxMiss) {
+    gwn::tests::SingleTriangleMesh mesh{};
+    TestBlasStorage const blas = build_test_blas(
+        std::vector<Real>(mesh.vx.begin(), mesh.vx.end()),
+        std::vector<Real>(mesh.vy.begin(), mesh.vy.end()),
+        std::vector<Real>(mesh.vz.begin(), mesh.vz.end()),
+        std::vector<Index>(mesh.i0.begin(), mesh.i0.end()),
+        std::vector<Index>(mesh.i1.begin(), mesh.i1.end()),
+        std::vector<Index>(mesh.i2.begin(), mesh.i2.end())
+    );
+
+    std::array<gwn::gwn_blas_accessor<4, Real, Index>, 1> const blas_table{blas.accessor()};
+    std::array<gwn::gwn_instance_record<Real, Index>, 1> instances{};
+    instances[0].blas_index = Index(0);
+    instances[0].transform = gwn::gwn_similarity_transform<Real>::identity();
+
+    gwn::gwn_scene_object<4, Real, Index, gwn::gwn_blas_accessor<4, Real, Index>> scene{};
+    ASSERT_TRUE((gwn::gwn_scene_build_lbvh<4, Real, Index>(
+                     cuda::std::span<gwn::gwn_blas_accessor<4, Real, Index> const>(
+                         blas_table.data(), blas_table.size()
+                     ),
+                     cuda::std::span<gwn::gwn_instance_record<Real, Index> const>(
+                         instances.data(), instances.size()
+                     ),
+                     scene
+    )
+                     .is_ok()));
+    ASSERT_EQ(scene.accessor().ias_topology.root_kind, gwn::gwn_bvh_child_kind::k_leaf);
+
+    std::array<Real, 1> const h_ox{Real(0.25)};
+    std::array<Real, 1> const h_oy{Real(0.25)};
+    std::array<Real, 1> const h_oz{Real(-1)};
+    std::array<Real, 1> const h_dx{Real(0)};
+    std::array<Real, 1> const h_dy{Real(0)};
+    std::array<Real, 1> const h_dz{Real(1)};
+
+    gwn::gwn_device_array<Real> d_ox, d_oy, d_oz, d_dx, d_dy, d_dz, d_t;
+    gwn::gwn_device_array<Index> d_primitive_id, d_instance_id;
+    gwn::gwn_device_array<std::uint8_t> d_status;
+    expect_copy_from_host(d_ox, cuda::std::span<Real const>(h_ox.data(), h_ox.size()));
+    expect_copy_from_host(d_oy, cuda::std::span<Real const>(h_oy.data(), h_oy.size()));
+    expect_copy_from_host(d_oz, cuda::std::span<Real const>(h_oz.data(), h_oz.size()));
+    expect_copy_from_host(d_dx, cuda::std::span<Real const>(h_dx.data(), h_dx.size()));
+    expect_copy_from_host(d_dy, cuda::std::span<Real const>(h_dy.data(), h_dy.size()));
+    expect_copy_from_host(d_dz, cuda::std::span<Real const>(h_dz.data(), h_dz.size()));
+    ASSERT_TRUE(gwn::tests::resize_device_arrays(1, d_t, d_primitive_id, d_instance_id, d_status));
+
+    constexpr int k_block_size = gwn::detail::k_gwn_default_block_size;
+    ASSERT_TRUE((gwn::detail::gwn_launch_linear_kernel<k_block_size>(
+                     1,
+                     unified_scene_ray_interval_functor<64>{
+                         scene.accessor(),
+                         d_ox.span(),
+                         d_oy.span(),
+                         d_oz.span(),
+                         d_dx.span(),
+                         d_dy.span(),
+                         d_dz.span(),
+                         d_t.span(),
+                         d_primitive_id.span(),
+                         d_instance_id.span(),
+                         d_status.span(),
+                         Real(0),
+                         Real(0.5),
+                     }
+    )
+                     .is_ok()));
+    ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+
+    std::array<Real, 1> hit_t{};
+    std::array<Index, 1> hit_primitive_id{};
+    std::array<Index, 1> hit_instance_id{};
+    std::array<std::uint8_t, 1> hit_status{};
+    ASSERT_TRUE(d_t.copy_to_host(cuda::std::span<Real>(hit_t.data(), hit_t.size())).is_ok());
+    ASSERT_TRUE(
+        d_primitive_id
+            .copy_to_host(cuda::std::span<Index>(hit_primitive_id.data(), hit_primitive_id.size()))
+            .is_ok()
+    );
+    ASSERT_TRUE(
+        d_instance_id
+            .copy_to_host(cuda::std::span<Index>(hit_instance_id.data(), hit_instance_id.size()))
+            .is_ok()
+    );
+    ASSERT_TRUE(
+        d_status.copy_to_host(cuda::std::span<std::uint8_t>(hit_status.data(), hit_status.size()))
+            .is_ok()
+    );
+    ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+
+    EXPECT_EQ(hit_status[0], static_cast<std::uint8_t>(gwn::gwn_ray_first_hit_status::k_miss));
+    EXPECT_EQ(hit_t[0], Real(-1));
+    EXPECT_EQ(hit_primitive_id[0], gwn::gwn_invalid_index<Index>());
+    EXPECT_EQ(hit_instance_id[0], gwn::gwn_invalid_index<Index>());
+}
+
+TEST_F(CudaFixture, SceneRayFirstHitNestedOverflowPreservesPayload) {
+    bool callback_called = false;
+    Real hit_t = Real(-1);
+    Index hit_primitive_id = gwn::gwn_invalid_index<Index>();
+    Index hit_instance_id = gwn::gwn_invalid_index<Index>();
+    std::uint8_t hit_status = 0;
+
+    ASSERT_TRUE(run_scene_ray_first_hit_overflow_probe(
+        callback_called, hit_t, hit_primitive_id, hit_instance_id, hit_status
+    ));
+
+    EXPECT_TRUE(callback_called);
+    EXPECT_EQ(hit_status, static_cast<std::uint8_t>(gwn::gwn_ray_first_hit_status::k_overflow));
+    EXPECT_NEAR(hit_t, Real(10), Real(1e-6));
+    EXPECT_EQ(hit_primitive_id, Index(0));
+    EXPECT_EQ(hit_instance_id, Index(0));
+}
+
+TEST_F(CudaFixture, UnifiedBlasBatchWritesInvalidInstanceId) {
+    gwn::tests::SingleTriangleMesh mesh{};
+    TestBlasStorage const blas = build_test_blas(
+        std::vector<Real>(mesh.vx.begin(), mesh.vx.end()),
+        std::vector<Real>(mesh.vy.begin(), mesh.vy.end()),
+        std::vector<Real>(mesh.vz.begin(), mesh.vz.end()),
+        std::vector<Index>(mesh.i0.begin(), mesh.i0.end()),
+        std::vector<Index>(mesh.i1.begin(), mesh.i1.end()),
+        std::vector<Index>(mesh.i2.begin(), mesh.i2.end())
+    );
+
+    std::array<Real, 1> const h_ox{Real(0.25)};
+    std::array<Real, 1> const h_oy{Real(0.25)};
+    std::array<Real, 1> const h_oz{Real(-1)};
+    std::array<Real, 1> const h_dx{Real(0)};
+    std::array<Real, 1> const h_dy{Real(0)};
+    std::array<Real, 1> const h_dz{Real(1)};
+
+    gwn::gwn_device_array<Real> d_ox, d_oy, d_oz, d_dx, d_dy, d_dz, d_t;
+    gwn::gwn_device_array<Index> d_primitive_id, d_instance_id;
+    expect_copy_from_host(d_ox, cuda::std::span<Real const>(h_ox.data(), h_ox.size()));
+    expect_copy_from_host(d_oy, cuda::std::span<Real const>(h_oy.data(), h_oy.size()));
+    expect_copy_from_host(d_oz, cuda::std::span<Real const>(h_oz.data(), h_oz.size()));
+    expect_copy_from_host(d_dx, cuda::std::span<Real const>(h_dx.data(), h_dx.size()));
+    expect_copy_from_host(d_dy, cuda::std::span<Real const>(h_dy.data(), h_dy.size()));
+    expect_copy_from_host(d_dz, cuda::std::span<Real const>(h_dz.data(), h_dz.size()));
+    ASSERT_TRUE(gwn::tests::resize_device_arrays(1, d_t, d_primitive_id, d_instance_id));
+
+    ASSERT_TRUE((gwn::gwn_compute_ray_first_hit_batch(
+                     blas.accessor(), d_ox.span(), d_oy.span(), d_oz.span(), d_dx.span(),
+                     d_dy.span(), d_dz.span(), d_t.span(), d_primitive_id.span(),
+                     d_instance_id.span()
+    )
+                     .is_ok()));
+    ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+
+    std::array<Index, 1> hit_instance_id{};
+    ASSERT_TRUE(
+        d_instance_id
+            .copy_to_host(cuda::std::span<Index>(hit_instance_id.data(), hit_instance_id.size()))
+            .is_ok()
+    );
+    ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+    EXPECT_EQ(hit_instance_id[0], gwn::gwn_invalid_index<Index>());
 }
