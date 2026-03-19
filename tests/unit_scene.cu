@@ -67,6 +67,48 @@ gwn::gwn_aabb<Real> compute_expected_aabb(
     return expected;
 }
 
+gwn::gwn_aabb<Real>
+union_aabb_host(gwn::gwn_aabb<Real> const &lhs, gwn::gwn_aabb<Real> const &rhs) {
+    return gwn::gwn_aabb<Real>{
+        std::min(lhs.min_x, rhs.min_x), std::min(lhs.min_y, rhs.min_y),
+        std::min(lhs.min_z, rhs.min_z), std::max(lhs.max_x, rhs.max_x),
+        std::max(lhs.max_y, rhs.max_y), std::max(lhs.max_z, rhs.max_z),
+    };
+}
+
+void expect_aabb_near(
+    gwn::gwn_aabb<Real> const &actual, gwn::gwn_aabb<Real> const &expected,
+    Real const tolerance = Real(1e-6)
+) {
+    EXPECT_NEAR(actual.min_x, expected.min_x, tolerance);
+    EXPECT_NEAR(actual.min_y, expected.min_y, tolerance);
+    EXPECT_NEAR(actual.min_z, expected.min_z, tolerance);
+    EXPECT_NEAR(actual.max_x, expected.max_x, tolerance);
+    EXPECT_NEAR(actual.max_y, expected.max_y, tolerance);
+    EXPECT_NEAR(actual.max_z, expected.max_z, tolerance);
+}
+
+template <class T> T copy_device_value(T const *const src) {
+    T host{};
+    gwn::gwn_status const status = gwn::detail::gwn_copy_d2h(
+        cuda::std::span<T>(&host, std::size_t(1)), cuda::std::span<T const>(src, std::size_t(1)),
+        gwn::gwn_default_stream()
+    );
+    EXPECT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
+    EXPECT_EQ(cudaSuccess, cudaStreamSynchronize(gwn::gwn_default_stream()));
+    return host;
+}
+
+template <class T> std::vector<T> copy_device_span(cuda::std::span<T const> const src) {
+    std::vector<T> host(src.size());
+    gwn::gwn_status const status = gwn::detail::gwn_copy_d2h(
+        cuda::std::span<T>(host.data(), host.size()), src, gwn::gwn_default_stream()
+    );
+    EXPECT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
+    EXPECT_EQ(cudaSuccess, cudaStreamSynchronize(gwn::gwn_default_stream()));
+    return host;
+}
+
 struct TestBlasStorage {
     gwn::gwn_geometry_object<Real, Index> geometry{};
     gwn::gwn_bvh4_topology_object<Real, Index> topology{};
@@ -109,6 +151,8 @@ TestBlasStorage build_test_blas(
 
 template <class BuildSceneFn> void expect_scene_build_success(BuildSceneFn &&build_scene) {
     gwn::tests::SingleTriangleMesh mesh_a{};
+    gwn::gwn_aabb<Real> const local_a{Real(0), Real(0), Real(0), Real(1), Real(1), Real(0)};
+    gwn::gwn_aabb<Real> const local_b{Real(3), Real(2), Real(1), Real(4), Real(3), Real(1)};
     std::vector<Real> const vx_b{Real(3), Real(4), Real(3)};
     std::vector<Real> const vy_b{Real(2), Real(2), Real(3)};
     std::vector<Real> const vz_b{Real(1), Real(1), Real(1)};
@@ -126,10 +170,11 @@ template <class BuildSceneFn> void expect_scene_build_success(BuildSceneFn &&bui
     );
     TestBlasStorage const blas_b = build_test_blas(vx_b, vy_b, vz_b, i0_b, i1_b, i2_b);
 
-    std::array<gwn::gwn_blas_accessor<4, Real, Index>, 2> const blas_table{
+    std::array<gwn::gwn_blas_accessor<4, Real, Index>, 2> blas_table{
         blas_a.accessor(),
         blas_b.accessor(),
     };
+    std::array<gwn::gwn_blas_accessor<4, Real, Index>, 2> const expected_blas_table = blas_table;
 
     std::array<gwn::gwn_instance_record<Real, Index>, 3> instances{};
     instances[0].blas_index = Index(0);
@@ -144,6 +189,7 @@ template <class BuildSceneFn> void expect_scene_build_success(BuildSceneFn &&bui
     instances[2].transform.translation[0] = Real(-5);
     instances[2].transform.translation[1] = Real(3);
     instances[2].transform.translation[2] = Real(2);
+    std::array<gwn::gwn_instance_record<Real, Index>, 3> const expected_instances = instances;
 
     gwn::gwn_scene_object<4, Real, Index, gwn::gwn_blas_accessor<4, Real, Index>> scene{};
     gwn::gwn_status const status = build_scene(
@@ -164,6 +210,76 @@ template <class BuildSceneFn> void expect_scene_build_success(BuildSceneFn &&bui
     EXPECT_GT(accessor.ias_topology.nodes.size(), 0u);
     EXPECT_TRUE(accessor.ias_aabb.is_valid_for(accessor.ias_topology));
     EXPECT_EQ(accessor.ias_topology.primitive_indices.size(), 3u);
+
+    auto const root_node =
+        copy_device_value(accessor.ias_topology.nodes.data() + accessor.ias_topology.root_index);
+    auto const root_aabb =
+        copy_device_value(accessor.ias_aabb.nodes.data() + accessor.ias_topology.root_index);
+
+    bool has_root_child = false;
+    gwn::gwn_aabb<Real> actual_root_bounds{};
+    for (int slot = 0; slot < 4; ++slot) {
+        if (static_cast<gwn::gwn_bvh_child_kind>(root_node.child_kind[slot]) ==
+            gwn::gwn_bvh_child_kind::k_invalid) {
+            continue;
+        }
+        gwn::gwn_aabb<Real> const child_bounds{
+            root_aabb.child_min_x[slot], root_aabb.child_min_y[slot], root_aabb.child_min_z[slot],
+            root_aabb.child_max_x[slot], root_aabb.child_max_y[slot], root_aabb.child_max_z[slot],
+        };
+        actual_root_bounds =
+            has_root_child ? union_aabb_host(actual_root_bounds, child_bounds) : child_bounds;
+        has_root_child = true;
+    }
+    ASSERT_TRUE(has_root_child);
+
+    gwn::gwn_aabb<Real> const expected_root_bounds = union_aabb_host(
+        union_aabb_host(
+            compute_expected_aabb(expected_instances[0].transform, local_a),
+            compute_expected_aabb(expected_instances[1].transform, local_b)
+        ),
+        compute_expected_aabb(expected_instances[2].transform, local_a)
+    );
+    expect_aabb_near(actual_root_bounds, expected_root_bounds);
+
+    instances[0].blas_index = Index(1);
+    instances[0].transform.translation[0] = Real(123);
+    instances[1].transform.translation[1] = Real(456);
+    instances[2].transform.translation[2] = Real(789);
+    blas_table[0] = {};
+    blas_table[1] = {};
+
+    std::vector<gwn::gwn_instance_record<Real, Index>> const owned_instances =
+        copy_device_span(accessor.instances);
+    ASSERT_EQ(owned_instances.size(), expected_instances.size());
+    for (std::size_t i = 0; i < expected_instances.size(); ++i) {
+        EXPECT_EQ(owned_instances[i].blas_index, expected_instances[i].blas_index);
+        for (int axis = 0; axis < 3; ++axis)
+            EXPECT_NEAR(
+                owned_instances[i].transform.translation[axis],
+                expected_instances[i].transform.translation[axis], Real(1e-6)
+            );
+        EXPECT_NEAR(
+            owned_instances[i].transform.scale, expected_instances[i].transform.scale, Real(1e-6)
+        );
+    }
+
+    std::vector<gwn::gwn_blas_accessor<4, Real, Index>> const owned_blas_table =
+        copy_device_span(accessor.blas_table);
+    ASSERT_EQ(owned_blas_table.size(), expected_blas_table.size());
+    for (std::size_t i = 0; i < expected_blas_table.size(); ++i) {
+        EXPECT_TRUE(owned_blas_table[i].is_valid());
+        EXPECT_EQ(
+            owned_blas_table[i].geometry.vertex_x.data(),
+            expected_blas_table[i].geometry.vertex_x.data()
+        );
+        EXPECT_EQ(
+            owned_blas_table[i].topology.root_kind, expected_blas_table[i].topology.root_kind
+        );
+        EXPECT_EQ(
+            owned_blas_table[i].topology.root_index, expected_blas_table[i].topology.root_index
+        );
+    }
 }
 
 } // namespace
