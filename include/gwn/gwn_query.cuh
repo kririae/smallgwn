@@ -217,6 +217,7 @@ template <
     int Width, gwn_real_type Real, gwn_index_type Index,
     int StackCapacity = k_gwn_default_traversal_stack_capacity,
     typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
+[[deprecated("Use gwn_ray_first_hit with gwn_blas_accessor instead.")]]
 __device__ inline gwn_ray_first_hit_result<Real, Index> gwn_ray_first_hit_bvh(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
@@ -241,6 +242,7 @@ template <
     int Width, gwn_real_type Real, gwn_index_type Index = std::uint32_t,
     int StackCapacity = k_gwn_default_traversal_stack_capacity,
     typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
+[[deprecated("Use gwn_compute_ray_first_hit_batch with gwn_blas_accessor instead.")]]
 gwn_status gwn_compute_ray_first_hit_batch_bvh(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
@@ -291,6 +293,7 @@ template <
     gwn_real_type Real, gwn_index_type Index = std::uint32_t,
     int StackCapacity = k_gwn_default_traversal_stack_capacity,
     typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
+[[deprecated("Use gwn_compute_ray_first_hit_batch with gwn_blas_accessor instead.")]]
 gwn_status gwn_compute_ray_first_hit_batch_bvh(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh4_topology_accessor<Real, Index> const &bvh,
@@ -302,9 +305,37 @@ gwn_status gwn_compute_ray_first_hit_batch_bvh(
     Real const t_min = Real(0), Real const t_max = std::numeric_limits<Real>::infinity(),
     cudaStream_t const stream = gwn_default_stream(), OverflowCallback const &overflow_callback = {}
 ) noexcept {
-    return gwn_compute_ray_first_hit_batch_bvh<4, Real, Index, StackCapacity, OverflowCallback>(
-        geometry, bvh, aabb_tree, ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x, ray_dir_y,
-        ray_dir_z, output_t, output_primitive_id, t_min, t_max, stream, overflow_callback
+    static_assert(StackCapacity > 0, "Traversal stack capacity must be positive.");
+
+    if (!geometry.is_valid())
+        return gwn_status::invalid_argument("Geometry accessor contains mismatched span lengths.");
+    if (!bvh.is_valid())
+        return gwn_status::invalid_argument("BVH accessor is invalid.");
+    if (!aabb_tree.is_valid_for(bvh))
+        return gwn_status::invalid_argument("BVH AABB tree is invalid for the given topology.");
+
+    gwn_status const span_status = detail::gwn_validate_ray_first_hit_batch_spans<Real, Index>(
+        ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x, ray_dir_y, ray_dir_z, output_t,
+        output_primitive_id
+    );
+    if (!span_status.is_ok())
+        return span_status;
+
+    if (!(t_max >= t_min))
+        return gwn_status::invalid_argument("ray first-hit: requires t_max >= t_min.");
+    std::size_t const n = ray_origin_x.size();
+    if (n == 0)
+        return gwn_status::ok();
+
+    constexpr int k_block_size = detail::k_gwn_default_block_size;
+    return detail::gwn_launch_linear_kernel<k_block_size>(
+        n,
+        detail::gwn_ray_first_hit_batch_bvh_functor<
+            4, Real, Index, StackCapacity, OverflowCallback>{
+            geometry, bvh, aabb_tree, ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x,
+            ray_dir_y, ray_dir_z, output_t, output_primitive_id, t_min, t_max, overflow_callback
+        },
+        stream
     );
 }
 
@@ -430,6 +461,7 @@ template <
     int Width, gwn_real_type Real, gwn_index_type Index,
     int StackCapacity = k_gwn_default_traversal_stack_capacity,
     typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
+[[deprecated("Use gwn_winding_number_point with gwn_blas_accessor instead.")]]
 __device__ inline Real gwn_winding_number_point_bvh_exact(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh, Real const qx, Real const qy,
@@ -603,6 +635,7 @@ template <
     int Width, gwn_real_type Real, gwn_index_type Index = std::uint32_t,
     int StackCapacity = k_gwn_default_traversal_stack_capacity,
     typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
+[[deprecated("Use gwn_compute_winding_number_batch with gwn_blas_accessor instead.")]]
 gwn_status gwn_compute_winding_number_batch_bvh_exact(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
@@ -645,6 +678,7 @@ template <
     gwn_real_type Real, gwn_index_type Index = std::uint32_t,
     int StackCapacity = k_gwn_default_traversal_stack_capacity,
     typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
+[[deprecated("Use gwn_compute_winding_number_batch with gwn_blas_accessor instead.")]]
 gwn_status gwn_compute_winding_number_batch_bvh_exact(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh4_topology_accessor<Real, Index> const &bvh, cuda::std::span<Real const> const query_x,
@@ -652,9 +686,33 @@ gwn_status gwn_compute_winding_number_batch_bvh_exact(
     cuda::std::span<Real> const output, cudaStream_t const stream = gwn_default_stream(),
     OverflowCallback const &overflow_callback = {}
 ) noexcept {
-    return gwn_compute_winding_number_batch_bvh_exact<
-        4, Real, Index, StackCapacity, OverflowCallback>(
-        geometry, bvh, query_x, query_y, query_z, output, stream, overflow_callback
+    static_assert(StackCapacity > 0, "Traversal stack capacity must be positive.");
+
+    if (!geometry.is_valid())
+        return gwn_status::invalid_argument("Geometry accessor contains mismatched span lengths.");
+    if (!bvh.is_valid())
+        return gwn_status::invalid_argument("BVH accessor is invalid.");
+    if (query_x.size() != query_y.size() || query_x.size() != query_z.size())
+        return gwn_status::invalid_argument("Query SoA spans must have identical lengths.");
+    if (query_x.size() != output.size())
+        return gwn_status::invalid_argument("Output span size must match query count.");
+    if (!gwn_span_has_storage(query_x) || !gwn_span_has_storage(query_y) ||
+        !gwn_span_has_storage(query_z) || !gwn_span_has_storage(output)) {
+        return gwn_status::invalid_argument(
+            "Query/output spans must use non-null storage when non-empty."
+        );
+    }
+    if (output.empty())
+        return gwn_status::ok();
+
+    constexpr int k_block_size = detail::k_gwn_default_block_size;
+    return detail::gwn_launch_linear_kernel<k_block_size>(
+        output.size(),
+        detail::gwn_winding_number_batch_bvh_exact_functor<
+            4, Real, Index, StackCapacity, OverflowCallback>{
+            geometry, bvh, query_x, query_y, query_z, output, overflow_callback
+        },
+        stream
     );
 }
 
