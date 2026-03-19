@@ -116,7 +116,7 @@ private:
 
 template <gwn_real_type Real, gwn_index_type Index = std::uint32_t> struct gwn_instance_record {
     Index blas_index{gwn_invalid_index<Index>()};
-    gwn_similarity_transform<Real> transform{};
+    gwn_similarity_transform<Real> transform{gwn_similarity_transform<Real>::identity()};
 };
 
 template <
@@ -144,6 +144,7 @@ struct gwn_scene_accessor {
             return false;
 
 #if defined(__CUDA_ARCH__)
+        // Host code must not dereference device spans; deep referential checks stay device-only.
         for (std::size_t i = 0; i < blas_table.size(); ++i)
             if (!blas_table[i].is_valid())
                 return false;
@@ -196,7 +197,12 @@ public:
         };
     }
 
-    [[nodiscard]] bool has_data() const noexcept { return accessor().is_valid(); }
+    [[nodiscard]] bool has_data() const noexcept {
+        gwn_bvh_topology_accessor<Width, Real, Index> const &ias_topology =
+            ias_topology_.accessor();
+        return ias_topology.is_valid() && ias_aabb_.accessor().is_valid_for(ias_topology) &&
+               !blas_table_.empty() && !instances_.empty();
+    }
 
     friend void swap(gwn_scene_object &lhs, gwn_scene_object &rhs) noexcept {
         using std::swap;
