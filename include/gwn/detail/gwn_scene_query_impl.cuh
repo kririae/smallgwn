@@ -67,7 +67,7 @@ template <class SceneAccel, gwn_real_type Real, gwn_index_type Index>
 [[nodiscard]] __device__ inline bool gwn_scene_ray_candidate_has_payload_impl(
     gwn_ray_hit_result<Real, Index> const &candidate
 ) noexcept {
-    return !gwn_is_invalid_index(candidate.primitive_id) && candidate.t >= Real(0);
+    return !gwn_is_invalid_index(candidate.primitive_id);
 }
 
 template <class SceneAccel, gwn_real_type Real, gwn_index_type Index>
