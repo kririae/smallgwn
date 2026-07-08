@@ -118,6 +118,20 @@ check(gwn::gwn_compute_winding_number_batch_bvh_taylor<1, Real, Index>(
 Use `gwn_bvh_facade_build_topology_aabb_moment_hploc` instead of the LBVH
 facade for the H-PLOC topology builder.
 
+For dynamic vertex positions, build topology once, then update geometry and
+refit payloads:
+
+```cpp
+// After vertex positions change, keep topology and refit derived payloads.
+check(gwn::gwn_update_geometry(geometry, x, y, z, stream));
+check(gwn::gwn_bvh_refit_aabb_moment<1, 4, Real, Index>(
+    geometry, topology, aabb, moments, stream));
+```
+
+`gwn_update_geometry` follows `cudaMemcpyAsync` host-memory lifetime rules.
+Keep host buffers alive until CUDA has read them, or synchronize with the stream
+or an event before reusing them.
+
 ### Antipodal winding
 
 Antipodal winding follows Martens, Trettner, and Bessmeltsev's 2026 method.
