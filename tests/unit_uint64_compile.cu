@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <gwn/gwn_boundary.cuh>
 #include <gwn/gwn_bvh.cuh>
 #include <gwn/gwn_bvh_topology_build.cuh>
 #include <gwn/gwn_geometry.cuh>
@@ -79,6 +80,46 @@ TEST(smallgwn_unit_uint64_compile, upload_and_harnack_templates_instantiate) {
     EXPECT_TRUE((gwn::gwn_compute_harnack_trace_batch_bvh_taylor<2, Real, Index>(
                      geometry.accessor(), bvh, aabb, m2, ray_ox, ray_oy, ray_oz, ray_dx, ray_dy,
                      ray_dz, out_t, out_nx, out_ny, out_nz
+                 ))
+                    .is_ok());
+}
+
+TEST(smallgwn_unit_uint64_compile, boundary_chain_and_antipodal_templates_instantiate) {
+    gwn::gwn_geometry_object<Real, Index> geometry{};
+
+    cuda::std::span<Real const> vx{};
+    cuda::std::span<Real const> vy{};
+    cuda::std::span<Real const> vz{};
+    cuda::std::span<Index const> i0{};
+    cuda::std::span<Index const> i1{};
+    cuda::std::span<Index const> i2{};
+    EXPECT_TRUE(gwn::gwn_upload_geometry(geometry, vx, vy, vz, i0, i1, i2).is_ok());
+
+    gwn::gwn_boundary_chain_object<Index> boundary{};
+    EXPECT_TRUE(gwn::gwn_build_boundary_chain(geometry.accessor(), boundary).is_ok());
+
+    gwn::gwn_bvh4_topology_accessor<Real, Index> bvh{};
+    bvh.root_kind = gwn::gwn_bvh_child_kind::k_leaf;
+    bvh.root_index = Index(0);
+    bvh.root_count = Index(0);
+
+    gwn::gwn_bvh4_aabb_accessor<Real, Index> aabb{};
+    cuda::std::span<Real const> query_x{};
+    cuda::std::span<Real const> query_y{};
+    cuda::std::span<Real const> query_z{};
+    cuda::std::span<Real> output{};
+    cuda::std::span<Real> output_x{};
+    cuda::std::span<Real> output_y{};
+    cuda::std::span<Real> output_z{};
+
+    EXPECT_TRUE((gwn::gwn_compute_winding_number_batch_bvh_antipodal<Real, Index>(
+                     geometry.accessor(), bvh, aabb, boundary.accessor(), query_x, query_y, query_z,
+                     output
+                 ))
+                    .is_ok());
+    EXPECT_TRUE((gwn::gwn_compute_winding_gradient_batch_antipodal<Real, Index>(
+                     geometry.accessor(), boundary.accessor(), query_x, query_y, query_z, output_x,
+                     output_y, output_z
                  ))
                     .is_ok());
 }
