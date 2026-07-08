@@ -17,12 +17,14 @@
 #include <gwn/gwn.cuh>
 
 #include "reference_cpu.cuh"
+#include "test_fixtures.hpp"
 #include "test_utils.hpp"
 
 namespace {
 
 using Real = gwn::tests::Real;
 using Index = gwn::tests::Index;
+using gwn::tests::CudaFixture;
 using gwn::tests::HostMesh;
 
 enum class topology_builder {
@@ -319,6 +321,51 @@ void accumulate_running_error(
     stats.mean_abs = (stats.count == 0) ? 0.0 : (sum_abs / static_cast<double>(stats.count));
 }
 
+[[nodiscard]] ::testing::AssertionResult query_single_winding_number_order2(
+    gwn::gwn_geometry_object<Real, Index> const &geometry,
+    gwn::gwn_bvh4_topology_object<Real, Index> const &topology,
+    gwn::gwn_bvh4_moment_object<2, Real, Index> const &moment, Real const qx, Real const qy,
+    Real const qz, Real &result
+) {
+    constexpr Real k_accuracy_scale = Real(2);
+
+    std::array<Real, 1> const host_qx{qx};
+    std::array<Real, 1> const host_qy{qy};
+    std::array<Real, 1> const host_qz{qz};
+    std::array<Real, 1> host_out{Real(0)};
+
+    gwn::gwn_device_array<Real> d_qx;
+    gwn::gwn_device_array<Real> d_qy;
+    gwn::gwn_device_array<Real> d_qz;
+    gwn::gwn_device_array<Real> d_out;
+    if (!d_qx.resize(1).is_ok() || !d_qy.resize(1).is_ok() || !d_qz.resize(1).is_ok() ||
+        !d_out.resize(1).is_ok()) {
+        return ::testing::AssertionFailure() << "single-query device allocation failed";
+    }
+    if (!d_qx.copy_from_host(cuda::std::span<Real const>(host_qx.data(), host_qx.size())).is_ok() ||
+        !d_qy.copy_from_host(cuda::std::span<Real const>(host_qy.data(), host_qy.size())).is_ok() ||
+        !d_qz.copy_from_host(cuda::std::span<Real const>(host_qz.data(), host_qz.size())).is_ok()) {
+        return ::testing::AssertionFailure() << "single-query upload failed";
+    }
+
+    gwn::gwn_status const query_status =
+        gwn::gwn_compute_winding_number_batch_bvh_taylor<2, 4, Real, Index>(
+            geometry.accessor(), topology.accessor(), moment.accessor(), d_qx.span(), d_qy.span(),
+            d_qz.span(), d_out.span(), k_accuracy_scale
+        );
+    if (!query_status.is_ok())
+        return ::testing::AssertionFailure() << gwn::tests::status_to_debug_string(query_status);
+    if (cudaDeviceSynchronize() != cudaSuccess)
+        return ::testing::AssertionFailure() << "single-query synchronize failed";
+    if (!d_out.copy_to_host(cuda::std::span<Real>(host_out.data(), host_out.size())).is_ok())
+        return ::testing::AssertionFailure() << "single-query download failed";
+    if (cudaDeviceSynchronize() != cudaSuccess)
+        return ::testing::AssertionFailure() << "single-query post-download synchronize failed";
+
+    result = host_out[0];
+    return ::testing::AssertionSuccess();
+}
+
 [[nodiscard]] ErrorSummary
 summarize_error(std::span<Real const> const lhs, std::span<Real const> const rhs) {
     ErrorSummary summary{};
@@ -467,12 +514,18 @@ template <int Order> void run_voxel_rebuild_consistency_test() {
                              .is_ok()));
 
             ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
-            ASSERT_TRUE(
-                d_out_iter.copy_to_host(cuda::std::span<Real>(host_iterative.data(), count)).is_ok()
-            );
-            ASSERT_TRUE(
-                d_out_lw.copy_to_host(cuda::std::span<Real>(host_levelwise.data(), count)).is_ok()
-            );
+            ASSERT_TRUE((gwn::detail::gwn_copy_d2h(
+                             cuda::std::span<Real>(host_iterative.data(), count),
+                             cuda::std::span<Real const>(d_out_iter.data(), count),
+                             gwn::gwn_default_stream()
+            )
+                             .is_ok()));
+            ASSERT_TRUE((gwn::detail::gwn_copy_d2h(
+                             cuda::std::span<Real>(host_levelwise.data(), count),
+                             cuda::std::span<Real const>(d_out_lw.data(), count),
+                             gwn::gwn_default_stream()
+            )
+                             .is_ok()));
             ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
 
             for (std::size_t i = 0; i < count; ++i) {
@@ -676,6 +729,161 @@ TEST(smallgwn_integration_correctness, voxel_order1_hploc_vs_lbvh_consistency_on
 
 TEST(smallgwn_integration_correctness, voxel_order2_hploc_vs_lbvh_consistency_on_sampled_models) {
     run_voxel_hploc_vs_lbvh_consistency_test<2>();
+}
+
+TEST_F(CudaFixture, dynamic_refit_matches_fresh_upload_on_same_topology) {
+    std::vector<std::filesystem::path> const fixture_paths =
+        gwn::tests::collect_builtin_fixture_paths();
+    auto const fixture_it = std::find_if(
+        fixture_paths.begin(), fixture_paths.end(),
+        [](std::filesystem::path const &path) { return path.filename() == "closed_cube.obj"; }
+    );
+    ASSERT_NE(fixture_it, fixture_paths.end()) << "closed_cube.obj fixture not found";
+
+    std::optional<HostMesh> const maybe_initial_mesh = gwn::tests::load_obj_mesh(*fixture_it);
+    ASSERT_TRUE(maybe_initial_mesh.has_value()) << "failed to load " << fixture_it->string();
+    HostMesh const initial_mesh = *maybe_initial_mesh;
+
+    HostMesh mutated_mesh = initial_mesh;
+    for (std::size_t i = 0; i < mutated_mesh.vertex_x.size(); ++i) {
+        Real const x = mutated_mesh.vertex_x[i];
+        Real const y = mutated_mesh.vertex_y[i];
+        Real const z = mutated_mesh.vertex_z[i];
+        mutated_mesh.vertex_x[i] = Real(1.15) * x + Real(0.10) * y + Real(0.25);
+        mutated_mesh.vertex_y[i] = Real(0.85) * y - Real(0.15) * z - Real(0.20);
+        mutated_mesh.vertex_z[i] = Real(1.05) * z + Real(0.12) * x + Real(0.30);
+    }
+
+    gwn::gwn_geometry_object<Real, Index> dynamic_geometry;
+    gwn::gwn_status upload_status = gwn::gwn_upload_geometry(
+        dynamic_geometry,
+        cuda::std::span<Real const>(initial_mesh.vertex_x.data(), initial_mesh.vertex_x.size()),
+        cuda::std::span<Real const>(initial_mesh.vertex_y.data(), initial_mesh.vertex_y.size()),
+        cuda::std::span<Real const>(initial_mesh.vertex_z.data(), initial_mesh.vertex_z.size()),
+        cuda::std::span<Index const>(initial_mesh.tri_i0.data(), initial_mesh.tri_i0.size()),
+        cuda::std::span<Index const>(initial_mesh.tri_i1.data(), initial_mesh.tri_i1.size()),
+        cuda::std::span<Index const>(initial_mesh.tri_i2.data(), initial_mesh.tri_i2.size())
+    );
+    SMALLGWN_SKIP_IF_STATUS_CUDA_UNAVAILABLE(upload_status);
+    ASSERT_TRUE(upload_status.is_ok()) << gwn::tests::status_to_debug_string(upload_status);
+
+    gwn::gwn_bvh4_topology_object<Real, Index> topology;
+    ASSERT_TRUE(
+        (gwn::gwn_bvh_topology_build_lbvh<4, Real, Index>(dynamic_geometry, topology).is_ok())
+    );
+
+    gwn::gwn_bvh4_aabb_object<Real, Index> initial_aabb;
+    gwn::gwn_bvh4_moment_object<2, Real, Index> initial_moment;
+    ASSERT_TRUE((gwn::gwn_bvh_refit_aabb_moment<2, 4, Real, Index>(
+                     dynamic_geometry, topology, initial_aabb, initial_moment
+    )
+                     .is_ok()));
+
+    MeshBounds const mutated_bounds = compute_mesh_bounds(mutated_mesh);
+    Real const center_x = (mutated_bounds.min_x + mutated_bounds.max_x) * Real(0.5);
+    Real const center_y = (mutated_bounds.min_y + mutated_bounds.max_y) * Real(0.5);
+    Real const center_z = (mutated_bounds.min_z + mutated_bounds.max_z) * Real(0.5);
+    Real const extent_x = mutated_bounds.max_x - mutated_bounds.min_x;
+    Real const extent_y = mutated_bounds.max_y - mutated_bounds.min_y;
+    Real const extent_z = mutated_bounds.max_z - mutated_bounds.min_z;
+    std::array<std::array<Real, 3>, 4> const query_points{{
+        {mutated_bounds.max_x + extent_x + Real(0.75), center_y, center_z},
+        {mutated_bounds.min_x - extent_x - Real(0.50), mutated_bounds.max_y + Real(0.25), center_z},
+        {center_x, mutated_bounds.min_y - extent_y - Real(0.60), mutated_bounds.max_z + Real(0.40)},
+        {mutated_bounds.max_x + Real(0.35), mutated_bounds.max_y + Real(0.45),
+         mutated_bounds.max_z + extent_z + Real(0.55)},
+    }};
+
+    ASSERT_TRUE(topology.accessor().has_internal_root());
+    std::size_t const root_index = static_cast<std::size_t>(topology.accessor().root_index);
+    gwn::gwn_bvh4_aabb_node_soa<Real> initial_root{};
+    ASSERT_EQ(
+        cudaSuccess, cudaMemcpy(
+                         &initial_root, initial_aabb.accessor().nodes.data() + root_index,
+                         sizeof(initial_root), cudaMemcpyDeviceToHost
+                     )
+    );
+
+    gwn::gwn_status update_status = gwn::gwn_update_geometry(
+        dynamic_geometry,
+        cuda::std::span<Real const>(mutated_mesh.vertex_x.data(), mutated_mesh.vertex_x.size()),
+        cuda::std::span<Real const>(mutated_mesh.vertex_y.data(), mutated_mesh.vertex_y.size()),
+        cuda::std::span<Real const>(mutated_mesh.vertex_z.data(), mutated_mesh.vertex_z.size())
+    );
+    ASSERT_TRUE(update_status.is_ok()) << gwn::tests::status_to_debug_string(update_status);
+
+    gwn::gwn_bvh4_aabb_object<Real, Index> dynamic_aabb;
+    gwn::gwn_bvh4_moment_object<2, Real, Index> dynamic_moment;
+    ASSERT_TRUE((gwn::gwn_bvh_refit_aabb_moment<2, 4, Real, Index>(
+                     dynamic_geometry, topology, dynamic_aabb, dynamic_moment
+    )
+                     .is_ok()));
+
+    gwn::gwn_geometry_object<Real, Index> fresh_geometry;
+    upload_status = gwn::gwn_upload_geometry(
+        fresh_geometry,
+        cuda::std::span<Real const>(mutated_mesh.vertex_x.data(), mutated_mesh.vertex_x.size()),
+        cuda::std::span<Real const>(mutated_mesh.vertex_y.data(), mutated_mesh.vertex_y.size()),
+        cuda::std::span<Real const>(mutated_mesh.vertex_z.data(), mutated_mesh.vertex_z.size()),
+        cuda::std::span<Index const>(mutated_mesh.tri_i0.data(), mutated_mesh.tri_i0.size()),
+        cuda::std::span<Index const>(mutated_mesh.tri_i1.data(), mutated_mesh.tri_i1.size()),
+        cuda::std::span<Index const>(mutated_mesh.tri_i2.data(), mutated_mesh.tri_i2.size())
+    );
+    ASSERT_TRUE(upload_status.is_ok()) << gwn::tests::status_to_debug_string(upload_status);
+
+    gwn::gwn_bvh4_aabb_object<Real, Index> fresh_aabb;
+    gwn::gwn_bvh4_moment_object<2, Real, Index> fresh_moment;
+    ASSERT_TRUE((gwn::gwn_bvh_refit_aabb_moment<2, 4, Real, Index>(
+                     fresh_geometry, topology, fresh_aabb, fresh_moment
+    )
+                     .is_ok()));
+
+    gwn::gwn_bvh4_aabb_node_soa<Real> dynamic_root{};
+    ASSERT_EQ(
+        cudaSuccess, cudaMemcpy(
+                         &dynamic_root, dynamic_aabb.accessor().nodes.data() + root_index,
+                         sizeof(dynamic_root), cudaMemcpyDeviceToHost
+                     )
+    );
+    auto const root_bounds_changed = [&]() {
+        constexpr Real k_root_epsilon = Real(1e-4);
+        for (int child = 0; child < 4; ++child) {
+            if (std::abs(dynamic_root.child_min_x[child] - initial_root.child_min_x[child]) >
+                    k_root_epsilon ||
+                std::abs(dynamic_root.child_min_y[child] - initial_root.child_min_y[child]) >
+                    k_root_epsilon ||
+                std::abs(dynamic_root.child_min_z[child] - initial_root.child_min_z[child]) >
+                    k_root_epsilon ||
+                std::abs(dynamic_root.child_max_x[child] - initial_root.child_max_x[child]) >
+                    k_root_epsilon ||
+                std::abs(dynamic_root.child_max_y[child] - initial_root.child_max_y[child]) >
+                    k_root_epsilon ||
+                std::abs(dynamic_root.child_max_z[child] - initial_root.child_max_z[child]) >
+                    k_root_epsilon) {
+                return true;
+            }
+        }
+        return false;
+    }();
+    EXPECT_TRUE(root_bounds_changed)
+        << "Mutated geometry should change the root AABB payload after refit.";
+
+    for (std::array<Real, 3> const &query_point : query_points) {
+        Real dynamic_value = Real(0);
+        Real fresh_value = Real(0);
+        ASSERT_TRUE(query_single_winding_number_order2(
+            dynamic_geometry, topology, dynamic_moment, query_point[0], query_point[1],
+            query_point[2], dynamic_value
+        ));
+        ASSERT_TRUE(query_single_winding_number_order2(
+            fresh_geometry, topology, fresh_moment, query_point[0], query_point[1], query_point[2],
+            fresh_value
+        ));
+
+        EXPECT_TRUE(std::isfinite(dynamic_value));
+        EXPECT_TRUE(std::isfinite(fresh_value));
+        EXPECT_NEAR(dynamic_value, fresh_value, 1e-6f);
+    }
 }
 
 #if 0
