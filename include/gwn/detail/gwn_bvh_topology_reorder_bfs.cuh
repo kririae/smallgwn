@@ -11,10 +11,11 @@
 /// The implementation uses PRAM primitives mapped to CUDA kernels:
 /// (1) build parent array, (2) pointer-jumping depth computation,
 /// (3) CUB stable radix sort by (depth, parent_id), (4) inverse permutation
-/// + scatter with child remap.  Everything runs on-device with zero host sync.
+/// + scatter with child remap.
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 
 #include <cub/device/device_radix_sort.cuh>
 
@@ -47,8 +48,8 @@ template <int Width, gwn_index_type Index> struct gwn_reorder_build_parent_funct
 template <gwn_index_type Index> struct gwn_reorder_pointer_jump_functor {
     Index const *jump_in;
     Index *jump_out;
-    std::uint16_t const *depth_in;
-    std::uint16_t *depth_out;
+    std::uint32_t const *depth_in;
+    std::uint32_t *depth_out;
     Index root_index;
 
     __device__ void operator()(std::size_t const i) const {
@@ -97,10 +98,10 @@ template <int Width, gwn_index_type Index> struct gwn_reorder_scatter_remap_func
 };
 
 template <gwn_index_type Index> struct gwn_reorder_init_depth_functor {
-    std::uint16_t *depth;
+    std::uint32_t *depth;
     Index root;
     __device__ void operator()(std::size_t const i) const {
-        depth[i] = (static_cast<Index>(i) == root) ? std::uint16_t(0) : std::uint16_t(1);
+        depth[i] = (static_cast<Index>(i) == root) ? std::uint32_t(0) : std::uint32_t(1);
     }
 };
 
@@ -110,12 +111,12 @@ template <gwn_index_type Index> struct gwn_reorder_iota_functor {
 };
 
 template <gwn_index_type Index> struct gwn_reorder_compose_sort_key_functor {
-    std::uint16_t const *depth;
+    std::uint32_t const *depth;
     Index const *parent;
-    std::uint32_t *sort_key;
+    std::uint64_t *sort_key;
 
     __device__ void operator()(std::size_t const i) const {
-        sort_key[i] = (std::uint32_t(depth[i]) << 20) | std::uint32_t(parent[i]);
+        sort_key[i] = (std::uint64_t(depth[i]) << 32) | std::uint64_t(std::uint32_t(parent[i]));
     }
 };
 
@@ -126,17 +127,18 @@ template <gwn_index_type Index> struct gwn_reorder_compose_sort_key_functor {
 ///
 /// \param nodes       Device span of topology nodes (size is unchanged).
 /// \param root_index  On entry, the current root node index; on exit, set to 0.
+/// \param max_depth   On exit, the maximum internal-node depth.
 /// \param stream      CUDA stream for async operations.
 ///
 /// \return \c gwn_status::ok() on success.
 template <int Width, gwn_index_type Index>
 gwn_status gwn_bvh_topology_reorder_bfs(
     cuda::std::span<gwn_bvh_topology_node_soa<Width, Index>> nodes, Index &root_index,
-    cudaStream_t const stream
+    std::uint32_t &max_depth, cudaStream_t const stream
 ) noexcept {
     static_assert(Width >= 2, "BVH node width must be at least 2.");
 
-    // Nothing to reorder for empty or single-node trees.
+    max_depth = 0;
     if (nodes.size() <= 1) {
         if (!nodes.empty())
             root_index = Index(0);
@@ -147,15 +149,20 @@ gwn_status gwn_bvh_topology_reorder_bfs(
     constexpr int k_block = k_gwn_default_block_size;
     std::size_t const N = nodes.size();
     auto const N_u64 = static_cast<std::uint64_t>(N);
+    if (N > std::numeric_limits<std::uint32_t>::max()) {
+        return gwn_status::invalid_argument(
+            "BVH BFS reorder supports at most UINT32_MAX internal nodes."
+        );
+    }
 
     gwn_device_array<Index> parent{};
     gwn_device_array<Index> jump_a{};
     gwn_device_array<Index> jump_b{};
-    gwn_device_array<std::uint16_t> depth_a{};
-    gwn_device_array<std::uint16_t> depth_b{};
+    gwn_device_array<std::uint32_t> depth_a{};
+    gwn_device_array<std::uint32_t> depth_b{};
     gwn_device_array<Index> permutation{};
-    gwn_device_array<std::uint32_t> sort_key{};
-    gwn_device_array<std::uint32_t> sort_key_sorted{};
+    gwn_device_array<std::uint64_t> sort_key{};
+    gwn_device_array<std::uint64_t> sort_key_sorted{};
     gwn_device_array<Index> inverse_perm{};
     gwn_device_array<node_type> output{};
     gwn_device_array<std::uint8_t> cub_temp{};
@@ -193,16 +200,16 @@ gwn_status gwn_bvh_topology_reorder_bfs(
         )));
     }
 
-    // Pointer jumping: ceil(log2(D_max)) rounds.
-    // D_max for width-4 BVH of 5M primitives ~ 10, so 4 rounds suffice.
-    // We use 8 rounds to be safe for any reasonable tree depth (< 256).
-    constexpr int k_max_rounds = 8;
+    int max_rounds = 0;
+    for (std::size_t covered_depth = 1; covered_depth < N; covered_depth <<= 1)
+        ++max_rounds;
+
     Index *jump_src = jump_a.data();
     Index *jump_dst = jump_b.data();
-    std::uint16_t *depth_src = depth_a.data();
-    std::uint16_t *depth_dst = depth_b.data();
+    std::uint32_t *depth_src = depth_a.data();
+    std::uint32_t *depth_dst = depth_b.data();
 
-    for (int round = 0; round < k_max_rounds; ++round) {
+    for (int round = 0; round < max_rounds; ++round) {
         GWN_RETURN_ON_ERROR(
             gwn_launch_linear_kernel<k_block>(
                 N,
@@ -239,16 +246,25 @@ gwn_status gwn_bvh_topology_reorder_bfs(
         GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
             cub::DeviceRadixSort::SortPairs(
                 nullptr, cub_temp_bytes, sort_key.data(), sort_key_sorted.data(),
-                permutation.data(), inverse_perm.data(), N_u64, 0, 28, stream
+                permutation.data(), inverse_perm.data(), N_u64, 0, 64, stream
             )
         ));
         GWN_RETURN_ON_ERROR(cub_temp.resize(cub_temp_bytes, stream));
         GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
             cub::DeviceRadixSort::SortPairs(
                 cub_temp.data(), cub_temp_bytes, sort_key.data(), sort_key_sorted.data(),
-                permutation.data(), inverse_perm.data(), N_u64, 0, 28, stream
+                permutation.data(), inverse_perm.data(), N_u64, 0, 64, stream
             )
         ));
+    }
+    {
+        std::uint64_t last_sort_key = 0;
+        GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemcpyAsync(
+            &last_sort_key, sort_key_sorted.data() + (N - 1), sizeof(std::uint64_t),
+            cudaMemcpyDeviceToHost, stream
+        )));
+        GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaStreamSynchronize(stream)));
+        max_depth = static_cast<std::uint32_t>(last_sort_key >> 32);
     }
     {
         using std::swap;

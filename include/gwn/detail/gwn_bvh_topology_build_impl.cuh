@@ -87,6 +87,7 @@ gwn_status gwn_bvh_topology_build_from_binary_impl(
                 staging_topology.root_kind = gwn_bvh_child_kind::k_leaf;
                 staging_topology.root_index = Index(0);
                 staging_topology.root_count = Index(1);
+                staging_topology.max_depth = 0;
                 return gwn_status::ok();
             }
             if (!gwn_index_in_bounds(root_internal_index, binary_nodes.size()))
@@ -111,11 +112,11 @@ gwn_status gwn_bvh_topology_build_from_binary_impl(
 
             {
                 Index reorder_root = Index(0);
-                GWN_RETURN_ON_ERROR(
-                    (gwn_bvh_topology_reorder_bfs<Width, Index>(
-                        staging_topology.nodes, reorder_root, stream
-                    ))
-                );
+                std::uint32_t max_depth = 0;
+                GWN_RETURN_ON_ERROR((gwn_bvh_topology_reorder_bfs<Width, Index>(
+                    staging_topology.nodes, reorder_root, max_depth, stream
+                )));
+                staging_topology.max_depth = max_depth;
             }
 
             staging_topology.root_kind = gwn_bvh_child_kind::k_internal;

@@ -167,8 +167,9 @@ struct gwn_bvh_topology_tree_accessor {
     cuda::std::span<gwn_bvh_topology_node_soa<Width, Index>> nodes{}; ///< Internal nodes.
     cuda::std::span<Index> primitive_indices{}; ///< Sorted primitive index buffer.
     gwn_bvh_child_kind root_kind = gwn_bvh_child_kind::k_invalid; ///< Root child kind.
-    Index root_index = 0; ///< Root node index (internal) or begin offset (leaf).
-    Index root_count = 0; ///< Primitive count at the root when it is a leaf.
+    Index root_index = 0;        ///< Root node index (internal) or begin offset (leaf).
+    Index root_count = 0;        ///< Primitive count at the root when it is a leaf.
+    std::uint32_t max_depth = 0; ///< Maximum internal-node depth; root depth is 0.
 
     /// \brief Return \c true when the root is an internal node.
     [[nodiscard]] __host__ __device__ constexpr bool has_internal_root() const noexcept {
@@ -302,6 +303,7 @@ void gwn_release_bvh_topology_tree_accessor(
     tree.root_kind = gwn_bvh_child_kind::k_invalid;
     tree.root_index = 0;
     tree.root_count = 0;
+    tree.max_depth = 0;
 }
 
 template <int Width, gwn_real_type Real, gwn_index_type Index>
