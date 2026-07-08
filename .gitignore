@@ -69,3 +69,4 @@ vcpkg_installed/
 Testing/
 .cache/
 .worktrees/
+validation_data/

@@ -73,6 +73,10 @@ These instructions apply to the `smallgwn/` project tree.
   `clear()`/destructor release on the currently bound stream;
   successful stream-parameterized mutations update the bound stream.
 - Memory: stream allocator path only (`cudaMallocAsync`/`cudaFreeAsync`), no synchronous fallback.
+- Dynamic vertex-position updates use `gwn_update_geometry(...)`, then
+  `gwn_bvh_refit_aabb_moment<Order>(...)`. Topology changes use topology
+  rebuild. Host spans passed to update APIs follow `cudaMemcpyAsync` lifetime
+  rules.
 - `gwn_device_array<T>`: all methods are `noexcept`; remembers the bound stream; same-size
   `resize()` is a no-op that preserves the current stream binding, while successful reallocating
   mutations update the bound stream.
@@ -171,6 +175,18 @@ effects should have a `\brief` or full doxygen block.
 
 ## Test Structure
 
+### Test policy
+- Tests lock behavior, bugs, and user-visible contracts. They must not lock helper placement,
+  file layout, call counts, wrapper existence, or first-pass implementation shape.
+- Unit tests cover local semantic choke points: input rejection, invariants, numerical kernels,
+  stream/memory semantics, and small cases that would fail from one clear defect.
+- Integration tests cover end-to-end geometry workflows: upload/build/refit/query parity,
+  model fixtures, CPU/GPU reference checks, and performance-sensitive paths.
+- Before ending a change, review each new or changed test and ask: would this still pass if the
+  implementation were wrong? Replace weak tests with choke-point checks.
+- TDD is for behavior and bug reproduction. Do not use TDD to check compilation progress or to
+  freeze exploratory first-development scaffolding.
+
 ### Test support
 - `tests/reference_cpu.cuh`: TBB-parallel CPU exact reference.
 - `tests/reference_hdk/*`: Vendored HDK sources (keep under `tests/`).
@@ -178,6 +194,12 @@ effects should have a `\brief` or full doxygen block.
 - `tests/libigl_reference.cpp/.hpp`: libigl CPU parity for SDF tests.
 - Repo-local `fixtures` coverage remains available on clean machines via vendored OBJ meshes under
   `tests/data/`.
+- `ctest -L fixtures` also includes the filtered
+  `smallgwn_integration_correctness_dynamic_refit` entrypoint so the vendored
+  `closed_cube.obj` dynamic-refit path stays covered on clean machines.
+- `smallgwn_refit_fidelity`: explicit dataset-backed release validation. It uses libigl
+  Laplacian-smoothed frames and compares vertex-update refit against fresh geometry upload on
+  the same topology for LBVH/H-PLOC, Taylor winding/gradient, and Antipodal winding/gradient.
 
 ### Benchmark
 - Executable: `smallgwn_benchmark` from `benchmarks/benchmark_main.cu`.

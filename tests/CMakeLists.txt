@@ -7,7 +7,7 @@ find_package(libigl REQUIRED)
 # Common include directories for all test targets.
 # ---------------------------------------------------------------
 set(SMALLGWN_TEST_INCLUDE_DIRS
-    "${CMAKE_CURRENT_SOURCE_DIR}/tests"
+    "${CMAKE_CURRENT_SOURCE_DIR}"
 )
 set(SMALLGWN_TEST_SYSTEM_INCLUDE_DIRS
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/reference_hdk"
@@ -128,6 +128,12 @@ smallgwn_add_cuda_test(smallgwn_integration_antipodal_models
 smallgwn_add_eigen_tbb_test(smallgwn_integration_correctness
     LABELS "integration;cuda;models;slow"
     SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/integration_correctness.cu)
+add_test(NAME smallgwn_integration_correctness_dynamic_refit
+    COMMAND smallgwn_integration_correctness --gtest_color=no
+        --gtest_filter=*dynamic_refit*)
+set_tests_properties(smallgwn_integration_correctness_dynamic_refit PROPERTIES
+    LABELS "integration;cuda;fixtures"
+    FAIL_REGULAR_EXPRESSION "0 tests from 0 test suites;did not match any test")
 smallgwn_add_eigen_tbb_test(smallgwn_integration_gradient
     LABELS "integration;cuda"
     SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/integration_gradient.cu)
@@ -149,6 +155,15 @@ smallgwn_add_tbb_test(smallgwn_integration_taylor_matrix
     NO_CTEST
     SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/integration_taylor_matrix.cu
     EXTRA_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/reference_hdk/UT_Array.cpp ${CMAKE_CURRENT_SOURCE_DIR}/reference_hdk/UT_SolidAngle.cpp)
+
+add_executable(smallgwn_refit_fidelity
+    ${CMAKE_CURRENT_SOURCE_DIR}/refit_fidelity_main.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/refit_fidelity_laplacian.cpp)
+target_link_libraries(smallgwn_refit_fidelity PRIVATE gwn::smallgwn igl::igl_core)
+target_include_directories(smallgwn_refit_fidelity PRIVATE ${SMALLGWN_TEST_INCLUDE_DIRS})
+target_include_directories(smallgwn_refit_fidelity SYSTEM PRIVATE ${SMALLGWN_TEST_SYSTEM_INCLUDE_DIRS})
+target_compile_definitions(smallgwn_refit_fidelity PRIVATE GWN_ENABLE_ASSERTS)
+smallgwn_apply_strict_warnings(smallgwn_refit_fidelity)
 
 add_test(NAME smallgwn_integration_taylor_matrix_light
     COMMAND smallgwn_integration_taylor_matrix --gtest_color=no
