@@ -81,4 +81,29 @@ template <int Order, int Width, gwn_real_type Real, gwn_index_type Index>
     return gwn_status::ok();
 }
 
+/// \brief Refit AABB bounds, then refit Taylor moments for an existing
+///        topology.
+///
+/// Use this after vertex-position updates when Taylor queries will reuse the
+/// existing BVH topology. Taylor moment refit reads AABB bounds for node radius
+/// data, so AABB refit is enqueued first.
+///
+/// \return \c gwn_status::ok() when both refit passes succeed, including any
+///         immediate validation they perform before enqueueing GPU work.
+template <int Order, int Width, gwn_real_type Real, gwn_index_type Index>
+[[nodiscard]] gwn_status gwn_bvh_refit_aabb_moment(
+    gwn_geometry_object<Real, Index> const &geometry,
+    gwn_bvh_topology_object<Width, Real, Index> const &topology,
+    gwn_bvh_aabb_tree_object<Width, Real, Index> &aabb_tree,
+    gwn_bvh_moment_tree_object<Width, Order, Real, Index> &moment_tree,
+    cudaStream_t const stream = gwn_default_stream()
+) noexcept {
+    GWN_RETURN_ON_ERROR(
+        (gwn_bvh_refit_aabb<Width, Real, Index>(geometry, topology, aabb_tree, stream))
+    );
+    return gwn_bvh_refit_moment<Order, Width, Real, Index>(
+        geometry, topology, aabb_tree, moment_tree, stream
+    );
+}
+
 } // namespace gwn
