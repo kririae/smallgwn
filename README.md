@@ -90,6 +90,7 @@ gwn::gwn_bvh4_moment_object<1, Real, Index> moments;
 
 check(gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<1, 4, Real, Index>(
     geometry, topology, aabb, moments, stream));
+// Alternatively: gwn::gwn_bvh_facade_build_topology_aabb_moment_hploc.
 
 std::vector<Real> qx, qy, qz;
 gwn::gwn_device_array<Real> d_qx(stream), d_qy(stream), d_qz(stream), d_wn(stream);
@@ -115,22 +116,16 @@ check(gwn::gwn_compute_winding_number_batch_bvh_taylor<1, Real, Index>(
     stream));
 ```
 
-Use `gwn_bvh_facade_build_topology_aabb_moment_hploc` instead of the LBVH
-facade for the H-PLOC topology builder.
-
 For dynamic vertex positions, build topology once, then update geometry and
 refit payloads:
 
 ```cpp
 // After vertex positions change, keep topology and refit derived payloads.
 check(gwn::gwn_update_geometry(geometry, x, y, z, stream));
+// Host x/y/z must stay alive until this stream reaches the update.
 check(gwn::gwn_bvh_refit_aabb_moment<1, 4, Real, Index>(
     geometry, topology, aabb, moments, stream));
 ```
-
-`gwn_update_geometry` follows `cudaMemcpyAsync` host-memory lifetime rules.
-Keep host buffers alive until CUDA has read them, or synchronize with the stream
-or an event before reusing them.
 
 ### Antipodal winding
 
