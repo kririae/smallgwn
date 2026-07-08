@@ -3,16 +3,6 @@
 ## Scope
 These instructions apply to the `smallgwn/` project tree.
 
-## Project Snapshot
-- `smallgwn` is a header-only CUDA/C++ library for geometric queries on triangle meshes,
-  including winding numbers, winding-number gradients, signed/unsigned distances, edge distances,
-  ray first-hit, and Harnack sphere-march ray tracing.
-- Public surface is under `include/gwn/` with umbrella include `include/gwn/gwn.cuh`.
-  The umbrella include is runtime-focused and does **not** include `gwn_eigen_bridge.cuh`.
-- `examples/` contains standalone demo projects that consume `smallgwn` as a third-party library.
-  The main library build must **not** be aware of `examples/`; each example has its own `CMakeLists.txt`.
-- `tests/reference_hdk/` contains vendored HDK sources for parity checks and code reference.
-
 ## Language and Build Baseline
 - Use C++20 and CUDA 12+.
 - CMake defaults `CMAKE_CUDA_ARCHITECTURES` to `native` unless overridden.
@@ -56,6 +46,8 @@ These instructions apply to the `smallgwn/` project tree.
 ### Geometry
 - SoA layout (`x/y/z`, `i0/i1/i2`).
 - `gwn_geometry_object` is the owning GPU geometry container.
+- `gwn_boundary_chain_object` stores the algebraic boundary of an oriented triangle-index chain.
+  It is geometry-derived data, separate from BVH payloads and Taylor moments.
 
 ### BVH
 - **Topology / data separation**: topology, AABB tree, and moment tree are independent types
@@ -63,27 +55,16 @@ These instructions apply to the `smallgwn/` project tree.
 - **Public API split**: `gwn_bvh_topology_build.cuh` (topology), `gwn_bvh_refit.cuh` (payload refit),
   `gwn_bvh_facade.cuh` (composed build workflows).
 - Topology builders: LBVH and H-PLOC. Facade exposes both variants.
-- **BFS node reorder**: after collapse, `gwn_bvh_topology_reorder_bfs` reorders internal nodes
-  into breadth-first order on-device using PRAM primitives (pointer-jumping depth + radix sort
-  by composite `(depth, parent_id)` key). This makes siblings contiguous in memory and improves
-  cache locality during top-down traversal.
 - Taylor moment supports `Order=0/1/2`.
   Each `gwn_bvh_refit_moment<Order,...>` call does a full replace of the moment accessor.
 - Public BVH entrypoints are object-based; accessor-based routines are detail-only.
 
 ### Query
-- Public surface: `include/gwn/gwn_query.cuh`. Query families provide device point APIs and batch APIs:
-  - **Winding number (exact)**: `gwn_winding_number_point_bvh_exact<Width,...>` / `gwn_compute_winding_number_batch_bvh_exact<Width,...>`
-  - **Winding number (Taylor)**: `gwn_winding_number_point_bvh_taylor<Order,Width,...>` / `gwn_compute_winding_number_batch_bvh_taylor<Order,Width,...>`
-  - **Winding gradient (Taylor)**: `gwn_winding_gradient_point_bvh_taylor<Order,Width,...>` / `gwn_compute_winding_gradient_batch_bvh_taylor<Order,Width,...>`
-  - **Unsigned distance**: `gwn_unsigned_distance_point_bvh<Width,...>` / `gwn_compute_unsigned_distance_batch_bvh<Width,...>`
-  - **Signed distance**: `gwn_signed_distance_point_bvh<Order,Width,...>` / `gwn_compute_signed_distance_batch_bvh<Order,Width,...>`
-  - **Boundary edge distance**: `gwn_unsigned_boundary_edge_distance_point_bvh<Width,...>` / `gwn_compute_unsigned_boundary_edge_distance_batch_bvh<Width,...>`
-  - **Ray first-hit**: `gwn_ray_first_hit_bvh<Width,...>` / `gwn_compute_ray_first_hit_batch_bvh<Width,...>`
-  - **Harnack trace**: `gwn_harnack_trace_ray_bvh_taylor<Order,Width,...>` / `gwn_compute_harnack_trace_batch_bvh_taylor<Order,Width,...>`
-  - **Hybrid trace**: `gwn_hybrid_trace_ray_bvh_taylor<Order,Width,...>` / `gwn_compute_hybrid_trace_batch_bvh_taylor<Order,Width,...>`
-- Point APIs are `__device__` functions for use in custom kernels; batch APIs are host-callable launchers.
+- Public surface: `include/gwn/gwn_query.cuh`. Query families provide device point APIs (for use
+  in custom kernels) and batch APIs (host-callable launchers).
 - Internal math uses `gwn_query_vec3` (no Eigen dependency); public alias `gwn::gwn_vec3<Real>`.
+- Antipodal winding and gradient queries retry coordinate axes when a projected boundary edge is
+  singular.
 - Traversal stack capacity: template `StackCapacity` (default `k_gwn_default_traversal_stack_capacity = 64`).
   Query APIs accept an optional device-side overflow callback; default callback traps via `gwn_trap()`.
 
@@ -116,53 +97,79 @@ These instructions apply to the `smallgwn/` project tree.
 - Use `gwn_invalid_index`, `gwn_is_invalid_index`, `gwn_index_in_bounds` from `gwn_utils.cuh`.
   Never hardcode signed `< 0` checks.
 
+## C++ Coding Rules
+
+### Vocabulary discipline
+Any new concept in the codebase must be named using a term that already exists in the project
+(via grep search of `include/`, `tests/`). If no existing term fits and you must introduce one,
+call this out explicitly in the commit message or in a `//` code comment so it can be reviewed.
+
+### No implicit fallback
+When an operation fails, do not silently dispatch to a different function to paper over the failure.
+Either propagate the error or let the caller decide. This applies to error paths, unsupported
+configurations, and missing data. All fallback logic must be explicit and caller-driven.
+
+### Helper discipline
+Every file-level helper must name a real algorithm step, shared production behavior, tested
+semantic unit, numerical convention, precondition, or traversal boundary.
+
+Use a local lambda for function-local repeated scalar logic. Inline one-line forwarding, field
+extraction, trivial predicates, and wrappers that only rename an expression. Delete helpers you
+cannot defend in review.
+
+### Return shape
+- Public host APIs return `gwn_status`; results go to output spans or owning objects.
+- Public device point APIs return scalar or vector query values directly.
+- Public result structs are for multi-field semantic records, such as hits and traces.
+- Detail helpers may use small result structs for value plus control state across a helper boundary.
+- Reference outputs are detail-only for tiny secondary values beside a primary return value.
+
+### Use existing components
+Do not reinvent project-provided mechanisms. Use `gwn_noncopyable`, `gwn_stream_mixin`,
+`gwn_status`, `GWN_RETURN_ON_ERROR`, `gwn_device_array`, `gwn_scope_exit`, and `gwn_assert`
+where applicable. If a pattern already exists in the codebase (factory function, accessor/object
+split, copy-and-swap), follow it.
+
+### KISS
+Prefer the simplest design that works. Do not add abstractions, virtual dispatch, or type erasure
+unless measured or proven necessary. A flat function with a switch is better than a polymorphic
+hierarchy that exists only for testability.
+
+### [[nodiscard]] discipline
+All `gwn_status`-returning functions and all value-returning query functions must be marked
+`[[nodiscard]]`.
+
+### Template constraints
+All public templates must constrain type parameters with project-provided concepts
+(`gwn_real_type`, `gwn_index_type`). Do not use unconstrained `typename` for `Real` or `Index`.
+
+### Comment discipline
+Comments must use the code's own vocabulary: never invent new terms for concepts that already
+have names in the source. Comments describe what the code does and why it matters here.
+Do not use em dashes, `\tparam` lines that restate the parameter name, or defensive negatives
+("No X") where X is absent from the signature.
+
+Implementation code is not required to be trivial; if a non-trivial section benefits from an
+explanatory comment, add one.
+
+Public interface declarations must have doxygen (`\brief` minimum). Detail code may omit doxygen
+for trivial forwarding wrappers. Functions with non-obvious behavior, preconditions, or side
+effects should have a `\brief` or full doxygen block.
+
 ## C++ Resource Management & Idioms
 - **RAII & Non-copyable**: Owning objects delete copy ctor/assignment.
 - **Copy/Move-and-Swap**: Provide `noexcept` swap for strong exception safety.
-- **Rule of Five**: Explicit on all five if destructor is defined.
 
 ## Error Handling Rules
 - Public APIs return `gwn_status`; internal details may use exceptions.
+  Use `gwn_assert` for invariant violations (fatal, debug-only). Use `gwn_status` for
+  recoverable or user-facing errors.
 - `gwn_status` and all helpers are fully `noexcept`.
 - `GWN_RETURN_ON_ERROR(expr)`: uses `gwn_status_result_` variable name to avoid shadowing.
 - Build/refit diagnostics use phase-prefixed helpers from `detail/gwn_bvh_status_helpers.cuh`.
-- Executable main: `int main() try { ... } catch (...) { ... }` single translation block.
+- Executable main: `int main() try { ... } catch (...) { ... }` function-try-block.
 
 ## Test Structure
-
-### Unit tests
-| File | Coverage |
-|------|----------|
-| `unit_assert.cu` | `GWN_ASSERT` host/device assertion macros |
-| `unit_status.cu` | `gwn_status` error code type |
-| `unit_device_array.cu` | `gwn_device_array` lifecycle / stream semantics |
-| `unit_kernel_utils.cu` | `gwn_launch_linear_kernel` and block/grid helpers |
-| `unit_stream_mixin.cu` | `gwn_stream_mixin` stream binding |
-| `unit_geometry.cu` | `gwn_geometry_object` upload/accessors |
-| `unit_bvh_topology.cu` | LBVH + H-PLOC topology build, Morton stress checks |
-| `unit_uint64_compile.cu` | `Index=uint64_t` compile coverage |
-| `unit_bvh_taylor.cu` | Taylor moment refit + H-PLOC facade, order 0/1/2 |
-| `unit_eigen_bridge.cu` | `gwn_eigen_bridge.cuh` upload bridge validation |
-| `unit_winding_taylor.cu` | Taylor winding far-field parity on H-PLOC topology |
-| `unit_winding_gradient.cu` | Winding gradient batch query |
-| `unit_harnack_trace.cu` | Harnack sphere-march traversal |
-| `unit_edge_distance.cu` | Unsigned boundary-edge distance batch query |
-| `unit_ray_query.cu` | Ray first-hit point and batch queries |
-| `unit_hybrid_trace.cu` | Hybrid first-hit + conditioned Harnack trace |
-| `unit_sdf.cu` | Point-triangle distance (requires libigl for parity) |
-
-### Integration tests
-| File | Coverage |
-|------|----------|
-| `integration_builtin_models.cu` | Repo-local fixture baseline for LBVH/H-PLOC winding consistency |
-| `integration_model_parity.cu` | GPU vs HDK CPU winding parity on model files |
-| `integration_correctness.cu` | LBVH/H-PLOC cross-consistency on sampled models |
-| `integration_gradient.cu` | Gradient batch on model files |
-| `integration_harnack_trace.cu` | Harnack trace on model files |
-| `integration_harnack_behavior_match.cu` | Harnack behavior consistency checks |
-| `integration_harnack_iteration_stats.cu` | Harnack convergence iteration statistics |
-| `integration_hploc_performance.cu` | H-PLOC topology-build ratio gate vs LBVH |
-| `integration_taylor_matrix.cu` | Taylor order 0/1/2 matrix (`NO_CTEST`; split into `light`/`heavy` CTest entries) |
 
 ### Test support
 - `tests/reference_cpu.cuh`: TBB-parallel CPU exact reference.
@@ -171,14 +178,9 @@ These instructions apply to the `smallgwn/` project tree.
 - `tests/libigl_reference.cpp/.hpp`: libigl CPU parity for SDF tests.
 - Repo-local `fixtures` coverage remains available on clean machines via vendored OBJ meshes under
   `tests/data/`.
-- Some `models` / dataset-backed integration suites still require external model provisioning and
-  may fail rather than `GTEST_SKIP()` when model data is absent.
 
 ### Benchmark
 - Executable: `smallgwn_benchmark` from `benchmarks/benchmark_main.cu`.
-- Builder selection: `--builder <lbvh|hploc>` (CSV column `topology_builder`).
-- Stages: `topology_build_<builder>`, `refit_aabb`, `refit_moment_o{0,1,2}`,
-  `facade_o{0,1,2}`, `query_taylor_o{0,1,2}`, `query_ray_first_hit`.
 - Output: console summary + CSV via `--csv <path>`.
 
 ## Validation Workflow
