@@ -86,16 +86,47 @@ template <gwn_real_type Real, gwn_index_type Index>
 /// On success, \p object is atomically replaced with a fully initialized
 /// geometry accessor bound to \p stream.
 [[nodiscard]] gwn_status gwn_upload_geometry(
-    gwn_geometry_object<Real, Index> &object, cuda::std::span<Real const> x,
-    cuda::std::span<Real const> y, cuda::std::span<Real const> z, cuda::std::span<Index const> i0,
-    cuda::std::span<Index const> i1, cuda::std::span<Index const> i2,
+    gwn_geometry_object<Real, Index> &object, cuda::std::span<Real const> const x,
+    cuda::std::span<Real const> const y, cuda::std::span<Real const> const z,
+    cuda::std::span<Index const> const i0, cuda::std::span<Index const> const i1,
+    cuda::std::span<Index const> const i2, cudaStream_t stream = gwn_default_stream()
+) noexcept;
+
+/// \brief Update vertex positions of an existing geometry object.
+///
+/// Enqueues host-to-device position copies, then recomputes vertex normals on
+/// \p stream. Triangle indices, boundary-edge masks, and singular-edge count
+/// are preserved.
+///
+/// \remark \c gwn_status::ok() means the CUDA work was enqueued. It is not a
+///         stream completion signal.
+/// \remark Host span lifetime follows \c cudaMemcpyAsync. Keep host memory
+///         alive until CUDA has read it.
+template <gwn_real_type Real, gwn_index_type Index>
+[[nodiscard]] gwn_status gwn_update_geometry(
+    gwn_geometry_object<Real, Index> &object, cuda::std::span<Real const> const x,
+    cuda::std::span<Real const> const y, cuda::std::span<Real const> const z,
     cudaStream_t stream = gwn_default_stream()
+) noexcept;
+
+/// \brief Refresh geometry caches after device-side in-place position updates.
+///
+/// Enqueues vertex-normal recomputation on \p stream. Caller-provided position
+/// writes must already precede this call in stream order, or be linked with
+/// CUDA events.
+///
+/// \remark \c gwn_status::ok() means the CUDA work was enqueued. It is not a
+///         stream completion signal.
+template <gwn_real_type Real, gwn_index_type Index>
+[[nodiscard]] gwn_status gwn_update_geometry(
+    gwn_geometry_object<Real, Index> &object, cudaStream_t stream = gwn_default_stream()
 ) noexcept;
 
 /// \brief Owning host-side RAII wrapper for geometry accessor storage.
 ///
 /// \remark `clear()` and destructor release memory on the currently bound stream.
-/// \remark The bound stream is updated after successful `gwn_upload_geometry(..., stream)`.
+/// \remark The bound stream is updated after successful `gwn_upload_geometry(..., stream)` and
+///         `gwn_update_geometry(..., stream)`.
 /// \remark Upload state is currently observed via `accessor().is_valid()`, `vertex_count()`, and
 ///         `triangle_count()`.
 template <gwn_real_type Real = float, gwn_index_type Index = std::uint32_t>
@@ -141,9 +172,10 @@ public:
 private:
     template <gwn_real_type R, gwn_index_type I>
     friend gwn_status gwn_upload_geometry(
-        gwn_geometry_object<R, I> &object, cuda::std::span<R const> x, cuda::std::span<R const> y,
-        cuda::std::span<R const> z, cuda::std::span<I const> i0, cuda::std::span<I const> i1,
-        cuda::std::span<I const> i2, cudaStream_t stream
+        gwn_geometry_object<R, I> &object, cuda::std::span<R const> const x,
+        cuda::std::span<R const> const y, cuda::std::span<R const> const z,
+        cuda::std::span<I const> const i0, cuda::std::span<I const> const i1,
+        cuda::std::span<I const> const i2, cudaStream_t stream
     ) noexcept;
 
     accessor_type accessor_{};

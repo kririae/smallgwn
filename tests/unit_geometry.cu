@@ -1,4 +1,5 @@
 #include <array>
+#include <cmath>
 #include <limits>
 #include <type_traits>
 #include <vector>
@@ -16,6 +17,19 @@
 using Real = gwn::tests::Real;
 using Index = gwn::tests::Index;
 using gwn::tests::CudaFixture;
+
+namespace {
+
+struct raise_first_vertex_functor {
+    gwn::gwn_geometry_accessor<Real, Index> geometry{};
+
+    __device__ void operator()(std::size_t const i) const {
+        if (i == 0)
+            geometry.vertex_z[0] = Real(4);
+    }
+};
+
+} // namespace
 
 // Accessor, host-side validation.
 
@@ -236,6 +250,37 @@ TEST(smallgwn_unit_geometry, upload_rejects_non_empty_null_storage_spans) {
     EXPECT_EQ(status.error(), gwn::gwn_error::invalid_argument);
 }
 
+TEST_F(CudaFixture, update_rejects_non_empty_null_storage_spans) {
+    std::array<Real, 3> const vx{Real(0), Real(1), Real(0)};
+    std::array<Real, 3> const vy{Real(0), Real(0), Real(1)};
+    std::array<Real, 3> const vz{Real(0), Real(0), Real(0)};
+    std::array<Index, 1> const i0{0};
+    std::array<Index, 1> const i1{1};
+    std::array<Index, 1> const i2{2};
+
+    gwn::gwn_geometry_object<Real, Index> geometry;
+    gwn::gwn_status status = gwn::gwn_upload_geometry(
+        geometry, cuda::std::span<Real const>(vx.data(), vx.size()),
+        cuda::std::span<Real const>(vy.data(), vy.size()),
+        cuda::std::span<Real const>(vz.data(), vz.size()),
+        cuda::std::span<Index const>(i0.data(), i0.size()),
+        cuda::std::span<Index const>(i1.data(), i1.size()),
+        cuda::std::span<Index const>(i2.data(), i2.size())
+    );
+    SMALLGWN_SKIP_IF_STATUS_CUDA_UNAVAILABLE(status);
+    ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
+
+    auto const *null_real = static_cast<Real const *>(nullptr);
+    status = gwn::gwn_update_geometry(
+        geometry, cuda::std::span<Real const>(null_real, geometry.vertex_count()),
+        cuda::std::span<Real const>(vy.data(), vy.size()),
+        cuda::std::span<Real const>(vz.data(), vz.size())
+    );
+
+    EXPECT_FALSE(status.is_ok());
+    EXPECT_EQ(status.error(), gwn::gwn_error::invalid_argument);
+}
+
 // Upload, success path.
 
 TEST_F(CudaFixture, upload_valid_single_triangle) {
@@ -316,6 +361,200 @@ TEST_F(CudaFixture, upload_open_tetra_has_nonzero_singular_edges) {
     ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
     EXPECT_TRUE(geometry.accessor().has_singular_edges());
     EXPECT_GT(geometry.accessor().singular_edge_count, Index(0));
+}
+
+TEST_F(CudaFixture, update_geometry_rejects_vertex_count_change) {
+    std::array<Real, 3> const vx{Real(0), Real(1), Real(0)};
+    std::array<Real, 3> const vy{Real(0), Real(0), Real(1)};
+    std::array<Real, 3> const vz{Real(0), Real(0), Real(0)};
+    std::array<Index, 1> const i0{0};
+    std::array<Index, 1> const i1{1};
+    std::array<Index, 1> const i2{2};
+
+    gwn::gwn_geometry_object<Real, Index> geometry;
+    gwn::gwn_status status = gwn::gwn_upload_geometry(
+        geometry, cuda::std::span<Real const>(vx.data(), vx.size()),
+        cuda::std::span<Real const>(vy.data(), vy.size()),
+        cuda::std::span<Real const>(vz.data(), vz.size()),
+        cuda::std::span<Index const>(i0.data(), i0.size()),
+        cuda::std::span<Index const>(i1.data(), i1.size()),
+        cuda::std::span<Index const>(i2.data(), i2.size())
+    );
+    SMALLGWN_SKIP_IF_STATUS_CUDA_UNAVAILABLE(status);
+    ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
+
+    std::array<Real, 4> const bad{Real(0), Real(1), Real(0), Real(2)};
+    status = gwn::gwn_update_geometry(
+        geometry, cuda::std::span<Real const>(bad.data(), bad.size()),
+        cuda::std::span<Real const>(bad.data(), bad.size()),
+        cuda::std::span<Real const>(bad.data(), bad.size())
+    );
+
+    EXPECT_FALSE(status.is_ok());
+    EXPECT_EQ(status.error(), gwn::gwn_error::invalid_argument);
+}
+
+TEST_F(CudaFixture, update_geometry_rejects_soa_size_mismatch) {
+    std::array<Real, 3> const vx{Real(0), Real(1), Real(0)};
+    std::array<Real, 3> const vy{Real(0), Real(0), Real(1)};
+    std::array<Real, 3> const vz{Real(0), Real(0), Real(0)};
+    std::array<Index, 1> const i0{0};
+    std::array<Index, 1> const i1{1};
+    std::array<Index, 1> const i2{2};
+
+    gwn::gwn_geometry_object<Real, Index> geometry;
+    gwn::gwn_status status = gwn::gwn_upload_geometry(
+        geometry, cuda::std::span<Real const>(vx.data(), vx.size()),
+        cuda::std::span<Real const>(vy.data(), vy.size()),
+        cuda::std::span<Real const>(vz.data(), vz.size()),
+        cuda::std::span<Index const>(i0.data(), i0.size()),
+        cuda::std::span<Index const>(i1.data(), i1.size()),
+        cuda::std::span<Index const>(i2.data(), i2.size())
+    );
+    SMALLGWN_SKIP_IF_STATUS_CUDA_UNAVAILABLE(status);
+    ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
+
+    std::array<Real, 2> const short_y{Real(0), Real(0)};
+    status = gwn::gwn_update_geometry(
+        geometry, cuda::std::span<Real const>(vx.data(), vx.size()),
+        cuda::std::span<Real const>(short_y.data(), short_y.size()),
+        cuda::std::span<Real const>(vz.data(), vz.size())
+    );
+
+    EXPECT_FALSE(status.is_ok());
+    EXPECT_EQ(status.error(), gwn::gwn_error::invalid_argument);
+}
+
+TEST_F(CudaFixture, update_geometry_refreshes_after_device_in_place_positions) {
+    std::array<Real, 3> const vx{Real(0), Real(1), Real(0)};
+    std::array<Real, 3> const vy{Real(0), Real(0), Real(1)};
+    std::array<Real, 3> const vz{Real(0), Real(0), Real(0)};
+    std::array<Index, 1> const i0{0};
+    std::array<Index, 1> const i1{1};
+    std::array<Index, 1> const i2{2};
+
+    gwn::gwn_geometry_object<Real, Index> geometry;
+    gwn::gwn_status status = gwn::gwn_upload_geometry(
+        geometry, cuda::std::span<Real const>(vx.data(), vx.size()),
+        cuda::std::span<Real const>(vy.data(), vy.size()),
+        cuda::std::span<Real const>(vz.data(), vz.size()),
+        cuda::std::span<Index const>(i0.data(), i0.size()),
+        cuda::std::span<Index const>(i1.data(), i1.size()),
+        cuda::std::span<Index const>(i2.data(), i2.size())
+    );
+    SMALLGWN_SKIP_IF_STATUS_CUDA_UNAVAILABLE(status);
+    ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
+
+    status = gwn::detail::gwn_launch_linear_kernel<128>(
+        1, raise_first_vertex_functor{geometry.accessor()}, gwn::gwn_default_stream()
+    );
+    ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
+
+    status = gwn::gwn_update_geometry(geometry);
+    ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    std::array<Real, 3> out_z{};
+    std::array<Real, 3> out_nz{};
+    ASSERT_TRUE((gwn::detail::gwn_copy_d2h(
+                     cuda::std::span<Real>(out_z.data(), out_z.size()),
+                     cuda::std::span<Real const>(
+                         geometry.accessor().vertex_z.data(), geometry.accessor().vertex_z.size()
+                     ),
+                     gwn::gwn_default_stream()
+                 ))
+                    .is_ok());
+    ASSERT_TRUE((gwn::detail::gwn_copy_d2h(
+                     cuda::std::span<Real>(out_nz.data(), out_nz.size()),
+                     cuda::std::span<Real const>(
+                         geometry.accessor().vertex_nz.data(), geometry.accessor().vertex_nz.size()
+                     ),
+                     gwn::gwn_default_stream()
+                 ))
+                    .is_ok());
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    EXPECT_EQ(out_z[0], Real(4));
+    EXPECT_LT(std::abs(out_nz[0]), Real(0.5));
+}
+
+TEST_F(CudaFixture, update_geometry_host_spans_copy_positions_and_refresh_normals) {
+    std::array<Real, 3> const initial_x{Real(0), Real(1), Real(0)};
+    std::array<Real, 3> const initial_y{Real(0), Real(0), Real(1)};
+    std::array<Real, 3> const initial_z{Real(0), Real(0), Real(0)};
+    std::array<Index, 1> const i0{0};
+    std::array<Index, 1> const i1{1};
+    std::array<Index, 1> const i2{2};
+
+    gwn::gwn_geometry_object<Real, Index> geometry;
+    gwn::gwn_status status = gwn::gwn_upload_geometry(
+        geometry, cuda::std::span<Real const>(initial_x.data(), initial_x.size()),
+        cuda::std::span<Real const>(initial_y.data(), initial_y.size()),
+        cuda::std::span<Real const>(initial_z.data(), initial_z.size()),
+        cuda::std::span<Index const>(i0.data(), i0.size()),
+        cuda::std::span<Index const>(i1.data(), i1.size()),
+        cuda::std::span<Index const>(i2.data(), i2.size())
+    );
+    SMALLGWN_SKIP_IF_STATUS_CUDA_UNAVAILABLE(status);
+    ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
+
+    std::array<Real, 3> const updated_x{Real(1), Real(0), Real(0)};
+    std::array<Real, 3> const updated_y{Real(0), Real(2), Real(0)};
+    std::array<Real, 3> const updated_z{Real(0), Real(0), Real(3)};
+    status = gwn::gwn_update_geometry(
+        geometry, cuda::std::span<Real const>(updated_x.data(), updated_x.size()),
+        cuda::std::span<Real const>(updated_y.data(), updated_y.size()),
+        cuda::std::span<Real const>(updated_z.data(), updated_z.size())
+    );
+    ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
+
+    std::array<Real, 3> out_x{};
+    std::array<Real, 3> out_y{};
+    std::array<Real, 3> out_z{};
+    ASSERT_TRUE((gwn::detail::gwn_copy_d2h(
+                     cuda::std::span<Real>(out_x.data(), out_x.size()),
+                     cuda::std::span<Real const>(
+                         geometry.accessor().vertex_x.data(), geometry.accessor().vertex_x.size()
+                     ),
+                     gwn::gwn_default_stream()
+                 ))
+                    .is_ok());
+    ASSERT_TRUE((gwn::detail::gwn_copy_d2h(
+                     cuda::std::span<Real>(out_y.data(), out_y.size()),
+                     cuda::std::span<Real const>(
+                         geometry.accessor().vertex_y.data(), geometry.accessor().vertex_y.size()
+                     ),
+                     gwn::gwn_default_stream()
+                 ))
+                    .is_ok());
+    std::array<Real, 3> out_nz{};
+    ASSERT_TRUE((gwn::detail::gwn_copy_d2h(
+                     cuda::std::span<Real>(out_z.data(), out_z.size()),
+                     cuda::std::span<Real const>(
+                         geometry.accessor().vertex_z.data(), geometry.accessor().vertex_z.size()
+                     ),
+                     gwn::gwn_default_stream()
+                 ))
+                    .is_ok());
+    ASSERT_TRUE((gwn::detail::gwn_copy_d2h(
+                     cuda::std::span<Real>(out_nz.data(), out_nz.size()),
+                     cuda::std::span<Real const>(
+                         geometry.accessor().vertex_nz.data(), geometry.accessor().vertex_nz.size()
+                     ),
+                     gwn::gwn_default_stream()
+                 ))
+                    .is_ok());
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    EXPECT_EQ(out_x[0], updated_x[0]);
+    EXPECT_EQ(out_x[1], updated_x[1]);
+    EXPECT_EQ(out_x[2], updated_x[2]);
+    EXPECT_EQ(out_y[0], updated_y[0]);
+    EXPECT_EQ(out_y[1], updated_y[1]);
+    EXPECT_EQ(out_y[2], updated_y[2]);
+    EXPECT_EQ(out_z[0], updated_z[0]);
+    EXPECT_EQ(out_z[1], updated_z[1]);
+    EXPECT_EQ(out_z[2], updated_z[2]);
+    EXPECT_LT(std::abs(out_nz[0]), Real(0.5));
 }
 
 // Upload, error paths: SoA length mismatch.
