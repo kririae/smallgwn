@@ -31,7 +31,7 @@ constexpr int k_default_warmup = 5;
 constexpr int k_default_iters = 20;
 constexpr std::size_t k_default_query_count = 1'000'000;
 constexpr float k_default_accuracy_scale = 2.0f;
-constexpr int k_default_stack_capacity = 32;
+constexpr int k_default_stack_capacity = gwn::k_gwn_default_traversal_stack_capacity;
 constexpr bool k_default_stream_sync_per_iter = true;
 constexpr std::uint64_t k_default_seed = 0xB3A9E5D4ULL;
 
@@ -625,6 +625,15 @@ int run_benchmark(
             continue;
         }
 
+        std::vector<Real> dynamic_x = mesh.vertex_x;
+        std::vector<Real> dynamic_y = mesh.vertex_y;
+        std::vector<Real> dynamic_z = mesh.vertex_z;
+        for (std::size_t i = 0; i < dynamic_z.size(); ++i) {
+            int const phase = static_cast<int>(i % 17u) - 8;
+            Real const wave = Real(0.001) * static_cast<Real>(phase);
+            dynamic_z[i] += wave;
+        }
+
         auto const query_host =
             gwn::bench::gwn_make_mixed_query_soa(mesh, options.query_count, options.seed);
         auto const ray_host = gwn::bench::gwn_make_mixed_ray_soa(
@@ -1037,6 +1046,32 @@ int run_benchmark(
             std::cout << "    ray_mix_hit_ratio=" << std::fixed << std::setprecision(3)
                       << ray_mix_hit_ratio << std::defaultfloat << "\n";
         }
+
+        auto setup_dynamic_topology = [&]() noexcept -> gwn::gwn_status {
+            return build_topology();
+        };
+
+        auto const dynamic_refit_query_o2_stage = run_stage(
+            "dynamic_refit_query_o2", "queries/s", options.query_count, options,
+            mesh.vertex_x.size(), mesh.tri_i0.size(), options.query_count, stream,
+            setup_dynamic_topology, [&]() noexcept {
+            GWN_RETURN_ON_ERROR(
+                gwn::gwn_update_geometry(
+                    geometry, cuda::std::span<Real const>(dynamic_x.data(), dynamic_x.size()),
+                    cuda::std::span<Real const>(dynamic_y.data(), dynamic_y.size()),
+                    cuda::std::span<Real const>(dynamic_z.data(), dynamic_z.size()), stream
+                )
+            );
+            GWN_RETURN_ON_ERROR((gwn::gwn_bvh_refit_aabb_moment<2, k_bvh_width, Real, Index>(
+                geometry, topology, aabb_tree, moment_tree_o2, stream
+            )));
+            return run_taylor_query<StackCapacity, 2>(
+                geometry.accessor(), topology.accessor(), moment_tree_o2.accessor(), d_qx.span(),
+                d_qy.span(), d_qz.span(), d_out.span(), options.accuracy_scale, stream
+            );
+        }
+        );
+        emit_result(dynamic_refit_query_o2_stage);
 
         std::cout << "\n";
         ++successful_models;
