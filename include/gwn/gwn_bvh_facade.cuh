@@ -25,9 +25,6 @@ namespace gwn {
 /// Equivalent to calling \c gwn_bvh_topology_build_lbvh followed by
 /// \c gwn_bvh_refit_aabb on the same stream.
 ///
-/// \tparam Width  BVH node fan-out.
-/// \tparam Real   Floating-point type.
-/// \tparam Index  Signed integer index type.
 /// \tparam MortonCode Morton key type:
 ///                    - \c std::uint32_t : 30-bit Morton.
 ///                    - \c std::uint64_t : 63-bit Morton (default).
@@ -39,7 +36,7 @@ namespace gwn {
 ///
 /// \return \c gwn_status::ok() on success.
 template <int Width, gwn_real_type Real, gwn_index_type Index, class MortonCode = std::uint64_t>
-gwn_status gwn_bvh_facade_build_topology_aabb_lbvh(
+[[nodiscard]] gwn_status gwn_bvh_facade_build_topology_aabb_lbvh(
     gwn_geometry_object<Real, Index> const &geometry,
     gwn_bvh_topology_object<Width, Real, Index> &topology,
     gwn_bvh_aabb_tree_object<Width, Real, Index> &aabb_tree,
@@ -56,9 +53,6 @@ gwn_status gwn_bvh_facade_build_topology_aabb_lbvh(
 /// Equivalent to calling \c gwn_bvh_topology_build_hploc followed by
 /// \c gwn_bvh_refit_aabb on the same stream.
 ///
-/// \tparam Width  BVH node fan-out.
-/// \tparam Real   Floating-point type.
-/// \tparam Index  Integer index type.
 /// \tparam MortonCode Morton key type:
 ///                    - \c std::uint32_t : 30-bit Morton.
 ///                    - \c std::uint64_t : 63-bit Morton (default).
@@ -70,7 +64,7 @@ gwn_status gwn_bvh_facade_build_topology_aabb_lbvh(
 ///
 /// \return \c gwn_status::ok() on success.
 template <int Width, gwn_real_type Real, gwn_index_type Index, class MortonCode = std::uint64_t>
-gwn_status gwn_bvh_facade_build_topology_aabb_hploc(
+[[nodiscard]] gwn_status gwn_bvh_facade_build_topology_aabb_hploc(
     gwn_geometry_object<Real, Index> const &geometry,
     gwn_bvh_topology_object<Width, Real, Index> &topology,
     gwn_bvh_aabb_tree_object<Width, Real, Index> &aabb_tree,
@@ -88,10 +82,6 @@ gwn_status gwn_bvh_facade_build_topology_aabb_hploc(
 /// Equivalent to calling \c gwn_bvh_facade_build_topology_aabb_lbvh followed
 /// by \c gwn_bvh_refit_moment on the same stream.
 ///
-/// \tparam Order  Taylor expansion order (0, 1, or 2).
-/// \tparam Width  BVH node fan-out.
-/// \tparam Real   Floating-point type.
-/// \tparam Index  Signed integer index type.
 /// \tparam MortonCode Morton key type:
 ///                    - \c std::uint32_t : 30-bit Morton.
 ///                    - \c std::uint64_t : 63-bit Morton (default).
@@ -106,7 +96,7 @@ gwn_status gwn_bvh_facade_build_topology_aabb_hploc(
 template <
     int Order, int Width, gwn_real_type Real, gwn_index_type Index,
     class MortonCode = std::uint64_t>
-gwn_status gwn_bvh_facade_build_topology_aabb_moment_lbvh(
+[[nodiscard]] gwn_status gwn_bvh_facade_build_topology_aabb_moment_lbvh(
     gwn_geometry_object<Real, Index> const &geometry,
     gwn_bvh_topology_object<Width, Real, Index> &topology,
     gwn_bvh_aabb_tree_object<Width, Real, Index> &aabb_tree,
@@ -127,10 +117,6 @@ gwn_status gwn_bvh_facade_build_topology_aabb_moment_lbvh(
 /// Equivalent to calling \c gwn_bvh_facade_build_topology_aabb_hploc followed
 /// by \c gwn_bvh_refit_moment on the same stream.
 ///
-/// \tparam Order  Taylor expansion order (0, 1, or 2).
-/// \tparam Width  BVH node fan-out.
-/// \tparam Real   Floating-point type.
-/// \tparam Index  Integer index type.
 /// \tparam MortonCode Morton key type:
 ///                    - \c std::uint32_t : 30-bit Morton.
 ///                    - \c std::uint64_t : 63-bit Morton (default).
@@ -145,7 +131,7 @@ gwn_status gwn_bvh_facade_build_topology_aabb_moment_lbvh(
 template <
     int Order, int Width, gwn_real_type Real, gwn_index_type Index,
     class MortonCode = std::uint64_t>
-gwn_status gwn_bvh_facade_build_topology_aabb_moment_hploc(
+[[nodiscard]] gwn_status gwn_bvh_facade_build_topology_aabb_moment_hploc(
     gwn_geometry_object<Real, Index> const &geometry,
     gwn_bvh_topology_object<Width, Real, Index> &topology,
     gwn_bvh_aabb_tree_object<Width, Real, Index> &aabb_tree,

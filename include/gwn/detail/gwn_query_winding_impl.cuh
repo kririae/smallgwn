@@ -105,7 +105,7 @@ __device__ inline gwn_winding_and_gradient_result<Real>
 gwn_winding_and_gradient_point_bvh_taylor_impl(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
-    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &data_tree, Real const qx,
+    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &moment_tree, Real const qx,
     Real const qy, Real const qz, Real const accuracy_scale,
     OverflowCallback const &overflow_callback = {}
 ) noexcept {
@@ -120,10 +120,10 @@ gwn_winding_and_gradient_point_bvh_taylor_impl(
 
     if (!geometry.is_valid() || !bvh.is_valid())
         return result;
-    if (!data_tree.is_valid_for(bvh))
+    if (!moment_tree.is_valid_for(bvh))
         return result;
 
-    auto const &taylor_nodes = data_tree.nodes;
+    auto const &taylor_nodes = moment_tree.nodes;
     if (taylor_nodes.size() != bvh.nodes.size())
         return result;
 
@@ -462,13 +462,13 @@ template <
 __device__ inline Real gwn_winding_number_point_bvh_taylor_impl(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
-    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &data_tree, Real const qx,
+    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &moment_tree, Real const qx,
     Real const qy, Real const qz, Real const accuracy_scale,
     OverflowCallback const &overflow_callback = {}
 ) noexcept {
     return gwn_winding_and_gradient_point_bvh_taylor_impl<
                Order, Width, Real, Index, StackCapacity, OverflowCallback>(
-               geometry, bvh, data_tree, qx, qy, qz, accuracy_scale, overflow_callback
+               geometry, bvh, moment_tree, qx, qy, qz, accuracy_scale, overflow_callback
     )
         .winding;
 }
@@ -479,7 +479,7 @@ template <
 struct gwn_winding_number_batch_bvh_taylor_functor {
     gwn_geometry_accessor<Real, Index> geometry{};
     gwn_bvh_topology_accessor<Width, Real, Index> bvh{};
-    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> data_tree{};
+    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> moment_tree{};
     cuda::std::span<Real const> query_x{};
     cuda::std::span<Real const> query_y{};
     cuda::std::span<Real const> query_z{};
@@ -490,7 +490,7 @@ struct gwn_winding_number_batch_bvh_taylor_functor {
     __device__ void operator()(std::size_t const query_id) const {
         out_winding[query_id] = gwn_winding_number_point_bvh_taylor_impl<
             Order, Width, Real, Index, StackCapacity, OverflowCallback>(
-            geometry, bvh, data_tree, query_x[query_id], query_y[query_id], query_z[query_id],
+            geometry, bvh, moment_tree, query_x[query_id], query_y[query_id], query_z[query_id],
             accuracy_scale, overflow_callback
         );
     }

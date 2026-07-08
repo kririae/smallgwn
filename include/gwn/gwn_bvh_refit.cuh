@@ -23,10 +23,6 @@ namespace gwn {
 ///
 /// On success the bound stream of \p aabb_tree is updated to \p stream.
 ///
-/// \tparam Width  BVH node fan-out.
-/// \tparam Real   Floating-point type.
-/// \tparam Index  Signed integer index type.
-///
 /// \param[in]     geometry   Uploaded triangle mesh.
 /// \param[in]     topology   Previously built BVH topology.
 /// \param[in,out] aabb_tree  Destination AABB tree object; previous data is
@@ -35,7 +31,7 @@ namespace gwn {
 ///
 /// \return \c gwn_status::ok() on success.
 template <int Width, gwn_real_type Real, gwn_index_type Index>
-gwn_status gwn_bvh_refit_aabb(
+[[nodiscard]] gwn_status gwn_bvh_refit_aabb(
     gwn_geometry_object<Real, Index> const &geometry,
     gwn_bvh_topology_object<Width, Real, Index> const &topology,
     gwn_bvh_aabb_tree_object<Width, Real, Index> &aabb_tree,
@@ -60,11 +56,6 @@ gwn_status gwn_bvh_refit_aabb(
 ///
 /// On success the bound stream of \p moment_tree is updated to \p stream.
 ///
-/// \tparam Order  Taylor expansion order (0, 1, or 2).
-/// \tparam Width  BVH node fan-out.
-/// \tparam Real   Floating-point type.
-/// \tparam Index  Signed integer index type.
-///
 /// \param[in]     geometry     Uploaded triangle mesh.
 /// \param[in]     topology     Previously built BVH topology.
 /// \param[in]     aabb_tree    Previously refit AABB tree (used for
@@ -75,7 +66,7 @@ gwn_status gwn_bvh_refit_aabb(
 ///
 /// \return \c gwn_status::ok() on success.
 template <int Order, int Width, gwn_real_type Real, gwn_index_type Index>
-gwn_status gwn_bvh_refit_moment(
+[[nodiscard]] gwn_status gwn_bvh_refit_moment(
     gwn_geometry_object<Real, Index> const &geometry,
     gwn_bvh_topology_object<Width, Real, Index> const &topology,
     gwn_bvh_aabb_tree_object<Width, Real, Index> const &aabb_tree,

@@ -578,7 +578,7 @@ __device__ inline Real gwn_signed_distance_point_bvh_impl(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
     gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree,
-    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &data_tree, Real const qx,
+    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &moment_tree, Real const qx,
     Real const qy, Real const qz, Real const winding_number_threshold, Real const culling_band,
     Real const accuracy_scale, OverflowCallback const &overflow_callback = {}
 ) noexcept {
@@ -595,10 +595,10 @@ __device__ inline Real gwn_signed_distance_point_bvh_impl(
         return dist;
 
     Real wn = Real(0);
-    if (data_tree.is_valid_for(bvh)) {
+    if (moment_tree.is_valid_for(bvh)) {
         wn = gwn_winding_number_point_bvh_taylor_impl<
             Order, Width, Real, Index, StackCapacity, OverflowCallback>(
-            geometry, bvh, data_tree, qx, qy, qz, accuracy_scale, overflow_callback
+            geometry, bvh, moment_tree, qx, qy, qz, accuracy_scale, overflow_callback
         );
     }
     if (!isfinite(wn))
@@ -639,7 +639,7 @@ struct gwn_signed_distance_batch_bvh_functor {
     gwn_geometry_accessor<Real, Index> geometry{};
     gwn_bvh_topology_accessor<Width, Real, Index> bvh{};
     gwn_bvh_aabb_accessor<Width, Real, Index> aabb_tree{};
-    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> data_tree{};
+    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> moment_tree{};
     cuda::std::span<Real const> query_x{};
     cuda::std::span<Real const> query_y{};
     cuda::std::span<Real const> query_z{};
@@ -652,7 +652,7 @@ struct gwn_signed_distance_batch_bvh_functor {
     __device__ void operator()(std::size_t const query_id) const {
         out_distance[query_id] = gwn_signed_distance_point_bvh_impl<
             Order, Width, Real, Index, StackCapacity, OverflowCallback>(
-            geometry, bvh, aabb_tree, data_tree, query_x[query_id], query_y[query_id],
+            geometry, bvh, aabb_tree, moment_tree, query_x[query_id], query_y[query_id],
             query_z[query_id], winding_number_threshold, culling_band, accuracy_scale,
             overflow_callback
         );

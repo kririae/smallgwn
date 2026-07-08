@@ -26,7 +26,7 @@ namespace gwn {
 template <
     gwn_real_type Real = float, gwn_index_type Index = std::uint32_t, class DerivedV,
     class DerivedF>
-gwn_status gwn_upload_from_eigen(
+[[nodiscard]] gwn_status gwn_upload_geometry_from_eigen(
     gwn_geometry_object<Real, Index> &object, Eigen::MatrixBase<DerivedV> const &vertices,
     Eigen::MatrixBase<DerivedF> const &triangles, cudaStream_t const stream = gwn_default_stream()
 ) noexcept try {
@@ -122,9 +122,13 @@ gwn_status gwn_upload_from_eigen(
         cuda::std::span<Index const>(i2.get(), triangle_count_u), stream
     );
 } catch (std::exception const &) {
-    return gwn_status::internal_error("Unhandled std::exception in gwn_upload_from_eigen.");
+    return gwn_status::internal_error(
+        "Unhandled std::exception in gwn_upload_geometry_from_eigen."
+    );
 } catch (...) {
-    return gwn_status::internal_error("Unhandled unknown exception in gwn_upload_from_eigen.");
+    return gwn_status::internal_error(
+        "Unhandled unknown exception in gwn_upload_geometry_from_eigen."
+    );
 }
 
 } // namespace gwn

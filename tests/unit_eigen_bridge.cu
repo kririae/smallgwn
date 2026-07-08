@@ -20,7 +20,8 @@ TEST_F(CudaFixture, upload_from_eigen_accepts_valid_mesh) {
     triangles << 0, 1, 2;
 
     gwn::gwn_geometry_object<Real, Index> geometry;
-    gwn::gwn_status const status = gwn::gwn_upload_from_eigen(geometry, vertices, triangles);
+    gwn::gwn_status const status =
+        gwn::gwn_upload_geometry_from_eigen(geometry, vertices, triangles);
     SMALLGWN_SKIP_IF_STATUS_CUDA_UNAVAILABLE(status);
     ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
     ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
@@ -37,7 +38,8 @@ TEST_F(CudaFixture, upload_from_eigen_rejects_invalid_faces) {
     triangles << 0, 1, 3;
 
     gwn::gwn_geometry_object<Real, Index> geometry;
-    gwn::gwn_status const status = gwn::gwn_upload_from_eigen(geometry, vertices, triangles);
+    gwn::gwn_status const status =
+        gwn::gwn_upload_geometry_from_eigen(geometry, vertices, triangles);
     EXPECT_EQ(status.error(), gwn::gwn_error::invalid_argument);
     EXPECT_EQ(geometry.vertex_count(), 0u);
     EXPECT_EQ(geometry.triangle_count(), 0u);

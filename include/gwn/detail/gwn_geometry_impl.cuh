@@ -634,8 +634,6 @@ gwn_status gwn_upload_accessor(
     return gwn_replace_accessor_with_staging(accessor, release, build, stream);
 }
 
-} // namespace detail
-
 template <gwn_index_type Index>
 gwn_status gwn_compute_triangle_boundary_edge_mask(
     cuda::std::span<Index const> i0, cuda::std::span<Index const> i1,
@@ -670,7 +668,7 @@ gwn_status gwn_compute_triangle_boundary_edge_mask(
         GWN_RETURN_ON_ERROR(d_mask.resize(out_mask.size(), stream));
 
         GWN_RETURN_ON_ERROR(
-            detail::gwn_compute_triangle_boundary_edge_mask_device_impl<Index>(
+            gwn_compute_triangle_boundary_edge_mask_device_impl<Index>(
                 d_i0.span(), d_i1.span(), d_i2.span(), d_mask.span(), nullptr, stream
             )
         );
@@ -680,6 +678,8 @@ gwn_status gwn_compute_triangle_boundary_edge_mask(
     }
     );
 }
+
+} // namespace detail
 
 template <gwn_real_type Real, gwn_index_type Index>
 gwn_status gwn_upload_geometry(

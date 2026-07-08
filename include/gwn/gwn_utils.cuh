@@ -48,9 +48,6 @@ public:
 }
 
 /// \brief Mixin that binds an object to a CUDA stream.
-///
-/// \remark This mixin only stores stream state and accessor methods.
-/// \remark It does not own memory and does not perform synchronization.
 class gwn_stream_mixin {
 public:
     gwn_stream_mixin() noexcept = default;
@@ -83,16 +80,14 @@ gwn_span_has_storage(cuda::std::span<T> const span) noexcept {
 }
 
 /// \brief Return the sentinel value used for invalid integral indices.
-template <class Index>
+template <gwn_index_type Index>
 [[nodiscard]] __host__ __device__ constexpr Index gwn_invalid_index() noexcept {
-    static_assert(std::is_integral_v<Index>, "Index must be an integral type.");
     return std::numeric_limits<Index>::max();
 }
 
 /// \brief Return whether an index value is invalid.
-template <class Index>
+template <gwn_index_type Index>
 [[nodiscard]] __host__ __device__ constexpr bool gwn_is_invalid_index(Index const index) noexcept {
-    static_assert(std::is_integral_v<Index>, "Index must be an integral type.");
     if constexpr (std::is_signed_v<Index>)
         return index < Index(0);
     else
@@ -100,13 +95,13 @@ template <class Index>
 }
 
 /// \brief Return whether an index value is valid.
-template <class Index>
+template <gwn_index_type Index>
 [[nodiscard]] __host__ __device__ constexpr bool gwn_is_valid_index(Index const index) noexcept {
     return !gwn_is_invalid_index(index);
 }
 
 /// \brief Return whether an index is valid and within `[0, bound)`.
-template <class Index>
+template <gwn_index_type Index>
 [[nodiscard]] __host__ __device__ constexpr bool
 gwn_index_in_bounds(Index const index, std::size_t const bound) noexcept {
     return gwn_is_valid_index(index) && static_cast<std::size_t>(index) < bound;
@@ -129,7 +124,7 @@ class gwn_status {
 public:
     gwn_status() noexcept = default;
 
-    /// \brief Construct a success status (no message, no location).
+    /// \brief Construct a success status.
     [[nodiscard]] static gwn_status ok() noexcept { return gwn_status(); }
 
     /// \brief Construct an invalid-argument error with a diagnostic message.
@@ -271,7 +266,7 @@ inline void gwn_throw_if_error(gwn_status const &status) {
 }
 
 /// \brief Translate a `cudaError_t` into a `gwn_status`.
-inline gwn_status gwn_cuda_to_status(
+[[nodiscard]] inline gwn_status gwn_cuda_to_status(
     cudaError_t const cuda_result, std::source_location const loc = std::source_location::current()
 ) noexcept {
     if (cuda_result == cudaSuccess)
@@ -283,7 +278,6 @@ inline gwn_status gwn_cuda_to_status(
 
 /// \brief Allocate device memory via the CUDA stream-ordered allocator.
 ///
-/// \remark No synchronous fallback path (`cudaMallocAsync` only).
 /// \remark Zero-byte requests succeed with `*ptr = nullptr`.
 inline gwn_status gwn_cuda_malloc(
     void **ptr, std::size_t const bytes, cudaStream_t const stream = gwn_default_stream()
@@ -309,7 +303,6 @@ inline gwn_status gwn_cuda_malloc(
 
 /// \brief Free device memory via the CUDA stream-ordered allocator.
 ///
-/// \remark No synchronous fallback path (`cudaFreeAsync` only).
 /// \remark Null pointer is treated as a no-op success.
 inline gwn_status
 gwn_cuda_free(void *ptr, cudaStream_t const stream = gwn_default_stream()) noexcept {
@@ -327,7 +320,6 @@ gwn_cuda_free(void *ptr, cudaStream_t const stream = gwn_default_stream()) noexc
 ///          exclusively.  The buffer remembers its bound stream and releases on
 ///          that stream by default.
 ///
-/// \remark `resize()` does not preserve old contents.
 /// \remark Move-assignment uses copy-and-swap; copy construction is deleted.
 template <class T> class gwn_device_array final : public gwn_noncopyable {
 public:
