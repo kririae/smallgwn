@@ -35,7 +35,7 @@ TEST(smallgwn_unit_geometry, boundary_edge_mask_single_triangle_all_bits_set) {
     std::array<Index, 1> const i2{2};
     std::array<std::uint8_t, 1> mask{0};
 
-    gwn::gwn_status const s = gwn::gwn_compute_triangle_boundary_edge_mask<Index>(
+    gwn::gwn_status const s = gwn::detail::gwn_compute_triangle_boundary_edge_mask<Index>(
         cuda::std::span<Index const>(i0.data(), i0.size()),
         cuda::std::span<Index const>(i1.data(), i1.size()),
         cuda::std::span<Index const>(i2.data(), i2.size()),
@@ -54,7 +54,7 @@ TEST(smallgwn_unit_geometry, boundary_edge_mask_consistent_shared_edge_is_not_bo
     std::array<Index, 2> const i2{2, 3};
     std::array<std::uint8_t, 2> mask{0, 0};
 
-    gwn::gwn_status const s = gwn::gwn_compute_triangle_boundary_edge_mask<Index>(
+    gwn::gwn_status const s = gwn::detail::gwn_compute_triangle_boundary_edge_mask<Index>(
         cuda::std::span<Index const>(i0.data(), i0.size()),
         cuda::std::span<Index const>(i1.data(), i1.size()),
         cuda::std::span<Index const>(i2.data(), i2.size()),
@@ -74,7 +74,7 @@ TEST(smallgwn_unit_geometry, boundary_edge_mask_inconsistent_shared_edge_marks_b
     std::array<Index, 2> const i2{2, 3};
     std::array<std::uint8_t, 2> mask{0, 0};
 
-    gwn::gwn_status const s = gwn::gwn_compute_triangle_boundary_edge_mask<Index>(
+    gwn::gwn_status const s = gwn::detail::gwn_compute_triangle_boundary_edge_mask<Index>(
         cuda::std::span<Index const>(i0.data(), i0.size()),
         cuda::std::span<Index const>(i1.data(), i1.size()),
         cuda::std::span<Index const>(i2.data(), i2.size()),
@@ -93,7 +93,7 @@ TEST(smallgwn_unit_geometry, boundary_edge_mask_non_manifold_shared_edge_marks_b
     std::array<Index, 3> const i2{2, 3, 4};
     std::array<std::uint8_t, 3> mask{0, 0, 0};
 
-    gwn::gwn_status const s = gwn::gwn_compute_triangle_boundary_edge_mask<Index>(
+    gwn::gwn_status const s = gwn::detail::gwn_compute_triangle_boundary_edge_mask<Index>(
         cuda::std::span<Index const>(i0.data(), i0.size()),
         cuda::std::span<Index const>(i1.data(), i1.size()),
         cuda::std::span<Index const>(i2.data(), i2.size()),
@@ -196,7 +196,7 @@ TEST(smallgwn_unit_geometry, boundary_edge_mask_rejects_mismatched_output_size) 
     std::array<Index, 2> const i2{2, 3};
     std::array<std::uint8_t, 1> mask{0};
 
-    gwn::gwn_status const s = gwn::gwn_compute_triangle_boundary_edge_mask<Index>(
+    gwn::gwn_status const s = gwn::detail::gwn_compute_triangle_boundary_edge_mask<Index>(
         cuda::std::span<Index const>(i0.data(), i0.size()),
         cuda::std::span<Index const>(i1.data(), i1.size()),
         cuda::std::span<Index const>(i2.data(), i2.size()),

@@ -32,9 +32,6 @@ namespace gwn {
 ///
 /// On success the bound stream of \p topology is updated to \p stream.
 ///
-/// \tparam Width  BVH node fan-out (e.g. 4 for a 4-wide BVH).
-/// \tparam Real   Floating-point type (\c float or \c double).
-/// \tparam Index  Signed integer index type.
 /// \tparam MortonCode Morton key type:
 ///                    - \c std::uint32_t : 30-bit Morton.
 ///                    - \c std::uint64_t : 63-bit Morton (default).
@@ -49,7 +46,7 @@ namespace gwn {
 /// \remark \p MortonCode only changes topology build (Morton generation/sort
 ///         and binary radix structure), not query kernel math.
 template <int Width, gwn_real_type Real, gwn_index_type Index, class MortonCode = std::uint64_t>
-gwn_status gwn_bvh_topology_build_lbvh(
+[[nodiscard]] gwn_status gwn_bvh_topology_build_lbvh(
     gwn_geometry_object<Real, Index> const &geometry,
     gwn_bvh_topology_object<Width, Real, Index> &topology,
     cudaStream_t const stream = gwn_default_stream()
@@ -70,9 +67,6 @@ gwn_status gwn_bvh_topology_build_lbvh(
 ///
 /// On success the bound stream of \p topology is updated to \p stream.
 ///
-/// \tparam Width  BVH node fan-out (e.g. 4 for a 4-wide BVH).
-/// \tparam Real   Floating-point type (\c float or \c double).
-/// \tparam Index  Integer index type.
 /// \tparam MortonCode Morton key type:
 ///                    - \c std::uint32_t : 30-bit Morton.
 ///                    - \c std::uint64_t : 63-bit Morton (default).
@@ -86,7 +80,7 @@ gwn_status gwn_bvh_topology_build_lbvh(
 /// \remark \p MortonCode only changes topology build (Morton generation/sort
 ///         and H-PLOC bottom-up hierarchy guidance), not query kernel math.
 template <int Width, gwn_real_type Real, gwn_index_type Index, class MortonCode = std::uint64_t>
-gwn_status gwn_bvh_topology_build_hploc(
+[[nodiscard]] gwn_status gwn_bvh_topology_build_hploc(
     gwn_geometry_object<Real, Index> const &geometry,
     gwn_bvh_topology_object<Width, Real, Index> &topology,
     cudaStream_t const stream = gwn_default_stream()

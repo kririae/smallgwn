@@ -49,13 +49,13 @@ template <
 __device__ inline gwn_query_vec3<Real> gwn_winding_gradient_point_bvh_taylor_impl(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
-    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &data_tree, Real const qx,
+    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &moment_tree, Real const qx,
     Real const qy, Real const qz, Real const accuracy_scale,
     OverflowCallback const &overflow_callback = {}
 ) noexcept {
     return gwn_winding_and_gradient_point_bvh_taylor_impl<
                Order, Width, Real, Index, StackCapacity, OverflowCallback>(
-               geometry, bvh, data_tree, qx, qy, qz, accuracy_scale, overflow_callback
+               geometry, bvh, moment_tree, qx, qy, qz, accuracy_scale, overflow_callback
     )
         .gradient;
 }
@@ -68,7 +68,7 @@ template <
 struct gwn_winding_gradient_batch_bvh_taylor_functor {
     gwn_geometry_accessor<Real, Index> geometry{};
     gwn_bvh_topology_accessor<Width, Real, Index> bvh{};
-    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> data_tree{};
+    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> moment_tree{};
     cuda::std::span<Real const> query_x{};
     cuda::std::span<Real const> query_y{};
     cuda::std::span<Real const> query_z{};
@@ -81,7 +81,7 @@ struct gwn_winding_gradient_batch_bvh_taylor_functor {
     __device__ void operator()(std::size_t const query_id) const {
         auto const grad = gwn_winding_gradient_point_bvh_taylor_impl<
             Order, Width, Real, Index, StackCapacity, OverflowCallback>(
-            geometry, bvh, data_tree, query_x[query_id], query_y[query_id], query_z[query_id],
+            geometry, bvh, moment_tree, query_x[query_id], query_y[query_id], query_z[query_id],
             accuracy_scale, overflow_callback
         );
         out_grad_x[query_id] = grad.x;

@@ -50,7 +50,7 @@ template <gwn_real_type Real> struct gwn_aabb {
     Real max_z; ///< Maximum extent along the Z axis.
 };
 
-/// \brief Topology-only BVH node (no per-child bounds payload).
+/// \brief BVH node with child_index, child_count, and child_kind.
 template <int Width, gwn_index_type Index = std::uint32_t> struct gwn_bvh_topology_node_soa {
     static_assert(Width >= 2, "BVH node width must be at least 2.");
 
@@ -80,9 +80,7 @@ template <gwn_real_type Real> using gwn_bvh4_aabb_node_soa = gwn_bvh_aabb_node_s
 
 /// \brief SoA node storing Taylor multipole moment coefficients per child slot.
 ///
-/// \tparam Width  BVH node fan-out.
 /// \tparam Order  Taylor expansion order (0, 1, or 2).
-/// \tparam Real   Floating-point scalar type.
 ///
 /// The primary template is declared but not defined; only the Order = 0, 1,
 /// and 2 specialisations are provided.
@@ -157,9 +155,7 @@ template <int Width, gwn_real_type Real> struct gwn_bvh_taylor_node_soa<Width, 2
 template <int Order, gwn_real_type Real>
 using gwn_bvh4_taylor_node_soa = gwn_bvh_taylor_node_soa<4, Order, Real>;
 
-/// \brief Topology tree accessor for a fixed-width BVH.
-///
-/// \remark This tree stores only hierarchy and primitive indirection.
+/// \brief Non-owning view of a BVH topology node array, primitive_indices, and root layout.
 template <int Width, gwn_real_type Real, gwn_index_type Index = std::uint32_t>
 struct gwn_bvh_topology_tree_accessor {
     static_assert(Width >= 2, "BVH accessor width must be at least 2.");
@@ -241,10 +237,7 @@ struct gwn_bvh_aabb_tree_accessor {
 
 /// \brief Moment payload tree accessor storing Taylor data aligned to topology.
 ///
-/// \tparam Width  BVH node fan-out.
 /// \tparam Order  Taylor expansion order (0, 1, or 2).
-/// \tparam Real   Floating-point scalar type.
-/// \tparam Index  Integer index type.
 template <int Width, int Order, gwn_real_type Real, gwn_index_type Index = std::uint32_t>
 struct gwn_bvh_moment_tree_accessor {
     static_assert(Width >= 2, "BVH accessor width must be at least 2.");
@@ -466,7 +459,7 @@ private:
 /// \brief Width-4 topology-only BVH owning object.
 ///
 /// \remark This alias holds only the BVH topology (hierarchy + primitive
-///         indirection).  AABB bounds and Taylor moment payloads are stored
+///         indices).  AABB bounds and Taylor moment payloads are stored
 ///         in separate \c gwn_bvh4_aabb_object / \c gwn_bvh4_moment_object
 ///         instances.
 template <gwn_real_type Real = float, gwn_index_type Index = std::uint32_t>

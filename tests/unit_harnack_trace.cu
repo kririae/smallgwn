@@ -341,7 +341,7 @@ inline Real point_segment_distance(
 template <class Mesh>
 Real cpu_boundary_edge_distance(Mesh const &mesh, Real const qx, Real const qy, Real const qz) {
     std::vector<std::uint8_t> mask(mesh.i0.size(), std::uint8_t(0));
-    gwn::gwn_status const s = gwn::gwn_compute_triangle_boundary_edge_mask<Index>(
+    gwn::gwn_status const s = gwn::detail::gwn_compute_triangle_boundary_edge_mask<Index>(
         cuda::std::span<Index const>(mesh.i0.data(), mesh.i0.size()),
         cuda::std::span<Index const>(mesh.i1.data(), mesh.i1.size()),
         cuda::std::span<Index const>(mesh.i2.data(), mesh.i2.size()),
