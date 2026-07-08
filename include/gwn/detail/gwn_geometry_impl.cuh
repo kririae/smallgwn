@@ -635,7 +635,7 @@ gwn_status gwn_upload_accessor(
 }
 
 template <gwn_real_type Real, gwn_index_type Index>
-gwn_status gwn_refresh_geometry_accessor(
+gwn_status gwn_update_geometry_accessor(
     gwn_geometry_accessor<Real, Index> &accessor, cudaStream_t const stream
 ) noexcept {
     if (!accessor.is_valid())
@@ -668,7 +668,7 @@ gwn_status gwn_update_geometry_accessor(
     GWN_RETURN_ON_ERROR(gwn_copy_h2d(accessor.vertex_x, x, stream));
     GWN_RETURN_ON_ERROR(gwn_copy_h2d(accessor.vertex_y, y, stream));
     GWN_RETURN_ON_ERROR(gwn_copy_h2d(accessor.vertex_z, z, stream));
-    return gwn_refresh_geometry_accessor(accessor, stream);
+    return gwn_update_geometry_accessor(accessor, stream);
 }
 
 template <gwn_index_type Index>
@@ -753,7 +753,7 @@ template <gwn_real_type Real, gwn_index_type Index>
 gwn_status
 gwn_update_geometry(gwn_geometry_object<Real, Index> &object, cudaStream_t const stream) noexcept {
     return detail::gwn_try_translate_status("gwn_update_geometry", [&]() -> gwn_status {
-        GWN_RETURN_ON_ERROR(detail::gwn_refresh_geometry_accessor(object.accessor(), stream));
+        GWN_RETURN_ON_ERROR(detail::gwn_update_geometry_accessor(object.accessor(), stream));
         object.set_stream(stream);
         return gwn_status::ok();
     });

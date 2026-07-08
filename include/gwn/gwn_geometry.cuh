@@ -109,7 +109,7 @@ template <gwn_real_type Real, gwn_index_type Index>
     cudaStream_t stream = gwn_default_stream()
 ) noexcept;
 
-/// \brief Refresh geometry caches after device-side in-place position updates.
+/// \brief Update derived geometry data after device-side position writes.
 ///
 /// Enqueues vertex-normal recomputation on \p stream. Caller-provided position
 /// writes must already precede this call in stream order, or be linked with
