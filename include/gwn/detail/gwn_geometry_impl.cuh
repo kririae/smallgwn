@@ -634,6 +634,43 @@ gwn_status gwn_upload_accessor(
     return gwn_replace_accessor_with_staging(accessor, release, build, stream);
 }
 
+template <gwn_real_type Real, gwn_index_type Index>
+gwn_status gwn_refresh_geometry_accessor(
+    gwn_geometry_accessor<Real, Index> &accessor, cudaStream_t const stream
+) noexcept {
+    if (!accessor.is_valid())
+        return gwn_status::invalid_argument("Geometry accessor is invalid for update.");
+
+    return gwn_compute_vertex_normals_device_impl<Real, Index>(
+        accessor.vertex_x, accessor.vertex_y, accessor.vertex_z, accessor.tri_i0, accessor.tri_i1,
+        accessor.tri_i2, accessor.vertex_nx, accessor.vertex_ny, accessor.vertex_nz, stream
+    );
+}
+
+template <gwn_real_type Real, gwn_index_type Index>
+gwn_status gwn_update_geometry_accessor(
+    gwn_geometry_accessor<Real, Index> &accessor, cuda::std::span<Real const> const x,
+    cuda::std::span<Real const> const y, cuda::std::span<Real const> const z,
+    cudaStream_t const stream
+) noexcept {
+    if (!accessor.is_valid())
+        return gwn_status::invalid_argument("Geometry accessor is invalid for update.");
+    if (x.size() != y.size() || x.size() != z.size())
+        return gwn_status::invalid_argument("Vertex SoA spans must have identical lengths.");
+    if (x.size() != accessor.vertex_count())
+        return gwn_status::invalid_argument("Updated vertex count must match geometry.");
+    if (!gwn_span_has_storage(x) || !gwn_span_has_storage(y) || !gwn_span_has_storage(z)) {
+        return gwn_status::invalid_argument(
+            "Geometry update spans must use non-null storage when non-empty."
+        );
+    }
+
+    GWN_RETURN_ON_ERROR(gwn_copy_h2d(accessor.vertex_x, x, stream));
+    GWN_RETURN_ON_ERROR(gwn_copy_h2d(accessor.vertex_y, y, stream));
+    GWN_RETURN_ON_ERROR(gwn_copy_h2d(accessor.vertex_z, z, stream));
+    return gwn_refresh_geometry_accessor(accessor, stream);
+}
+
 template <gwn_index_type Index>
 gwn_status gwn_compute_triangle_boundary_edge_mask(
     cuda::std::span<Index const> i0, cuda::std::span<Index const> i1,
@@ -683,14 +720,40 @@ gwn_status gwn_compute_triangle_boundary_edge_mask(
 
 template <gwn_real_type Real, gwn_index_type Index>
 gwn_status gwn_upload_geometry(
-    gwn_geometry_object<Real, Index> &object, cuda::std::span<Real const> x,
-    cuda::std::span<Real const> y, cuda::std::span<Real const> z, cuda::std::span<Index const> i0,
-    cuda::std::span<Index const> i1, cuda::std::span<Index const> i2, cudaStream_t const stream
+    gwn_geometry_object<Real, Index> &object, cuda::std::span<Real const> const x,
+    cuda::std::span<Real const> const y, cuda::std::span<Real const> const z,
+    cuda::std::span<Index const> const i0, cuda::std::span<Index const> const i1,
+    cuda::std::span<Index const> const i2, cudaStream_t const stream
 ) noexcept {
     return detail::gwn_try_translate_status("gwn_upload_geometry", [&]() -> gwn_status {
         GWN_RETURN_ON_ERROR(
             detail::gwn_upload_accessor(object.accessor_, x, y, z, i0, i1, i2, stream)
         );
+        object.set_stream(stream);
+        return gwn_status::ok();
+    });
+}
+
+template <gwn_real_type Real, gwn_index_type Index>
+gwn_status gwn_update_geometry(
+    gwn_geometry_object<Real, Index> &object, cuda::std::span<Real const> const x,
+    cuda::std::span<Real const> const y, cuda::std::span<Real const> const z,
+    cudaStream_t const stream
+) noexcept {
+    return detail::gwn_try_translate_status("gwn_update_geometry", [&]() -> gwn_status {
+        GWN_RETURN_ON_ERROR(
+            detail::gwn_update_geometry_accessor(object.accessor(), x, y, z, stream)
+        );
+        object.set_stream(stream);
+        return gwn_status::ok();
+    });
+}
+
+template <gwn_real_type Real, gwn_index_type Index>
+gwn_status
+gwn_update_geometry(gwn_geometry_object<Real, Index> &object, cudaStream_t const stream) noexcept {
+    return detail::gwn_try_translate_status("gwn_update_geometry", [&]() -> gwn_status {
+        GWN_RETURN_ON_ERROR(detail::gwn_refresh_geometry_accessor(object.accessor(), stream));
         object.set_stream(stream);
         return gwn_status::ok();
     });
