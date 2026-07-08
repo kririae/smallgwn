@@ -87,6 +87,7 @@ smallgwn_add_cuda_test(smallgwn_unit_stream_mixin   LABELS "unit;cuda" SOURCES $
 smallgwn_add_cuda_test(smallgwn_unit_geometry       LABELS "unit;cuda" SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/unit_geometry.cu)
 smallgwn_add_cuda_test(smallgwn_unit_boundary_chain LABELS "unit;cuda" SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/unit_boundary_chain.cu)
 smallgwn_add_cuda_test(smallgwn_unit_bvh_topology   LABELS "unit;cuda" SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/unit_bvh_topology.cu)
+smallgwn_add_cuda_test(smallgwn_unit_query_stack_capacity LABELS "unit;cuda" SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/unit_query_stack_capacity.cu)
 smallgwn_add_cuda_test(smallgwn_unit_uint64_compile LABELS "unit;cuda" SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/unit_uint64_compile.cu)
 smallgwn_add_cuda_test(smallgwn_unit_bvh_taylor     LABELS "unit;cuda" SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/unit_bvh_taylor.cu)
 smallgwn_add_eigen_tbb_test(smallgwn_unit_eigen_bridge

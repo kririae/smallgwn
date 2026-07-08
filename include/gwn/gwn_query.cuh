@@ -153,6 +153,14 @@ template <
         return gwn_status::invalid_argument("Geometry accessor contains mismatched span lengths.");
     if (!bvh.is_valid())
         return gwn_status::invalid_argument("BVH accessor is invalid.");
+    if (bvh.has_internal_root()) {
+        std::uint64_t const required_stack =
+            1u + std::uint64_t(Width - 1) * std::uint64_t(bvh.max_depth);
+        if (required_stack > std::uint64_t(StackCapacity))
+            return gwn_status::invalid_argument(
+                "Traversal stack capacity is below BVH depth bound."
+            );
+    }
     if (!aabb_tree.is_valid_for(bvh))
         return gwn_status::invalid_argument("BVH AABB tree is invalid for the given topology.");
     if (query_x.size() != query_y.size() || query_x.size() != query_z.size())
@@ -259,6 +267,14 @@ template <
         return gwn_status::invalid_argument("Geometry accessor contains mismatched span lengths.");
     if (!bvh.is_valid())
         return gwn_status::invalid_argument("BVH accessor is invalid.");
+    if (bvh.has_internal_root()) {
+        std::uint64_t const required_stack =
+            1u + std::uint64_t(Width - 1) * std::uint64_t(bvh.max_depth);
+        if (required_stack > std::uint64_t(StackCapacity))
+            return gwn_status::invalid_argument(
+                "Traversal stack capacity is below BVH depth bound."
+            );
+    }
     if (!aabb_tree.is_valid_for(bvh))
         return gwn_status::invalid_argument("BVH AABB tree is invalid for the given topology.");
 
@@ -380,6 +396,14 @@ template <
         return gwn_status::invalid_argument("Geometry accessor contains mismatched span lengths.");
     if (!bvh.is_valid())
         return gwn_status::invalid_argument("BVH accessor is invalid.");
+    if (bvh.has_internal_root()) {
+        std::uint64_t const required_stack =
+            1u + std::uint64_t(Width - 1) * std::uint64_t(bvh.max_depth);
+        if (required_stack > std::uint64_t(StackCapacity))
+            return gwn_status::invalid_argument(
+                "Traversal stack capacity is below BVH depth bound."
+            );
+    }
     if (!moment_tree.is_valid_for(bvh))
         return gwn_status::invalid_argument("BVH moment tree is invalid for the given topology.");
     if (query_x.size() != query_y.size() || query_x.size() != query_z.size())
@@ -450,6 +474,14 @@ template <
         return gwn_status::invalid_argument("Geometry accessor contains mismatched span lengths.");
     if (!bvh.is_valid())
         return gwn_status::invalid_argument("BVH accessor is invalid.");
+    if (bvh.has_internal_root()) {
+        std::uint64_t const required_stack =
+            1u + std::uint64_t(Width - 1) * std::uint64_t(bvh.max_depth);
+        if (required_stack > std::uint64_t(StackCapacity))
+            return gwn_status::invalid_argument(
+                "Traversal stack capacity is below BVH depth bound."
+            );
+    }
     if (query_x.size() != query_y.size() || query_x.size() != query_z.size())
         return gwn_status::invalid_argument("Query SoA spans must have identical lengths.");
     if (query_x.size() != output.size())
@@ -546,6 +578,14 @@ template <
         return gwn_status::invalid_argument("Geometry accessor contains mismatched span lengths.");
     if (!bvh.is_valid())
         return gwn_status::invalid_argument("BVH accessor is invalid.");
+    if (bvh.has_internal_root()) {
+        std::uint64_t const required_stack =
+            1u + std::uint64_t(Width - 1) * std::uint64_t(bvh.max_depth);
+        if (required_stack > std::uint64_t(StackCapacity))
+            return gwn_status::invalid_argument(
+                "Traversal stack capacity is below BVH depth bound."
+            );
+    }
     if (!aabb_tree.is_valid_for(bvh))
         return gwn_status::invalid_argument("BVH AABB tree is invalid for the given topology.");
     if (!boundary_chain.is_valid())
@@ -695,6 +735,14 @@ template <
         return gwn_status::invalid_argument("Geometry accessor contains mismatched span lengths.");
     if (!bvh.is_valid())
         return gwn_status::invalid_argument("BVH accessor is invalid.");
+    if (bvh.has_internal_root()) {
+        std::uint64_t const required_stack =
+            1u + std::uint64_t(Width - 1) * std::uint64_t(bvh.max_depth);
+        if (required_stack > std::uint64_t(StackCapacity))
+            return gwn_status::invalid_argument(
+                "Traversal stack capacity is below BVH depth bound."
+            );
+    }
     if (!aabb_tree.is_valid_for(bvh))
         return gwn_status::invalid_argument("BVH AABB tree is invalid for the given topology.");
     if (query_x.size() != query_y.size() || query_x.size() != query_z.size())
@@ -772,6 +820,14 @@ template <
         return gwn_status::invalid_argument("Geometry accessor contains mismatched span lengths.");
     if (!bvh.is_valid())
         return gwn_status::invalid_argument("BVH accessor is invalid.");
+    if (bvh.has_internal_root()) {
+        std::uint64_t const required_stack =
+            1u + std::uint64_t(Width - 1) * std::uint64_t(bvh.max_depth);
+        if (required_stack > std::uint64_t(StackCapacity))
+            return gwn_status::invalid_argument(
+                "Traversal stack capacity is below BVH depth bound."
+            );
+    }
     if (!aabb_tree.is_valid_for(bvh))
         return gwn_status::invalid_argument("BVH AABB tree is invalid for the given topology.");
     if (!moment_tree.is_valid_for(bvh))
@@ -885,6 +941,14 @@ template <
         return gwn_status::invalid_argument("Geometry accessor contains mismatched span lengths.");
     if (!bvh.is_valid())
         return gwn_status::invalid_argument("BVH accessor is invalid.");
+    if (bvh.has_internal_root()) {
+        std::uint64_t const required_stack =
+            1u + std::uint64_t(Width - 1) * std::uint64_t(bvh.max_depth);
+        if (required_stack > std::uint64_t(StackCapacity))
+            return gwn_status::invalid_argument(
+                "Traversal stack capacity is below BVH depth bound."
+            );
+    }
     if (!moment_tree.is_valid_for(bvh))
         return gwn_status::invalid_argument("BVH moment tree is invalid for the given topology.");
     if (query_x.size() != query_y.size() || query_x.size() != query_z.size())
@@ -1024,6 +1088,14 @@ template <
         return gwn_status::invalid_argument("Geometry accessor contains mismatched span lengths.");
     if (!bvh.is_valid())
         return gwn_status::invalid_argument("BVH accessor is invalid.");
+    if (bvh.has_internal_root()) {
+        std::uint64_t const required_stack =
+            1u + std::uint64_t(Width - 1) * std::uint64_t(bvh.max_depth);
+        if (required_stack > std::uint64_t(StackCapacity))
+            return gwn_status::invalid_argument(
+                "Traversal stack capacity is below BVH depth bound."
+            );
+    }
     if (!aabb_tree.is_valid_for(bvh))
         return gwn_status::invalid_argument("BVH AABB tree is invalid for the given topology.");
     if (!moment_tree.is_valid_for(bvh))
@@ -1153,6 +1225,14 @@ template <
         return gwn_status::invalid_argument("Geometry accessor contains mismatched span lengths.");
     if (!bvh.is_valid())
         return gwn_status::invalid_argument("BVH accessor is invalid.");
+    if (bvh.has_internal_root()) {
+        std::uint64_t const required_stack =
+            1u + std::uint64_t(Width - 1) * std::uint64_t(bvh.max_depth);
+        if (required_stack > std::uint64_t(StackCapacity))
+            return gwn_status::invalid_argument(
+                "Traversal stack capacity is below BVH depth bound."
+            );
+    }
     if (!aabb_tree.is_valid_for(bvh))
         return gwn_status::invalid_argument("BVH AABB tree is invalid for the given topology.");
     if (!moment_tree.is_valid_for(bvh))

@@ -1,7 +1,9 @@
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -74,6 +76,41 @@ void verify_bvh_structure(
         EXPECT_EQ(s, 1);
 }
 
+template <int Width>
+std::uint32_t compute_host_max_internal_depth(
+    gwn::gwn_bvh_topology_accessor<Width, Real, Index> const &accessor
+) {
+    if (!accessor.has_internal_root())
+        return 0;
+
+    std::vector<gwn::gwn_bvh_topology_node_soa<Width, Index>> nodes(accessor.nodes.size());
+    EXPECT_EQ(
+        cudaSuccess, cudaMemcpy(
+                         nodes.data(), accessor.nodes.data(),
+                         nodes.size() * sizeof(gwn::gwn_bvh_topology_node_soa<Width, Index>),
+                         cudaMemcpyDeviceToHost
+                     )
+    );
+
+    std::uint32_t max_depth = 0;
+    std::vector<std::pair<Index, std::uint32_t>> stack{{accessor.root_index, 0}};
+    while (!stack.empty()) {
+        auto const [node_index, depth] = stack.back();
+        stack.pop_back();
+        max_depth = std::max(max_depth, depth);
+
+        auto const &node = nodes[static_cast<std::size_t>(node_index)];
+        for (int slot = 0; slot < Width; ++slot) {
+            if (static_cast<gwn::gwn_bvh_child_kind>(node.child_kind[slot]) !=
+                gwn::gwn_bvh_child_kind::k_internal) {
+                continue;
+            }
+            stack.emplace_back(node.child_index[slot], depth + 1);
+        }
+    }
+    return max_depth;
+}
+
 template <int Width, class MortonCode = std::uint64_t>
 gwn::gwn_status build_topology(
     bvh_topology_builder const builder, gwn::gwn_geometry_object<Real, Index> const &geometry,
@@ -108,6 +145,7 @@ TEST_F(CudaFixture, single_triangle_bvh) {
     auto const &acc = bvh.accessor();
     EXPECT_TRUE(acc.is_valid());
     EXPECT_EQ(acc.primitive_indices.size(), 1u);
+    EXPECT_EQ(acc.max_depth, 0u);
     verify_bvh_structure<4>(acc, 1);
 }
 
@@ -157,6 +195,7 @@ TEST_F(CudaFixture, octahedron_8_triangles) {
     auto const &acc = bvh.accessor();
     EXPECT_TRUE(acc.is_valid());
     EXPECT_EQ(acc.root_kind, gwn::gwn_bvh_child_kind::k_internal);
+    EXPECT_EQ(acc.max_depth, compute_host_max_internal_depth<4>(acc));
     verify_bvh_structure<4>(acc, 8);
 }
 
@@ -346,6 +385,7 @@ TEST_F(CudaFixture, clear_resets_bvh) {
 
     bvh.clear();
     EXPECT_FALSE(bvh.has_data());
+    EXPECT_EQ(bvh.accessor().max_depth, 0u);
 }
 
 TEST_F(CudaFixture, hploc_single_triangle_bvh) {
@@ -368,6 +408,7 @@ TEST_F(CudaFixture, hploc_single_triangle_bvh) {
     auto const &acc = bvh.accessor();
     EXPECT_TRUE(acc.is_valid());
     EXPECT_EQ(acc.primitive_indices.size(), 1u);
+    EXPECT_EQ(acc.max_depth, 0u);
     verify_bvh_structure<4>(acc, 1);
 }
 
@@ -393,6 +434,7 @@ TEST_F(CudaFixture, hploc_octahedron_8_triangles) {
     auto const &acc = bvh.accessor();
     EXPECT_TRUE(acc.is_valid());
     EXPECT_EQ(acc.root_kind, gwn::gwn_bvh_child_kind::k_internal);
+    EXPECT_EQ(acc.max_depth, compute_host_max_internal_depth<4>(acc));
     verify_bvh_structure<4>(acc, 8);
 }
 
@@ -418,6 +460,7 @@ TEST_F(CudaFixture, hploc_octahedron_8_triangles_morton32) {
     auto const &acc = bvh.accessor();
     EXPECT_TRUE(acc.is_valid());
     EXPECT_EQ(acc.root_kind, gwn::gwn_bvh_child_kind::k_internal);
+    EXPECT_EQ(acc.max_depth, compute_host_max_internal_depth<4>(acc));
     verify_bvh_structure<4>(acc, 8);
 }
 

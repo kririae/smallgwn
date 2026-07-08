@@ -55,6 +55,8 @@ These instructions apply to the `smallgwn/` project tree.
 - **Public API split**: `gwn_bvh_topology_build.cuh` (topology), `gwn_bvh_refit.cuh` (payload refit),
   `gwn_bvh_facade.cuh` (composed build workflows).
 - Topology builders: LBVH and H-PLOC. Facade exposes both variants.
+- Topology accessors store `max_depth`; host batch query launchers reject `StackCapacity` values
+  below the depth-derived stack bound.
 - Taylor moment supports `Order=0/1/2`.
   Each `gwn_bvh_refit_moment<Order,...>` call does a full replace of the moment accessor.
 - Public BVH entrypoints are object-based; accessor-based routines are detail-only.
@@ -192,6 +194,8 @@ effects should have a `\brief` or full doxygen block.
 - `tests/reference_hdk/*`: Vendored HDK sources (keep under `tests/`).
 - `tests/test_fixtures.hpp`, `test_utils.hpp`, `test_harnack_meshes.hpp`: shared test utilities.
 - `tests/libigl_reference.cpp/.hpp`: libigl CPU parity for SDF tests.
+- `tests/unit_query_stack_capacity.cu`: host-side stack-capacity rejection across BVH batch query
+  families.
 - Repo-local `fixtures` coverage remains available on clean machines via vendored OBJ meshes under
   `tests/data/`.
 - `ctest -L fixtures` also includes the filtered
