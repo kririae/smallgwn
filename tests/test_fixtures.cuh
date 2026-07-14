@@ -7,7 +7,7 @@
 
 #include <gwn/gwn_utils.cuh>
 
-#include "test_utils.hpp"
+#include "test_utils.cuh"
 
 namespace gwn::tests {
 
@@ -19,11 +19,6 @@ struct SingleTriangleMesh {
     std::array<Index, 1> i1{1};
     std::array<Index, 1> i2{2};
 };
-
-template <class... Arrays>
-[[nodiscard]] inline bool resize_device_arrays(std::size_t const count, Arrays &...arrays) {
-    return (... && arrays.resize(count).is_ok());
-}
 
 // CudaStreamFixture, provides two non-blocking streams and auto-cleanup.
 // Skips tests automatically when CUDA is unavailable.

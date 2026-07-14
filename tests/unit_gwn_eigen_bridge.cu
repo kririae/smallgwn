@@ -5,14 +5,14 @@
 
 #include <gwn/gwn_eigen_bridge.cuh>
 
-#include "test_fixtures.hpp"
-#include "test_utils.hpp"
+#include "test_fixtures.cuh"
+#include "test_utils.cuh"
 
 using Real = float;
 using Index = std::uint32_t;
-using gwn::tests::CudaFixture;
+using GwnEigenBridgeTest = gwn::tests::CudaFixture;
 
-TEST_F(CudaFixture, upload_from_eigen_accepts_valid_mesh) {
+TEST_F(GwnEigenBridgeTest, upload_from_eigen_accepts_valid_mesh) {
     Eigen::Matrix<Real, 3, 3, Eigen::RowMajor> vertices;
     vertices << Real(0), Real(0), Real(0), Real(1), Real(0), Real(0), Real(0), Real(1), Real(0);
 
@@ -30,7 +30,7 @@ TEST_F(CudaFixture, upload_from_eigen_accepts_valid_mesh) {
     EXPECT_TRUE(geometry.accessor().is_valid());
 }
 
-TEST_F(CudaFixture, upload_from_eigen_rejects_invalid_faces) {
+TEST_F(GwnEigenBridgeTest, upload_from_eigen_rejects_invalid_faces) {
     Eigen::Matrix<Real, 3, 3, Eigen::RowMajor> vertices;
     vertices << Real(0), Real(0), Real(0), Real(1), Real(0), Real(0), Real(0), Real(1), Real(0);
 

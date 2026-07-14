@@ -5,7 +5,6 @@
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -13,6 +12,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <gwn/gwn_utils.cuh>
@@ -23,6 +23,13 @@ namespace gwn::tests {
 
 using Real = float;
 using Index = std::uint32_t;
+
+#if defined(SMALLGWN_TEST_STACK_CAPACITY)
+inline constexpr int k_test_stack_capacity = SMALLGWN_TEST_STACK_CAPACITY;
+#else
+inline constexpr int k_test_stack_capacity = 64;
+#endif
+static_assert(k_test_stack_capacity == 64 || k_test_stack_capacity == 128);
 
 // SoA host mesh.
 
@@ -63,33 +70,6 @@ is_cuda_runtime_unavailable_message(std::string_view const message) noexcept {
         out << " at " << loc.file_name() << ":" << loc.line();
     }
     return out.str();
-}
-
-// Environment helpers.
-
-[[nodiscard]] inline int get_env_positive_int(char const *name, int const default_value) {
-    char const *value = std::getenv(name);
-    if (value == nullptr || *value == '\0')
-        return default_value;
-    int parsed = 0;
-    char const *end = value + std::char_traits<char>::length(value);
-    auto const [ptr, ec] = std::from_chars(value, end, parsed);
-    if (ec != std::errc() || ptr != end || parsed <= 0)
-        return default_value;
-    return parsed;
-}
-
-[[nodiscard]] inline std::size_t
-get_env_positive_size_t(char const *name, std::size_t default_value) {
-    char const *value = std::getenv(name);
-    if (value == nullptr || *value == '\0')
-        return default_value;
-    std::size_t parsed = 0;
-    char const *end = value + std::char_traits<char>::length(value);
-    auto const [ptr, ec] = std::from_chars(value, end, parsed);
-    if (ec != std::errc() || ptr != end || parsed == 0)
-        return default_value;
-    return parsed;
 }
 
 // OBJ loading.
@@ -190,20 +170,6 @@ parse_obj_index(std::string_view const token, std::size_t const vertex_count) {
 
 // Model directory and path collection.
 
-[[nodiscard]] inline std::optional<std::filesystem::path> find_model_data_dir() {
-    if (char const *env = std::getenv("SMALLGWN_MODEL_DATA_DIR"); env != nullptr && *env != '\0') {
-        std::filesystem::path const path(env);
-        if (std::filesystem::is_directory(path))
-            return path;
-    }
-
-    std::filesystem::path const default_path("/tmp/common-3d-test-models/data");
-    if (std::filesystem::is_directory(default_path))
-        return default_path;
-
-    return std::nullopt;
-}
-
 [[nodiscard]] inline std::vector<std::filesystem::path>
 collect_obj_model_paths(std::filesystem::path const &model_dir) {
     std::vector<std::filesystem::path> model_paths{};
@@ -219,63 +185,20 @@ collect_obj_model_paths(std::filesystem::path const &model_dir) {
     return model_paths;
 }
 
-[[nodiscard]] inline std::vector<std::filesystem::path> collect_model_paths() {
-    std::vector<std::filesystem::path> model_paths{};
+inline std::filesystem::path g_mesh_directory{};
 
-    if (char const *path_env = std::getenv("SMALLGWN_MODEL_PATH");
-        path_env != nullptr && *path_env != '\0') {
-        std::filesystem::path const path(path_env);
-        if (std::filesystem::is_regular_file(path) && path.extension() == ".obj")
-            model_paths.push_back(path);
-    }
-
-    if (char const *dir_env = std::getenv("SMALLGWN_MODEL_DATA_DIR");
-        dir_env != nullptr && *dir_env != '\0') {
-        std::filesystem::path const path(dir_env);
-        if (std::filesystem::is_directory(path)) {
-            auto const dir_models = collect_obj_model_paths(path);
-            model_paths.insert(model_paths.end(), dir_models.begin(), dir_models.end());
-        }
-    } else {
-        std::filesystem::path const default_path("/tmp/common-3d-test-models/data");
-        if (std::filesystem::is_directory(default_path)) {
-            auto const dir_models = collect_obj_model_paths(default_path);
-            model_paths.insert(model_paths.end(), dir_models.begin(), dir_models.end());
-        }
-    }
-
-    std::sort(model_paths.begin(), model_paths.end());
-    model_paths.erase(std::unique(model_paths.begin(), model_paths.end()), model_paths.end());
-    return model_paths;
+inline void set_mesh_directory(std::filesystem::path directory) {
+    g_mesh_directory = std::move(directory);
 }
 
-[[nodiscard]] inline std::optional<std::filesystem::path> find_builtin_fixture_dir() {
-    std::filesystem::path const fixture_dir =
-        std::filesystem::path(__FILE__).parent_path() / "data";
-    if (std::filesystem::is_directory(fixture_dir))
-        return fixture_dir;
-    return std::nullopt;
+[[nodiscard]] inline std::filesystem::path const &mesh_directory() noexcept {
+    return g_mesh_directory;
 }
 
-[[nodiscard]] inline std::vector<std::filesystem::path> collect_builtin_fixture_paths() {
-    std::optional<std::filesystem::path> const fixture_dir = find_builtin_fixture_dir();
-    if (!fixture_dir.has_value())
+[[nodiscard]] inline std::vector<std::filesystem::path> collect_mesh_paths() {
+    if (g_mesh_directory.empty())
         return {};
-
-    constexpr std::array<char const *, 3> k_builtin_fixture_names = {
-        "closed_cube.obj",
-        "open_cube.obj",
-        "nonplanar_closed.obj",
-    };
-
-    std::vector<std::filesystem::path> model_paths{};
-    model_paths.reserve(k_builtin_fixture_names.size());
-    for (char const *filename : k_builtin_fixture_names) {
-        std::filesystem::path const path = *fixture_dir / filename;
-        if (std::filesystem::is_regular_file(path))
-            model_paths.push_back(path);
-    }
-    return model_paths;
+    return collect_obj_model_paths(g_mesh_directory);
 }
 
 // CUDA skip macros for GTest.
