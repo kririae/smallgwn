@@ -4,9 +4,8 @@
 /// \brief Public mesh boundary-chain data structures and builders.
 ///
 /// The boundary chain is the algebraic boundary of an oriented triangle-index
-/// chain.  It stores directed mesh edges with positive multiplicity.  This is
-/// separate from per-triangle boundary-edge masks used by tracing and distance
-/// queries.
+/// chain. It stores directed mesh edges with positive multiplicity independently
+/// from BVH topology and moment data.
 
 #include <cuda/std/span>
 #include <cuda_runtime_api.h>
@@ -117,18 +116,6 @@ public:
     }
 
 private:
-    template <gwn_index_type I>
-    friend gwn_status gwn_build_boundary_chain(
-        std::size_t mesh_vertex_count, cuda::std::span<I const> i0, cuda::std::span<I const> i1,
-        cuda::std::span<I const> i2, gwn_boundary_chain_object<I> &out, cudaStream_t stream
-    ) noexcept;
-
-    template <gwn_real_type R, gwn_index_type I>
-    friend gwn_status gwn_build_boundary_chain(
-        gwn_geometry_accessor<R, I> const &geometry, gwn_boundary_chain_object<I> &out,
-        cudaStream_t stream
-    ) noexcept;
-
     accessor_type accessor_{};
 };
 
@@ -147,12 +134,12 @@ private:
 /// A closed mesh produces a built object with zero boundary edges.
 template <gwn_index_type Index>
 [[nodiscard]] gwn_status gwn_build_boundary_chain(
-    std::size_t mesh_vertex_count, cuda::std::span<Index const> i0, cuda::std::span<Index const> i1,
-    cuda::std::span<Index const> i2, gwn_boundary_chain_object<Index> &out,
-    cudaStream_t stream = gwn_default_stream()
+    std::size_t mesh_vertex_count, cuda::std::span<Index const> const i0,
+    cuda::std::span<Index const> const i1, cuda::std::span<Index const> const i2,
+    gwn_boundary_chain_object<Index> &out, cudaStream_t stream = gwn_default_stream()
 ) noexcept;
 
-/// \brief Build the algebraic boundary chain from an uploaded geometry accessor.
+/// \brief Build the algebraic boundary chain from an uploaded geometry object.
 ///
 /// The output records the geometry vertex and triangle counts.  Use the chain
 /// with the geometry that produced it.
@@ -160,7 +147,7 @@ template <gwn_index_type Index>
 /// \return \c ok on success, or \c invalid_argument when \p geometry is invalid.
 template <gwn_real_type Real, gwn_index_type Index>
 [[nodiscard]] gwn_status gwn_build_boundary_chain(
-    gwn_geometry_accessor<Real, Index> const &geometry, gwn_boundary_chain_object<Index> &out,
+    gwn_geometry_object<Real, Index> const &geometry, gwn_boundary_chain_object<Index> &out,
     cudaStream_t stream = gwn_default_stream()
 ) noexcept;
 
