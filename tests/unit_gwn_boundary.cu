@@ -6,16 +6,18 @@
 
 #include <gtest/gtest.h>
 
+#include <gwn/detail/gwn_device_array.cuh>
 #include <gwn/gwn.cuh>
 
-#include "test_fixtures.hpp"
-#include "test_harnack_meshes.hpp"
-#include "test_utils.hpp"
+#include "test_fixtures.cuh"
+#include "test_meshes.hpp"
+#include "test_utils.cuh"
 
 using Real = gwn::tests::Real;
 using Index = gwn::tests::Index;
 using gwn::tests::CubeMesh;
-using gwn::tests::CudaFixture;
+using GwnBoundaryTest = gwn::tests::CudaFixture;
+using GwnBoundaryStreamTest = gwn::tests::CudaStreamFixture;
 using gwn::tests::OpenCubeMesh;
 
 namespace {
@@ -80,15 +82,36 @@ void upload_mesh(Mesh const &mesh, gwn::gwn_geometry_object<Real, Index> &geomet
     ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
 }
 
+__global__ void read_boundary_after_wait(
+    gwn::gwn_boundary_chain_accessor<Index> const boundary, Index *const output
+) {
+    output[0] = boundary.start_vertex[0];
+    output[1] = boundary.end_vertex[0];
+}
+
 } // namespace
 
-TEST_F(CudaFixture, boundary_chain_closed_mesh_is_built_empty) {
+TEST_F(GwnBoundaryTest, boundary_chain_empty_geometry_is_built_empty) {
+    gwn::gwn_geometry_object<Real, Index> geometry;
+    gwn::gwn_boundary_chain_object<Index> boundary;
+
+    gwn::gwn_status const status = gwn::gwn_build_boundary_chain(geometry, boundary);
+
+    ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
+    EXPECT_TRUE(boundary.has_data());
+    EXPECT_TRUE(boundary.accessor().is_valid());
+    EXPECT_TRUE(boundary.accessor().empty());
+    EXPECT_EQ(boundary.accessor().mesh_vertex_count, 0u);
+    EXPECT_EQ(boundary.accessor().mesh_triangle_count, 0u);
+}
+
+TEST_F(GwnBoundaryTest, boundary_chain_closed_mesh_is_built_empty) {
     CubeMesh mesh;
     gwn::gwn_geometry_object<Real, Index> geometry;
     upload_mesh(mesh, geometry);
 
     gwn::gwn_boundary_chain_object<Index> boundary;
-    gwn::gwn_status const status = gwn::gwn_build_boundary_chain(geometry.accessor(), boundary);
+    gwn::gwn_status const status = gwn::gwn_build_boundary_chain(geometry, boundary);
     ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
 
     EXPECT_TRUE(boundary.has_data());
@@ -99,13 +122,13 @@ TEST_F(CudaFixture, boundary_chain_closed_mesh_is_built_empty) {
     EXPECT_EQ(boundary.accessor().mesh_triangle_count, mesh.Nt);
 }
 
-TEST_F(CudaFixture, boundary_chain_open_cube_has_four_unit_edges) {
+TEST_F(GwnBoundaryTest, boundary_chain_open_cube_has_four_unit_edges) {
     OpenCubeMesh mesh;
     gwn::gwn_geometry_object<Real, Index> geometry;
     upload_mesh(mesh, geometry);
 
     gwn::gwn_boundary_chain_object<Index> boundary;
-    ASSERT_TRUE(gwn::gwn_build_boundary_chain(geometry.accessor(), boundary).is_ok());
+    ASSERT_TRUE(gwn::gwn_build_boundary_chain(geometry, boundary).is_ok());
 
     std::vector<BoundaryRow> const rows = copy_boundary_rows(boundary);
     ASSERT_EQ(rows.size(), 4u);
@@ -126,7 +149,7 @@ TEST_F(CudaFixture, boundary_chain_open_cube_has_four_unit_edges) {
     }
 }
 
-TEST_F(CudaFixture, boundary_chain_uses_net_orientation) {
+TEST_F(GwnBoundaryTest, boundary_chain_uses_net_orientation) {
     std::array<Index, 4> const i0{0, 1, 0, 0};
     std::array<Index, 4> const i1{1, 0, 1, 1};
     std::array<Index, 4> const i2{2, 3, 2, 2};
@@ -152,7 +175,7 @@ TEST_F(CudaFixture, boundary_chain_uses_net_orientation) {
     EXPECT_EQ(cancelled, rows.end());
 }
 
-TEST_F(CudaFixture, boundary_chain_rejects_bad_inputs) {
+TEST_F(GwnBoundaryTest, boundary_chain_rejects_bad_inputs) {
     std::array<Index, 1> const i0{0};
     std::array<Index, 2> const i1{1, 1};
     std::array<Index, 1> const i2{2};
@@ -180,13 +203,13 @@ TEST_F(CudaFixture, boundary_chain_rejects_bad_inputs) {
     );
 }
 
-TEST_F(CudaFixture, boundary_chain_failed_rebuild_preserves_previous_chain) {
+TEST_F(GwnBoundaryTest, boundary_chain_failed_rebuild_preserves_previous_chain) {
     OpenCubeMesh mesh;
     gwn::gwn_geometry_object<Real, Index> geometry;
     upload_mesh(mesh, geometry);
 
     gwn::gwn_boundary_chain_object<Index> boundary;
-    ASSERT_TRUE(gwn::gwn_build_boundary_chain(geometry.accessor(), boundary).is_ok());
+    ASSERT_TRUE(gwn::gwn_build_boundary_chain(geometry, boundary).is_ok());
     std::vector<BoundaryRow> const before = copy_boundary_rows(boundary);
     ASSERT_EQ(before.size(), 4u);
 
@@ -206,13 +229,13 @@ TEST_F(CudaFixture, boundary_chain_failed_rebuild_preserves_previous_chain) {
     EXPECT_EQ(copy_boundary_rows(boundary).size(), before.size());
 }
 
-TEST_F(CudaFixture, boundary_chain_move_transfers_accessors) {
+TEST_F(GwnBoundaryTest, boundary_chain_move_transfers_accessors) {
     OpenCubeMesh mesh;
     gwn::gwn_geometry_object<Real, Index> geometry;
     upload_mesh(mesh, geometry);
 
     gwn::gwn_boundary_chain_object<Index> source;
-    ASSERT_TRUE(gwn::gwn_build_boundary_chain(geometry.accessor(), source).is_ok());
+    ASSERT_TRUE(gwn::gwn_build_boundary_chain(geometry, source).is_ok());
 
     gwn::gwn_boundary_chain_object<Index> moved(std::move(source));
     EXPECT_TRUE(moved.has_data());
@@ -224,8 +247,63 @@ TEST_F(CudaFixture, boundary_chain_move_transfers_accessors) {
     EXPECT_EQ(assigned.accessor().edge_count(), 4u);
 }
 
-TEST_F(CudaFixture, default_boundary_chain_is_not_built) {
+TEST_F(GwnBoundaryTest, default_boundary_chain_is_not_built) {
     gwn::gwn_boundary_chain_object<Index> boundary;
     EXPECT_FALSE(boundary.has_data());
     EXPECT_FALSE(boundary.accessor().is_valid());
+}
+
+TEST_F(GwnBoundaryStreamTest, replacement_releases_old_storage_on_its_bound_stream) {
+    OpenCubeMesh mesh;
+    gwn::gwn_geometry_object<Real, Index> geometry;
+    ASSERT_TRUE(
+        gwn::gwn_upload_geometry(
+            geometry, cuda::std::span<Real const>(mesh.vx), cuda::std::span<Real const>(mesh.vy),
+            cuda::std::span<Real const>(mesh.vz), cuda::std::span<Index const>(mesh.i0),
+            cuda::std::span<Index const>(mesh.i1), cuda::std::span<Index const>(mesh.i2), stream_a_
+        )
+            .is_ok()
+    );
+    gwn::gwn_boundary_chain_object<Index> boundary;
+    ASSERT_TRUE(gwn::gwn_build_boundary_chain(geometry, boundary, stream_a_).is_ok());
+    ASSERT_FALSE(boundary.accessor().empty());
+
+    std::array<Index, 2> expected{};
+    ASSERT_EQ(
+        cudaSuccess, cudaMemcpyAsync(
+                         expected.data(), boundary.accessor().start_vertex.data(), sizeof(Index),
+                         cudaMemcpyDeviceToHost, stream_a_
+                     )
+    );
+    ASSERT_EQ(
+        cudaSuccess, cudaMemcpyAsync(
+                         expected.data() + 1, boundary.accessor().end_vertex.data(), sizeof(Index),
+                         cudaMemcpyDeviceToHost, stream_a_
+                     )
+    );
+
+    gwn::detail::gwn_device_array<Index> output(stream_a_);
+    output.resize(2, stream_a_);
+    ASSERT_EQ(cudaSuccess, cudaStreamSynchronize(stream_a_));
+
+    cudaEvent_t release_event = nullptr;
+    ASSERT_EQ(cudaSuccess, cudaEventCreateWithFlags(&release_event, cudaEventDisableTiming));
+    auto const release_event_cleanup =
+        gwn::gwn_make_scope_exit([&]() noexcept { (void)cudaEventDestroy(release_event); });
+    ASSERT_EQ(cudaSuccess, cudaStreamWaitEvent(stream_a_, release_event));
+    auto const old_accessor = boundary.accessor();
+    read_boundary_after_wait<<<1, 1, 0, stream_a_>>>(old_accessor, output.data());
+    cudaError_t const launch_status = cudaGetLastError();
+    gwn::gwn_status const replacement_status =
+        gwn::gwn_build_boundary_chain(geometry, boundary, stream_b_);
+
+    std::array<Index, 2> actual{};
+    cudaError_t const release_status = cudaEventRecord(release_event, stream_b_);
+    output.copy_to_host(cuda::std::span<Index>(actual), stream_a_);
+    ASSERT_EQ(cudaSuccess, launch_status);
+    ASSERT_TRUE(replacement_status.is_ok());
+    ASSERT_EQ(cudaSuccess, release_status);
+    ASSERT_EQ(cudaSuccess, cudaStreamSynchronize(stream_a_));
+    EXPECT_EQ(actual, expected);
+    EXPECT_EQ(boundary.stream(), stream_b_);
 }

@@ -1,183 +1,142 @@
 find_package(GTest REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(TBB REQUIRED COMPONENTS tbb)
-find_package(libigl REQUIRED)
 
-# ---------------------------------------------------------------
-# Common include directories for all test targets.
-# ---------------------------------------------------------------
-set(SMALLGWN_TEST_INCLUDE_DIRS
-    "${CMAKE_CURRENT_SOURCE_DIR}"
+set(SMALLGWN_TEST_STACK_CAPACITY "64" CACHE STRING
+    "Traversal stack capacity used by integration and E2E dataset validation (64 or 128)"
 )
-set(SMALLGWN_TEST_SYSTEM_INCLUDE_DIRS
-    "${CMAKE_CURRENT_SOURCE_DIR}/tests/reference_hdk"
-)
+set_property(CACHE SMALLGWN_TEST_STACK_CAPACITY PROPERTY STRINGS 64 128)
+if(NOT SMALLGWN_TEST_STACK_CAPACITY MATCHES "^(64|128)$")
+    message(FATAL_ERROR "SMALLGWN_TEST_STACK_CAPACITY must be 64 or 128")
+endif()
 
-# ---------------------------------------------------------------
-# Helper: define a unit/integration test target.
-# ---------------------------------------------------------------
-function(smallgwn_add_test_base TARGET_NAME)
-    cmake_parse_arguments(
-        ARG
-        "NO_CTEST;RUN_SERIAL"
-        ""
-        "SOURCES;EXTRA_SOURCES;LABELS;EXTRA_LIBRARIES"
-        ${ARGN}
-    )
-    add_executable(${TARGET_NAME} ${ARG_SOURCES} ${ARG_EXTRA_SOURCES})
-    target_link_libraries(
-        ${TARGET_NAME}
-        PRIVATE
-            gwn::smallgwn
-            GTest::gtest
-            GTest::gtest_main
-            ${ARG_EXTRA_LIBRARIES}
-    )
-    target_compile_definitions(${TARGET_NAME} PRIVATE GWN_ENABLE_ASSERTS)
-    target_include_directories(${TARGET_NAME} PRIVATE ${SMALLGWN_TEST_INCLUDE_DIRS})
-    target_include_directories(${TARGET_NAME} SYSTEM PRIVATE ${SMALLGWN_TEST_SYSTEM_INCLUDE_DIRS})
-    smallgwn_apply_strict_warnings(${TARGET_NAME})
-    if(NOT ARG_NO_CTEST)
-        add_test(NAME ${TARGET_NAME} COMMAND ${TARGET_NAME})
-        if(ARG_LABELS)
-            set_tests_properties(${TARGET_NAME} PROPERTIES LABELS "${ARG_LABELS}")
-        endif()
-        if(ARG_RUN_SERIAL)
-            set_tests_properties(${TARGET_NAME} PROPERTIES RUN_SERIAL TRUE)
-        endif()
+function(smallgwn_apply_strict_warnings target)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(${target}
+            PRIVATE
+                $<$<COMPILE_LANGUAGE:CXX>:-Wall;-Wextra>
+                $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wall,-Wextra;-Xcudafe=--diag_suppress=177>
+        )
+    elseif(MSVC)
+        target_compile_options(${target}
+            PRIVATE
+                $<$<COMPILE_LANGUAGE:CXX>:/W4>
+                $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/W4>
+        )
     endif()
 endfunction()
 
-function(smallgwn_add_cuda_test TARGET_NAME)
-    smallgwn_add_test_base(${TARGET_NAME} ${ARGN})
-endfunction()
-
-function(smallgwn_add_eigen_tbb_test TARGET_NAME)
-    smallgwn_add_test_base(
-        ${TARGET_NAME}
-        ${ARGN}
-        EXTRA_LIBRARIES Eigen3::Eigen TBB::tbb
+function(smallgwn_configure_test_target target)
+    target_link_libraries(${target}
+        PRIVATE
+            gwn::smallgwn
+            GTest::gtest
     )
+    target_compile_definitions(${target} PRIVATE GWN_ENABLE_ASSERTS)
+    target_include_directories(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+    target_include_directories(${target} SYSTEM PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/reference_hdk")
+    smallgwn_apply_strict_warnings(${target})
 endfunction()
 
-function(smallgwn_add_tbb_test TARGET_NAME)
-    smallgwn_add_test_base(
-        ${TARGET_NAME}
-        ${ARGN}
-        EXTRA_LIBRARIES TBB::tbb
+add_executable(smallgwn_unit
+    unit_gwn_assert.cu
+    unit_gwn_boundary.cu
+    unit_gwn_bvh.cu
+    unit_gwn_bvh_moment.cu
+    unit_gwn_device_array.cu
+    unit_gwn_eigen_bridge.cu
+    unit_gwn_geometry.cu
+    unit_gwn_kernel_utils.cu
+    unit_gwn_query_antipodal.cu
+    unit_gwn_query_distance_ray.cu
+    unit_gwn_query_gradient.cu
+    unit_gwn_query_stack.cu
+    unit_gwn_query_winding.cu
+    unit_gwn_status.cu
+    unit_gwn_stream.cu
+)
+smallgwn_configure_test_target(smallgwn_unit)
+target_link_libraries(smallgwn_unit PRIVATE GTest::gtest_main Eigen3::Eigen TBB::tbb)
+add_test(NAME smallgwn_unit COMMAND smallgwn_unit)
+set_tests_properties(smallgwn_unit PROPERTIES LABELS "unit;cuda")
+
+add_executable(smallgwn_integration
+    integration_gwn_builder.cu
+    integration_gwn_dynamic.cu
+    integration_gwn_static.cu
+    test_mesh_main.cpp
+)
+smallgwn_configure_test_target(smallgwn_integration)
+target_compile_definitions(
+    smallgwn_integration PRIVATE SMALLGWN_TEST_STACK_CAPACITY=${SMALLGWN_TEST_STACK_CAPACITY}
+)
+target_link_libraries(smallgwn_integration PRIVATE Eigen3::Eigen TBB::tbb)
+add_test(
+    NAME smallgwn_integration
+    COMMAND smallgwn_integration --mesh-dir "${CMAKE_CURRENT_SOURCE_DIR}/data"
+)
+set_tests_properties(smallgwn_integration PROPERTIES LABELS "integration;cuda;fixtures")
+
+add_library(smallgwn_reference_hdk OBJECT
+    reference_hdk/UT_Array.cpp
+    reference_hdk/UT_SolidAngle.cpp
+)
+target_compile_features(smallgwn_reference_hdk PRIVATE cxx_std_20)
+target_link_libraries(smallgwn_reference_hdk PRIVATE TBB::tbb)
+target_include_directories(smallgwn_reference_hdk SYSTEM PRIVATE reference_hdk)
+smallgwn_apply_strict_warnings(smallgwn_reference_hdk)
+
+# E2E is built for explicit dataset validation but is intentionally absent from default CTest.
+add_executable(smallgwn_e2e
+    e2e_gwn.cu
+    test_mesh_main.cpp
+    $<TARGET_OBJECTS:smallgwn_reference_hdk>
+)
+smallgwn_configure_test_target(smallgwn_e2e)
+target_compile_definitions(
+    smallgwn_e2e PRIVATE SMALLGWN_TEST_STACK_CAPACITY=${SMALLGWN_TEST_STACK_CAPACITY}
+)
+target_link_libraries(smallgwn_e2e PRIVATE TBB::tbb)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(smallgwn_e2e PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wno-deprecated-declarations>
     )
-endfunction()
+endif()
 
-function(smallgwn_add_libigl_test TARGET_NAME)
-    smallgwn_add_test_base(
-        ${TARGET_NAME}
-        ${ARGN}
-        EXTRA_LIBRARIES igl::igl_core
+# Benchmark belongs to test tooling but never becomes a correctness test.
+add_executable(smallgwn_benchmark benchmark_main.cu)
+target_link_libraries(smallgwn_benchmark PRIVATE gwn::smallgwn)
+target_include_directories(smallgwn_benchmark PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+smallgwn_apply_strict_warnings(smallgwn_benchmark)
+
+option(SMALLGWN_BUILD_CUBQL_BENCHMARK "Build the opt-in cuBQL comparison benchmark" OFF)
+set(SMALLGWN_CUBQL_SOURCE "" CACHE PATH "Path to a local cuBQL source checkout")
+if(SMALLGWN_BUILD_CUBQL_BENCHMARK)
+    if(NOT EXISTS "${SMALLGWN_CUBQL_SOURCE}/CMakeLists.txt")
+        message(FATAL_ERROR
+            "SMALLGWN_BUILD_CUBQL_BENCHMARK requires SMALLGWN_CUBQL_SOURCE to name a cuBQL checkout"
+        )
+    endif()
+
+    add_subdirectory(
+        "${SMALLGWN_CUBQL_SOURCE}"
+        "${CMAKE_CURRENT_BINARY_DIR}/cubql"
+        EXCLUDE_FROM_ALL
     )
-endfunction()
-
-# ---------------------------------------------------------------
-# Unit tests.
-# ---------------------------------------------------------------
-smallgwn_add_cuda_test(smallgwn_unit_assert         LABELS "unit;cuda" SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/unit_assert.cu)
-smallgwn_add_cuda_test(smallgwn_unit_status         LABELS "unit;cuda" SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/unit_status.cu)
-smallgwn_add_cuda_test(smallgwn_unit_device_array   LABELS "unit;cuda" SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/unit_device_array.cu)
-smallgwn_add_cuda_test(smallgwn_unit_kernel_utils   LABELS "unit;cuda" SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/unit_kernel_utils.cu)
-smallgwn_add_cuda_test(smallgwn_unit_stream_mixin   LABELS "unit;cuda" SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/unit_stream_mixin.cu)
-smallgwn_add_cuda_test(smallgwn_unit_geometry       LABELS "unit;cuda" SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/unit_geometry.cu)
-smallgwn_add_cuda_test(smallgwn_unit_boundary_chain LABELS "unit;cuda" SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/unit_boundary_chain.cu)
-smallgwn_add_cuda_test(smallgwn_unit_bvh_topology   LABELS "unit;cuda" SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/unit_bvh_topology.cu)
-smallgwn_add_cuda_test(smallgwn_unit_query_stack_capacity LABELS "unit;cuda" SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/unit_query_stack_capacity.cu)
-smallgwn_add_cuda_test(smallgwn_unit_uint64_compile LABELS "unit;cuda" SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/unit_uint64_compile.cu)
-smallgwn_add_cuda_test(smallgwn_unit_bvh_taylor     LABELS "unit;cuda" SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/unit_bvh_taylor.cu)
-smallgwn_add_eigen_tbb_test(smallgwn_unit_eigen_bridge
-    LABELS "unit;cuda"
-    SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/unit_eigen_bridge.cu)
-smallgwn_add_eigen_tbb_test(smallgwn_unit_winding_taylor
-    LABELS "unit;cuda"
-    SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/unit_winding_taylor.cu)
-smallgwn_add_eigen_tbb_test(smallgwn_unit_winding_gradient
-    LABELS "unit;cuda"
-    SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/unit_winding_gradient.cu)
-smallgwn_add_cuda_test(smallgwn_unit_winding_antipodal
-    LABELS "unit;cuda"
-    SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/unit_winding_antipodal.cu)
-smallgwn_add_cuda_test(smallgwn_unit_harnack_trace  LABELS "unit;cuda" SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/unit_harnack_trace.cu)
-smallgwn_add_cuda_test(smallgwn_unit_edge_distance  LABELS "unit;cuda" SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/unit_edge_distance.cu)
-smallgwn_add_cuda_test(smallgwn_unit_ray_query      LABELS "unit;cuda" SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/unit_ray_query.cu)
-smallgwn_add_cuda_test(smallgwn_unit_hybrid_trace   LABELS "unit;cuda" SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/unit_hybrid_trace.cu)
-
-# SDF tests (libigl parity).
-smallgwn_add_libigl_test(smallgwn_unit_sdf
-    LABELS "unit;cuda;libigl"
-    SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/unit_sdf.cu
-    EXTRA_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/libigl_reference.cpp)
-
-# ---------------------------------------------------------------
-# Integration tests.
-# ---------------------------------------------------------------
-smallgwn_add_cuda_test(smallgwn_integration_builtin_models
-    LABELS "integration;cuda;fixtures"
-    SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/integration_builtin_models.cu)
-smallgwn_add_eigen_tbb_test(smallgwn_integration_model_parity
-    LABELS "integration;cuda;models;slow"
-    SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/integration_model_parity.cu
-    EXTRA_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/reference_hdk/UT_Array.cpp ${CMAKE_CURRENT_SOURCE_DIR}/reference_hdk/UT_SolidAngle.cpp)
-smallgwn_add_cuda_test(smallgwn_integration_antipodal_models
-    LABELS "integration;cuda;models;slow"
-    SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/integration_antipodal_models.cu)
-smallgwn_add_eigen_tbb_test(smallgwn_integration_correctness
-    LABELS "integration;cuda;models;slow"
-    SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/integration_correctness.cu)
-add_test(NAME smallgwn_integration_correctness_dynamic_refit
-    COMMAND smallgwn_integration_correctness --gtest_color=no
-        --gtest_filter=*dynamic_refit*)
-set_tests_properties(smallgwn_integration_correctness_dynamic_refit PROPERTIES
-    LABELS "integration;cuda;fixtures"
-    FAIL_REGULAR_EXPRESSION "0 tests from 0 test suites;did not match any test")
-smallgwn_add_eigen_tbb_test(smallgwn_integration_gradient
-    LABELS "integration;cuda"
-    SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/integration_gradient.cu)
-smallgwn_add_cuda_test(smallgwn_integration_harnack_trace
-    LABELS "integration;cuda"
-    SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/integration_harnack_trace.cu)
-smallgwn_add_cuda_test(smallgwn_integration_harnack_behavior_match
-    LABELS "integration;cuda"
-    SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/integration_harnack_behavior_match.cu)
-smallgwn_add_cuda_test(smallgwn_integration_harnack_iteration_stats
-    LABELS "integration;cuda"
-    SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/integration_harnack_iteration_stats.cu)
-smallgwn_add_cuda_test(smallgwn_integration_hploc_performance
-    RUN_SERIAL
-    LABELS "integration;cuda;perf;slow"
-    SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/integration_hploc_performance.cu)
-
-smallgwn_add_tbb_test(smallgwn_integration_taylor_matrix
-    NO_CTEST
-    SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/integration_taylor_matrix.cu
-    EXTRA_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/reference_hdk/UT_Array.cpp ${CMAKE_CURRENT_SOURCE_DIR}/reference_hdk/UT_SolidAngle.cpp)
-
-add_executable(smallgwn_refit_fidelity
-    ${CMAKE_CURRENT_SOURCE_DIR}/refit_fidelity_main.cu
-    ${CMAKE_CURRENT_SOURCE_DIR}/refit_fidelity_laplacian.cpp)
-target_link_libraries(smallgwn_refit_fidelity PRIVATE gwn::smallgwn igl::igl_core)
-target_include_directories(smallgwn_refit_fidelity PRIVATE ${SMALLGWN_TEST_INCLUDE_DIRS})
-target_include_directories(smallgwn_refit_fidelity SYSTEM PRIVATE ${SMALLGWN_TEST_SYSTEM_INCLUDE_DIRS})
-target_compile_definitions(smallgwn_refit_fidelity PRIVATE GWN_ENABLE_ASSERTS)
-smallgwn_apply_strict_warnings(smallgwn_refit_fidelity)
-
-add_test(NAME smallgwn_integration_taylor_matrix_light
-    COMMAND smallgwn_integration_taylor_matrix --gtest_color=no
-        --gtest_filter=smallgwn_integration_taylor_matrix.light_*)
-set_tests_properties(smallgwn_integration_taylor_matrix_light PROPERTIES
-    LABELS "integration;cuda;models;slow;light"
-    FAIL_REGULAR_EXPRESSION "0 tests from 0 test suites;did not match any test"
-    ENVIRONMENT "SMALLGWN_MATRIX_MODEL_LIMIT=2;SMALLGWN_MATRIX_TOTAL_POINTS=200000;SMALLGWN_MATRIX_ORDER_MAX=1")
-
-add_test(NAME smallgwn_integration_taylor_matrix_heavy
-    COMMAND smallgwn_integration_taylor_matrix --gtest_color=no
-        --gtest_filter=smallgwn_integration_taylor_matrix.heavy_*)
-set_tests_properties(smallgwn_integration_taylor_matrix_heavy PROPERTIES
-    LABELS "integration;cuda;models;slow;heavy"
-    FAIL_REGULAR_EXPRESSION "0 tests from 0 test suites;did not match any test"
-    ENVIRONMENT "SMALLGWN_MATRIX_MODEL_LIMIT=8;SMALLGWN_MATRIX_TOTAL_POINTS=2000000;SMALLGWN_MATRIX_ORDER_MAX=2")
+    add_executable(smallgwn_benchmark_cubql benchmark_cubql.cu)
+    target_link_libraries(
+        smallgwn_benchmark_cubql
+        PRIVATE
+            gwn::smallgwn
+            cuBQL_cuda_float3_static
+    )
+    target_include_directories(
+        smallgwn_benchmark_cubql
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+    target_include_directories(
+        smallgwn_benchmark_cubql
+        SYSTEM PRIVATE "${SMALLGWN_CUBQL_SOURCE}"
+    )
+    smallgwn_apply_strict_warnings(smallgwn_benchmark_cubql)
+endif()
