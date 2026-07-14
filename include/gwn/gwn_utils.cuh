@@ -65,6 +65,10 @@ public:
     [[nodiscard]] cudaStream_t stream() const noexcept { return stream_; }
 
     /// \brief Rebind the object without synchronizing either stream.
+    ///
+    /// For an owning object, call `clear()` first to release on the current binding. To release on
+    /// another stream, establish the required cross-stream ordering before rebinding, then call
+    /// `clear()`.
     void set_stream(cudaStream_t const stream) noexcept { stream_ = stream; }
 
     friend void swap(gwn_stream_mixin &lhs, gwn_stream_mixin &rhs) noexcept {

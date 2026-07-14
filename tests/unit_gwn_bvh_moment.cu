@@ -194,7 +194,7 @@ TEST_F(GwnBvhMomentTest, leaf_root_moment_uses_exact_triangle_record) {
     EXPECT_FLOAT_EQ(taylor_value[0], exact_value[0]);
 }
 
-TEST_F(GwnBvhMomentStreamTest, clear_resets_state_and_rebinds) {
+TEST_F(GwnBvhMomentStreamTest, clear_resets_state_before_explicit_rebind) {
     gwn::gwn_geometry_object<Real, Index> geometry{};
     ASSERT_TRUE(upload_octahedron(geometry, stream_a_).is_ok());
     gwn::gwn_bvh4_object<Real, Index> bvh{};
@@ -203,7 +203,8 @@ TEST_F(GwnBvhMomentStreamTest, clear_resets_state_and_rebinds) {
     ASSERT_TRUE(gwn::gwn_refit_bvh_moment<0>(bvh, moment, stream_a_).is_ok());
     ASSERT_EQ(moment.stream(), stream_a_);
 
-    moment.clear(stream_b_);
+    moment.clear();
+    moment.set_stream(stream_b_);
     EXPECT_FALSE(moment.has_data());
     EXPECT_EQ(moment.stream(), stream_b_);
 }

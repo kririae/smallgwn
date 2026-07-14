@@ -86,7 +86,9 @@ These instructions apply to the `smallgwn/` project tree.
 ### Stream & Memory
 - Stream binding is explicit via `gwn_stream_mixin`.
   `clear()`/destructor release on the currently bound stream;
-  successful stream-parameterized mutations update the bound stream.
+  successful stream-parameterized mutations update the bound stream. `set_stream()` does not add
+  synchronization: call `clear()` before `set_stream()` to release on the current binding, or
+  establish cross-stream ordering before rebinding an allocation that remains owned.
 - Memory: stream allocator path only (`cudaMallocAsync`/`cudaFreeAsync`), no synchronous fallback.
 - Dynamic vertex-position updates use `gwn_update_geometry(...)`, then `gwn_refit_bvh(...)`, then
   `gwn_refit_bvh_moment<Order>(...)` for every moment order in use. Triangle-index or primitive-count

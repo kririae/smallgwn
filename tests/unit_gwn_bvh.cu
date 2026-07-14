@@ -338,7 +338,8 @@ TEST_F(GwnBvhStreamTest, object_replacement_preserves_failure_and_stream_contrac
     EXPECT_FALSE(moved.has_data());
     EXPECT_EQ(moved.stream(), stream_b_);
 
-    moved.clear(stream_a_);
+    moved.clear();
+    moved.set_stream(stream_a_);
     EXPECT_FALSE(moved.has_data());
     EXPECT_EQ(moved.stream(), stream_a_);
 }

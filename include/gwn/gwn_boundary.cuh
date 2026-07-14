@@ -92,13 +92,6 @@ public:
     /// \brief Release owned device storage on the currently bound stream.
     void clear() noexcept { detail::gwn_release_boundary_chain_accessor(accessor_, stream()); }
 
-    /// \brief Release owned storage on the current stream, then bind \p clear_stream.
-    void clear(cudaStream_t const clear_stream) noexcept {
-        cudaStream_t const release_stream = stream();
-        detail::gwn_release_boundary_chain_accessor(accessor_, release_stream);
-        set_stream(clear_stream);
-    }
-
     /// \brief Return a mutable accessor view for device launches.
     [[nodiscard]] accessor_type &accessor() noexcept { return accessor_; }
 

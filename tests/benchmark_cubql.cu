@@ -559,7 +559,7 @@ int run_model(
     gwn::gwn_bvh4_object<Real, Index> lbvh;
     gwn::bench::gwn_benchmark_stage_stats lbvh_build{};
     gwn::gwn_status const lbvh_build_status = measure_host_stage(options, stream, [&]() noexcept {
-        lbvh.clear(stream);
+        lbvh.clear();
         return gwn::gwn_status::ok();
     }, [&]() noexcept {
         return gwn::gwn_build_bvh(
@@ -584,7 +584,7 @@ int run_model(
     gwn::gwn_bvh4_object<Real, Index> hploc;
     gwn::bench::gwn_benchmark_stage_stats hploc_build{};
     gwn::gwn_status const hploc_build_status = measure_host_stage(options, stream, [&]() noexcept {
-        hploc.clear(stream);
+        hploc.clear();
         return gwn::gwn_status::ok();
     }, [&]() noexcept {
         return gwn::gwn_build_bvh(
