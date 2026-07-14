@@ -6,7 +6,7 @@
 #include <string>
 #include <string_view>
 
-#include "benchmark_utils.hpp"
+#include "benchmark_utils.cuh"
 
 namespace gwn::bench {
 
@@ -14,7 +14,7 @@ struct gwn_benchmark_csv_context {
     std::string timestamp{};
     std::string gpu_name{};
     int cuda_runtime_version{0};
-    std::string topology_builder{"lbvh"};
+    std::string builder{"lbvh"};
     float accuracy_scale{2.0f};
     int stack_capacity{32};
     std::uint64_t seed{0};
@@ -31,7 +31,7 @@ public:
         stream_ << "timestamp,gpu_name,cuda_runtime_version,model_path,vertex_count,"
                    "triangle_count,query_count,stage,warmup_iters,measure_iters,"
                    "latency_mean_ms,latency_p50_ms,latency_p95_ms,throughput_per_s,unit,"
-                   "topology_builder,accuracy_scale,stack_capacity,seed,success,error_message\n";
+                   "builder,accuracy_scale,stack_capacity,seed,success,error_message\n";
     }
 
     void append_row(
@@ -46,7 +46,7 @@ public:
                 << format_double(result.latency_p50_ms) << ","
                 << format_double(result.latency_p95_ms) << ","
                 << format_double(result.throughput_per_s) << "," << escape_csv(result.unit) << ","
-                << escape_csv(context.topology_builder) << "," << context.accuracy_scale << ","
+                << escape_csv(context.builder) << "," << context.accuracy_scale << ","
                 << context.stack_capacity << "," << context.seed << "," << (result.success ? 1 : 0)
                 << "," << escape_csv(result.error_message) << "\n";
     }
