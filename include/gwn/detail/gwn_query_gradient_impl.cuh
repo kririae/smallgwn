@@ -1,74 +1,36 @@
 #pragma once
 
-#include <cmath>
 #include <cstddef>
-#include <type_traits>
 
 #include "../gwn_bvh.cuh"
-#include "../gwn_geometry.cuh"
-#include "gwn_query_geometry_impl.cuh"
-#include "gwn_query_vec3_impl.cuh"
 #include "gwn_query_winding_impl.cuh"
 
 namespace gwn {
 namespace detail {
 
-template <gwn_real_type Real, gwn_index_type Index>
-__device__ inline gwn_query_vec3<Real> gwn_winding_gradient_point_exact_impl(
-    gwn_geometry_accessor<Real, Index> const &geometry, Real const qx, Real const qy, Real const qz
-) noexcept {
-    gwn_query_vec3<Real> const zero(Real(0), Real(0), Real(0));
-    if (!geometry.is_valid())
-        return zero;
-
-    constexpr Real k_pi = Real(3.141592653589793238462643383279502884L);
-    constexpr Real k_inv_4pi = Real(1) / (Real(4) * k_pi);
-
-    gwn_query_vec3<Real> const query(qx, qy, qz);
-    gwn_query_vec3<Real> grad_sum(Real(0), Real(0), Real(0));
-    for (std::size_t primitive_id = 0; primitive_id < geometry.triangle_count(); ++primitive_id) {
-        grad_sum += gwn_triangle_gradient_from_primitive_impl<Real, Index>(
-            geometry, static_cast<Index>(primitive_id), query
-        );
-    }
-
-    return gwn_query_vec3<Real>(
-        grad_sum.x * k_inv_4pi, grad_sum.y * k_inv_4pi, grad_sum.z * k_inv_4pi
-    );
-}
-
-// BVH-accelerated Taylor gradient of the winding number.
-//
-// Mirrors gwn_winding_number_point_bvh_taylor_impl but accumulates a vec3.
-// Uses the SAME precomputed moments, only the kernel derivatives increase
-// by one order.
-
+/// \brief Compute Taylor winding gradient through the canonical BVH.
 template <
     int Order, int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity,
     typename OverflowCallback = gwn_traversal_overflow_trap_callback>
-__device__ inline gwn_query_vec3<Real> gwn_winding_gradient_point_bvh_taylor_impl(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
-    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &moment_tree, Real const qx,
-    Real const qy, Real const qz, Real const accuracy_scale,
-    OverflowCallback const &overflow_callback = {}
+[[nodiscard]] __device__ inline gwn_query_vec3<Real> gwn_winding_gradient_taylor_impl(
+    gwn_bvh_accessor<Width, Real, Index> const &bvh,
+    gwn_bvh_moment_accessor<Width, Order, Real, Index> const &moment, Real const qx, Real const qy,
+    Real const qz, Real const accuracy_scale, OverflowCallback const &overflow_callback = {}
 ) noexcept {
-    return gwn_winding_and_gradient_point_bvh_taylor_impl<
-               Order, Width, Real, Index, StackCapacity, OverflowCallback>(
-               geometry, bvh, moment_tree, qx, qy, qz, accuracy_scale, overflow_callback
+    return gwn_winding_taylor_impl<
+               true, Order, Width, Real, Index, StackCapacity, OverflowCallback>(
+               bvh, moment, qx, qy, qz, accuracy_scale, overflow_callback
     )
         .gradient;
 }
 
-// Batch functor
-
+/// \brief Invoke canonical Taylor gradient traversal for one batch element.
 template <
     int Order, int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity,
     typename OverflowCallback = gwn_traversal_overflow_trap_callback>
-struct gwn_winding_gradient_batch_bvh_taylor_functor {
-    gwn_geometry_accessor<Real, Index> geometry{};
-    gwn_bvh_topology_accessor<Width, Real, Index> bvh{};
-    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> moment_tree{};
+struct gwn_winding_gradient_taylor_batch_functor {
+    gwn_bvh_accessor<Width, Real, Index> bvh{};
+    gwn_bvh_moment_accessor<Width, Order, Real, Index> moment{};
     cuda::std::span<Real const> query_x{};
     cuda::std::span<Real const> query_y{};
     cuda::std::span<Real const> query_z{};
@@ -78,11 +40,11 @@ struct gwn_winding_gradient_batch_bvh_taylor_functor {
     Real accuracy_scale{};
     OverflowCallback overflow_callback{};
 
-    __device__ void operator()(std::size_t const query_id) const {
-        auto const grad = gwn_winding_gradient_point_bvh_taylor_impl<
+    void __device__ operator()(std::size_t const query_id) const noexcept {
+        auto const grad = gwn_winding_gradient_taylor_impl<
             Order, Width, Real, Index, StackCapacity, OverflowCallback>(
-            geometry, bvh, moment_tree, query_x[query_id], query_y[query_id], query_z[query_id],
-            accuracy_scale, overflow_callback
+            bvh, moment, query_x[query_id], query_y[query_id], query_z[query_id], accuracy_scale,
+            overflow_callback
         );
         out_grad_x[query_id] = grad.x;
         out_grad_y[query_id] = grad.y;

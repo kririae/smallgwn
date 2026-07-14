@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <type_traits>
 #include <utility>
 
 #include "../gwn_bvh.cuh"
@@ -15,83 +16,97 @@
 namespace gwn {
 namespace detail {
 
-template <gwn_real_type Real, gwn_index_type Index> struct gwn_ray_first_hit_result {
-    Real t{Real(-1)};
-    Index primitive_id{gwn_invalid_index<Index>()};
-    Real u{Real(0)};
-    Real v{Real(0)};
-    gwn_ray_first_hit_status status{gwn_ray_first_hit_status::k_miss};
+inline constexpr int k_gwn_ray_first_hit_block_size = 256;
 
-    __host__ __device__ constexpr bool hit() const noexcept {
-        return status == gwn_ray_first_hit_status::k_hit;
+/// \brief Validate the shared ray SoA and hit-record output contract of a first-hit batch.
+template <gwn_real_type Real, gwn_index_type Index>
+[[nodiscard]] inline gwn_status gwn_validate_ray_first_hit_batch_spans(
+    cuda::std::span<Real const> const ray_origin_x, cuda::std::span<Real const> const ray_origin_y,
+    cuda::std::span<Real const> const ray_origin_z, cuda::std::span<Real const> const ray_dir_x,
+    cuda::std::span<Real const> const ray_dir_y, cuda::std::span<Real const> const ray_dir_z,
+    cuda::std::span<gwn_ray_first_hit_result<Real, Index>> const output
+) noexcept {
+    std::size_t const n = ray_origin_x.size();
+    if (ray_origin_y.size() != n || ray_origin_z.size() != n || ray_dir_x.size() != n ||
+        ray_dir_y.size() != n || ray_dir_z.size() != n || output.size() != n) {
+        return gwn_status::invalid_argument("ray first-hit: mismatched span sizes");
     }
-};
 
+    if (!gwn_span_has_storage(ray_origin_x) || !gwn_span_has_storage(ray_origin_y) ||
+        !gwn_span_has_storage(ray_origin_z) || !gwn_span_has_storage(ray_dir_x) ||
+        !gwn_span_has_storage(ray_dir_y) || !gwn_span_has_storage(ray_dir_z) ||
+        !gwn_span_has_storage(output)) {
+        return gwn_status::invalid_argument(
+            "ray first-hit: ray/output spans must use non-null storage when non-empty."
+        );
+    }
+
+    return gwn_status::ok();
+}
+
+/// \brief Closed ray-parameter interval surviving an AABB slab test.
 template <gwn_real_type Real> struct gwn_ray_aabb_interval {
     bool hit{false};
     Real t_near{Real(0)};
     Real t_far{Real(0)};
 };
 
+/// \brief Mutable nearest-hit state shared while one ray traverses the BVH.
 template <gwn_real_type Real, gwn_index_type Index> struct gwn_ray_best_hit {
     Real t{Real(-1)};
     Index primitive_id{gwn_invalid_index<Index>()};
     Real u{Real(0)};
     Real v{Real(0)};
+    gwn_query_vec3<Real> geometric_normal{};
     bool found{false};
 };
 
+/// \brief Per-axis reciprocal and parallel flags reused by ray-AABB tests.
 template <gwn_real_type Real> struct gwn_ray_dir_precompute {
     Real inv[3]{Real(0), Real(0), Real(0)};
-    std::int8_t sign[3]{0, 0, 0}; // -1: negative, 0: zero, +1: positive
+    bool zero[3]{true, true, true};
 };
 
-template <gwn_real_type Real>
-[[nodiscard]] __device__ inline std::int8_t gwn_ray_direction_sign_impl(Real const dir) noexcept {
-    if (dir > Real(0))
-        return 1;
-    if (dir < Real(0))
-        return -1;
-    return 0;
-}
-
+/// \brief Precompute ray-direction state without dividing parallel components by zero.
 template <gwn_real_type Real>
 [[nodiscard]] __device__ inline gwn_ray_dir_precompute<Real>
 gwn_ray_make_dir_precompute_impl(Real const dir_x, Real const dir_y, Real const dir_z) noexcept {
     gwn_ray_dir_precompute<Real> dir{};
 
-    dir.sign[0] = gwn_ray_direction_sign_impl(dir_x);
-    dir.sign[1] = gwn_ray_direction_sign_impl(dir_y);
-    dir.sign[2] = gwn_ray_direction_sign_impl(dir_z);
+    dir.zero[0] = dir_x == Real(0);
+    dir.zero[1] = dir_y == Real(0);
+    dir.zero[2] = dir_z == Real(0);
 
-    if (dir.sign[0] != 0)
+    if (!dir.zero[0])
         dir.inv[0] = Real(1) / dir_x;
-    if (dir.sign[1] != 0)
+    if (!dir.zero[1])
         dir.inv[1] = Real(1) / dir_y;
-    if (dir.sign[2] != 0)
+    if (!dir.zero[2])
         dir.inv[2] = Real(1) / dir_z;
 
     return dir;
 }
 
+/// \brief Intersect one closed AABB slab with the current ray interval.
 template <gwn_real_type Real>
 __device__ inline bool gwn_ray_aabb_update_axis_interval_impl(
-    Real const origin, Real const lo, Real const hi, Real const inv_dir, std::int8_t const dir_sign,
+    Real const origin, Real const lo, Real const hi, Real const inv_dir, bool const zero_direction,
     Real &t_near, Real &t_far
 ) noexcept {
-    if (dir_sign == 0)
+    // Keep parallel slabs explicit so a boundary hit never evaluates 0 * infinity. Nonzero
+    // directions use min/max ordering without a sign-dependent branch across the warp.
+    if (zero_direction)
         return origin >= lo && origin <= hi;
 
-    Real const near_plane = (dir_sign < 0) ? hi : lo;
-    Real const far_plane = (dir_sign < 0) ? lo : hi;
-    Real const t0 = (near_plane - origin) * inv_dir;
-    Real const t1 = (far_plane - origin) * inv_dir;
+    Real const t0 = (lo - origin) * inv_dir;
+    Real const t1 = (hi - origin) * inv_dir;
 
-    t_near = std::max(t_near, t0);
-    t_far = std::min(t_far, t1);
+    t_near = std::max(t_near, std::min(t0, t1));
+    t_far = std::min(t_far, std::max(t0, t1));
     return t_near <= t_far;
 }
 
+/// \brief Intersect a ray interval with a closed axis-aligned box.
 template <gwn_real_type Real>
 __device__ inline gwn_ray_aabb_interval<Real> gwn_ray_aabb_intersect_interval_impl(
     Real const ray_ox, Real const ray_oy, Real const ray_oz,
@@ -107,17 +122,17 @@ __device__ inline gwn_ray_aabb_interval<Real> gwn_ray_aabb_intersect_interval_im
     Real t_far = t_max;
 
     if (!gwn_ray_aabb_update_axis_interval_impl(
-            ray_ox, min_x, max_x, ray_dir.inv[0], ray_dir.sign[0], t_near, t_far
+            ray_ox, min_x, max_x, ray_dir.inv[0], ray_dir.zero[0], t_near, t_far
         )) {
         return result;
     }
     if (!gwn_ray_aabb_update_axis_interval_impl(
-            ray_oy, min_y, max_y, ray_dir.inv[1], ray_dir.sign[1], t_near, t_far
+            ray_oy, min_y, max_y, ray_dir.inv[1], ray_dir.zero[1], t_near, t_far
         )) {
         return result;
     }
     if (!gwn_ray_aabb_update_axis_interval_impl(
-            ray_oz, min_z, max_z, ray_dir.inv[2], ray_dir.sign[2], t_near, t_far
+            ray_oz, min_z, max_z, ray_dir.inv[2], ray_dir.zero[2], t_near, t_far
         )) {
         return result;
     }
@@ -131,11 +146,11 @@ __device__ inline gwn_ray_aabb_interval<Real> gwn_ray_aabb_intersect_interval_im
     return result;
 }
 
+/// \brief Compute an oriented triangle normal with component-wise stable products.
 template <gwn_real_type Real>
 [[nodiscard]] __host__ __device__ inline gwn_query_vec3<Real> gwn_stable_triangle_normal_impl(
     gwn_query_vec3<Real> const &a, gwn_query_vec3<Real> const &b, gwn_query_vec3<Real> const &c
 ) noexcept {
-    // Embree reference: common/math/vec3.h::stable_triangle_normal
     using std::abs;
 
     Real const ab_mul_x = a.z * b.y;
@@ -163,20 +178,22 @@ template <gwn_real_type Real>
     return normal;
 }
 
+/// \brief Intersect a ray with a triangle using oriented Pluecker edge functions.
 template <gwn_real_type Real>
-__device__ inline bool gwn_ray_triangle_intersect_robust_impl(
+__device__ inline bool gwn_ray_triangle_intersect_impl(
     gwn_query_vec3<Real> const &origin, gwn_query_vec3<Real> const &direction,
     gwn_query_vec3<Real> const &v0, gwn_query_vec3<Real> const &v1, gwn_query_vec3<Real> const &v2,
-    Real const t_min, Real const t_max, Real &t_out, Real &u_out, Real &v_out
+    Real const t_min, Real const t_max, Real &t_out, Real &u_out, Real &v_out,
+    gwn_query_vec3<Real> &geometric_normal_out
 ) noexcept {
-    // Embree reference:
-    // kernels/geometry/triangle_intersector_pluecker.h (Apache-2.0)
-    // 1) Rebase vertices at ray origin.
+    // Rebasing at the ray origin keeps the edge functions translation invariant and reduces the
+    // magnitude of products for geometry far from the coordinate origin.
     gwn_query_vec3<Real> const p0 = v0 - origin;
     gwn_query_vec3<Real> const p1 = v1 - origin;
     gwn_query_vec3<Real> const p2 = v2 - origin;
 
-    // 2) Robust edge-function test in Pluecker space.
+    // All three oriented edge functions must agree in sign. The scale-relative tolerance admits
+    // their shared boundary so adjacent triangles do not leave a crack.
     gwn_query_vec3<Real> const e0 = p2 - p0;
     gwn_query_vec3<Real> const e1 = p0 - p1;
     gwn_query_vec3<Real> const e2 = p1 - p2;
@@ -193,7 +210,8 @@ __device__ inline bool gwn_ray_triangle_intersect_robust_impl(
     if (!(min_edge >= -edge_eps || max_edge <= edge_eps))
         return false;
 
-    // 3) Solve hit distance against stable geometric normal.
+    // Use the stable geometric normal for both the plane solve and the returned hit record, so t
+    // and normal are derived from exactly the same arithmetic.
     gwn_query_vec3<Real> const ng = gwn_stable_triangle_normal_impl(e0, e1, e2);
     Real const den = Real(2) * gwn_query_dot(ng, direction);
     if (den == Real(0))
@@ -201,307 +219,371 @@ __device__ inline bool gwn_ray_triangle_intersect_robust_impl(
 
     Real const t_num = Real(2) * gwn_query_dot(p0, ng);
     Real const t = t_num / den;
-    if (t < t_min || t > t_max)
+    if (!(t_min <= t && t <= t_max))
         return false;
 
-    // Embree-style UV mapping for triangle (v0,v1,v2): u->v1 weight, v->v2 weight.
-    // Match Embree's guarded reciprocal path for near-zero UVW.
-    Real inv_uvw = Real(0);
-    if (abs(uvw) >= Real(1e-18))
-        inv_uvw = Real(1) / uvw;
-    u_out = std::min(u * inv_uvw, Real(1));
-    v_out = std::min(v * inv_uvw, Real(1));
-    t_out = t;
-    return true;
-}
-
-template <gwn_real_type Real, gwn_index_type Index>
-__device__ inline bool gwn_ray_load_triangle_vertices_from_primitive_impl(
-    gwn_geometry_accessor<Real, Index> const &geometry, Index const primitive_id,
-    gwn_query_vec3<Real> &a, gwn_query_vec3<Real> &b, gwn_query_vec3<Real> &c
-) noexcept {
-    if (!gwn_index_in_bounds(primitive_id, geometry.triangle_count()))
-        return false;
-
-    auto const triangle_id = static_cast<std::size_t>(primitive_id);
-    Index const ia = geometry.tri_i0[triangle_id];
-    Index const ib = geometry.tri_i1[triangle_id];
-    Index const ic = geometry.tri_i2[triangle_id];
-    if (!gwn_index_in_bounds(ia, geometry.vertex_count()) ||
-        !gwn_index_in_bounds(ib, geometry.vertex_count()) ||
-        !gwn_index_in_bounds(ic, geometry.vertex_count())) {
-        return false;
-    }
-
-    auto const a_idx = static_cast<std::size_t>(ia);
-    auto const b_idx = static_cast<std::size_t>(ib);
-    auto const c_idx = static_cast<std::size_t>(ic);
-    a = gwn_query_vec3<Real>(
-        geometry.vertex_x[a_idx], geometry.vertex_y[a_idx], geometry.vertex_z[a_idx]
-    );
-    b = gwn_query_vec3<Real>(
-        geometry.vertex_x[b_idx], geometry.vertex_y[b_idx], geometry.vertex_z[b_idx]
-    );
-    c = gwn_query_vec3<Real>(
-        geometry.vertex_x[c_idx], geometry.vertex_y[c_idx], geometry.vertex_z[c_idx]
-    );
-
-    return true;
-}
-
-template <gwn_real_type Real, gwn_index_type Index>
-__device__ inline bool gwn_ray_triangle_intersect_from_primitive_impl(
-    gwn_geometry_accessor<Real, Index> const &geometry, Index const primitive_id,
-    gwn_query_vec3<Real> const &origin, gwn_query_vec3<Real> const &direction, Real const t_min,
-    Real const t_max, Real &t_out, Real &u_out, Real &v_out
-) noexcept {
-    gwn_query_vec3<Real> a{};
-    gwn_query_vec3<Real> b{};
-    gwn_query_vec3<Real> c{};
-    if (!gwn_ray_load_triangle_vertices_from_primitive_impl(geometry, primitive_id, a, b, c))
-        return false;
-    return gwn_ray_triangle_intersect_robust_impl(
-        origin, direction, a, b, c, t_min, t_max, t_out, u_out, v_out
-    );
-}
-
-template <int Width, gwn_real_type Real>
-__device__ inline void gwn_sort_children_by_entry_t_impl(
-    Real (&child_entry_t)[Width], int (&child_slot_order)[Width], std::uint8_t (&child_kind)[Width]
-) noexcept {
-    auto cmp_swap = [&](int const lhs, int const rhs) {
-        if (!(child_entry_t[lhs] > child_entry_t[rhs]))
-            return;
-        using std::swap;
-        swap(child_entry_t[lhs], child_entry_t[rhs]);
-        swap(child_slot_order[lhs], child_slot_order[rhs]);
-        swap(child_kind[lhs], child_kind[rhs]);
-    };
-
-    if constexpr (Width == 2) {
-        cmp_swap(0, 1);
-    } else if constexpr (Width == 4) {
-        cmp_swap(0, 1);
-        cmp_swap(2, 3);
-        cmp_swap(0, 2);
-        cmp_swap(1, 3);
-        cmp_swap(1, 2);
+    // Preserve ratios for a subnormal sum without slowing the normal reciprocal path.
+    if (abs(uvw) >= std::numeric_limits<Real>::min()) {
+        Real const inv_uvw = Real(1) / uvw;
+        u_out = u * inv_uvw;
+        v_out = v * inv_uvw;
     } else {
-        GWN_PRAGMA_UNROLL
-        for (int pass = 0; pass < Width; ++pass) {
-            int const start = pass & 1;
-            GWN_PRAGMA_UNROLL
-            for (int i = start; (i + 1) < Width; i += 2)
-                cmp_swap(i, i + 1);
-        }
+        if (uvw == Real(0))
+            return false;
+        u_out = u / uvw;
+        v_out = v / uvw;
     }
+    t_out = t;
+    // Preserve the same stable, unnormalized normal used to solve t. Returning this intersection
+    // datum avoids a second triangle load while leaving normalization and facing to the caller.
+    geometric_normal_out = ng;
+    return true;
 }
 
-template <int Width, gwn_real_type Real, gwn_index_type Index>
-__device__ inline void gwn_ray_visit_leaf_primitive_range_impl(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh, gwn_query_vec3<Real> const &origin,
-    gwn_query_vec3<Real> const &direction, Real const t_min, Index const begin, Index const count,
-    gwn_ray_best_hit<Real, Index> &best
+/// \brief Traverse float BVH4 children in near order with a 32-bit pending-child payload.
+template <int StackCapacity, bool HasParallelAxis, typename VisitLeaf, typename OverflowCallback>
+[[nodiscard]] __device__ inline bool gwn_ray_first_hit_bvh4_packed_impl(
+    gwn_bvh4_accessor<float, std::uint32_t> const &bvh, float const ray_ox, float const ray_oy,
+    float const ray_oz, gwn_ray_dir_precompute<float> const &ray_dir,
+    gwn_ray_best_hit<float, std::uint32_t> &best, float const t_min, VisitLeaf const &visit_leaf,
+    OverflowCallback const &overflow_callback
 ) noexcept {
-    for (Index off = 0; off < count; ++off) {
-        Index const sorted_index = begin + off;
-        if (!gwn_index_in_bounds(sorted_index, bvh.primitive_indices.size()))
-            continue;
+    // Leaves and internal children share one near-ordered sequence. Processing the nearest child
+    // first tightens best.t early enough to prune farther AABBs and triangle ranges.
+    constexpr std::uint32_t k_leaf_bit = std::uint32_t(1) << 31;
+    constexpr float k_invalid_order = std::numeric_limits<float>::infinity();
 
-        Index const primitive_id = bvh.primitive_indices[static_cast<std::size_t>(sorted_index)];
-        Real t_hit = Real(0);
-        Real u_hit = Real(0);
-        Real v_hit = Real(0);
-        if (!gwn_ray_triangle_intersect_from_primitive_impl<Real, Index>(
-                geometry, primitive_id, origin, direction, t_min, best.t, t_hit, u_hit, v_hit
+    std::uint32_t stack[StackCapacity];
+    int stack_size = 0;
+    auto payload = static_cast<std::uint32_t>(bvh.root.offset());
+    auto const intersect_bounds = [&](gwn_aabb<float> const &bounds) noexcept {
+        if constexpr (!HasParallelAxis) {
+            float const tx0 = (bounds.min_x - ray_ox) * ray_dir.inv[0];
+            float const tx1 = (bounds.max_x - ray_ox) * ray_dir.inv[0];
+            float const ty0 = (bounds.min_y - ray_oy) * ray_dir.inv[1];
+            float const ty1 = (bounds.max_y - ray_oy) * ray_dir.inv[1];
+            float const tz0 = (bounds.min_z - ray_oz) * ray_dir.inv[2];
+            float const tz1 = (bounds.max_z - ray_oz) * ray_dir.inv[2];
+            float const t_near = std::max(
+                t_min,
+                std::max(std::min(tx0, tx1), std::max(std::min(ty0, ty1), std::min(tz0, tz1)))
+            );
+            float const t_far = std::min(
+                best.t,
+                std::min(std::max(tx0, tx1), std::min(std::max(ty0, ty1), std::max(tz0, tz1)))
+            );
+            return gwn_ray_aabb_interval<float>{t_near <= t_far, t_near, t_far};
+        }
+
+        float t_near = t_min;
+        float t_far = best.t;
+        // Parallel axes constrain containment but do not shorten the ray interval. Reusing the
+        // scalar slab step keeps packed traversal exact for arbitrarily thin child bounds.
+        if (!gwn_ray_aabb_update_axis_interval_impl(
+                ray_ox, bounds.min_x, bounds.max_x, ray_dir.inv[0], ray_dir.zero[0], t_near, t_far
+            ) ||
+            !gwn_ray_aabb_update_axis_interval_impl(
+                ray_oy, bounds.min_y, bounds.max_y, ray_dir.inv[1], ray_dir.zero[1], t_near, t_far
+            ) ||
+            !gwn_ray_aabb_update_axis_interval_impl(
+                ray_oz, bounds.min_z, bounds.max_z, ray_dir.inv[2], ray_dir.zero[2], t_near, t_far
             )) {
-            continue;
+            return gwn_ray_aabb_interval<float>{};
+        }
+        return gwn_ray_aabb_interval<float>{true, t_near, t_far};
+    };
+    while (true) {
+        if ((payload & k_leaf_bit) != 0u) {
+            int const child_slot = static_cast<int>(payload & 3u);
+            std::uint32_t const parent_index = (payload & ~k_leaf_bit) >> 2;
+            visit_leaf(bvh.nodes[parent_index].child(child_slot));
+        } else if (payload < bvh.nodes.size()) {
+            auto const &node = bvh.nodes[payload];
+            // Distance and payload move in parallel so the sorting network uses native float
+            // comparisons without widening every candidate to a 64-bit composite key.
+            float child_entry_t[4];
+            std::uint32_t child_payload[4];
+
+            GWN_DETAIL_PRAGMA_UNROLL
+            for (int child_slot = 0; child_slot < 4; ++child_slot) {
+                child_entry_t[child_slot] = k_invalid_order;
+                child_payload[child_slot] = 0u;
+                auto const &child = node.child(child_slot);
+                if (!child.is_valid())
+                    continue;
+                if (child.is_internal() && child.offset() >= bvh.nodes.size())
+                    continue;
+
+                auto const interval = intersect_bounds(child.bounds);
+                if (!interval.hit)
+                    continue;
+
+                std::uint32_t const payload_value =
+                    child.is_leaf()
+                        ? k_leaf_bit | (payload << 2) | static_cast<std::uint32_t>(child_slot)
+                        : static_cast<std::uint32_t>(child.offset());
+                child_entry_t[child_slot] = interval.t_near;
+                child_payload[child_slot] = payload_value;
+            }
+
+            auto compare_swap = [&](int const lhs, int const rhs) noexcept {
+                if (!(child_entry_t[lhs] > child_entry_t[rhs]))
+                    return;
+                using std::swap;
+                swap(child_entry_t[lhs], child_entry_t[rhs]);
+                swap(child_payload[lhs], child_payload[rhs]);
+            };
+            compare_swap(0, 1);
+            compare_swap(2, 3);
+            compare_swap(0, 2);
+            compare_swap(1, 3);
+            compare_swap(1, 2);
+
+            GWN_DETAIL_PRAGMA_UNROLL
+            for (int child_slot = 3; child_slot > 0; --child_slot) {
+                if (child_entry_t[child_slot] == k_invalid_order)
+                    continue;
+                if (stack_size >= StackCapacity) {
+                    overflow_callback();
+                    return true;
+                }
+                stack[stack_size++] = child_payload[child_slot];
+            }
+            if (child_entry_t[0] != k_invalid_order) {
+                payload = child_payload[0];
+                continue;
+            }
         }
 
-        if (!best.found || t_hit < best.t) {
-            best.t = t_hit;
-            best.primitive_id = primitive_id;
-            best.u = u_hit;
-            best.v = v_hit;
-            best.found = true;
-        }
+        if (stack_size == 0)
+            return false;
+        payload = stack[--stack_size];
     }
 }
 
+/// \brief Traverse a canonical BVH and return the nearest ray-triangle hit.
 template <
     int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity,
-    typename OverflowCallback = gwn_traversal_overflow_trap_callback>
-__device__ inline gwn_ray_first_hit_result<Real, Index> gwn_ray_first_hit_bvh_impl(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
-    gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree, Real const ray_ox,
-    Real const ray_oy, Real const ray_oz, Real const ray_dx, Real const ray_dy, Real const ray_dz,
-    Real const t_min, Real const t_max, OverflowCallback const &overflow_callback = {}
+    typename OverflowCallback = gwn_traversal_overflow_trap_callback,
+    bool UsePackedTraversal = false>
+[[nodiscard]] __device__ inline gwn_ray_first_hit_result<Real, Index> gwn_ray_first_hit_impl(
+    gwn_bvh_accessor<Width, Real, Index> const &bvh, Real const ray_ox, Real const ray_oy,
+    Real const ray_oz, Real const ray_dx, Real const ray_dy, Real const ray_dz, Real const t_min,
+    Real const t_max, OverflowCallback const &overflow_callback = {}
 ) noexcept {
     static_assert(Width >= 2, "BVH width must be at least 2.");
     static_assert(StackCapacity > 0, "Traversal stack capacity must be positive.");
 
     gwn_ray_first_hit_result<Real, Index> result{};
-    if (!geometry.is_valid() || !bvh.is_valid() || !aabb_tree.is_valid_for(bvh))
-        return result;
-    if (!(t_max >= t_min))
-        return result;
-
     Real const dir_len2 = ray_dx * ray_dx + ray_dy * ray_dy + ray_dz * ray_dz;
     if (!(dir_len2 > Real(0)))
         return result;
 
     gwn_query_vec3<Real> const origin(ray_ox, ray_oy, ray_oz);
     gwn_query_vec3<Real> const direction(ray_dx, ray_dy, ray_dz);
-    auto const ray_dir_precomp = gwn_ray_make_dir_precompute_impl(ray_dx, ray_dy, ray_dz);
+    auto const ray_dir = gwn_ray_make_dir_precompute_impl(ray_dx, ray_dy, ray_dz);
 
     gwn_ray_best_hit<Real, Index> best{};
     best.t = t_max;
-    best.primitive_id = gwn_invalid_index<Index>();
-    best.found = false;
-    auto const set_result_from_best = [&]() noexcept {
+    // Publish only complete records. Until a hit survives every test, the result remains the
+    // canonical miss record initialized above.
+    auto publish_best = [&]() noexcept {
         if (!best.found)
             return;
         result.t = best.t;
         result.primitive_id = best.primitive_id;
         result.u = best.u;
         result.v = best.v;
+        result.geometric_normal_x = best.geometric_normal.x;
+        result.geometric_normal_y = best.geometric_normal.y;
+        result.geometric_normal_z = best.geometric_normal.z;
         result.status = gwn_ray_first_hit_status::k_hit;
     };
-
-    if (bvh.root_kind == gwn_bvh_child_kind::k_leaf) {
-        gwn_ray_visit_leaf_primitive_range_impl<Width, Real, Index>(
-            geometry, bvh, origin, direction, t_min, bvh.root_index, bvh.root_count, best
-        );
-        set_result_from_best();
-        return result;
-    }
-
-    if (bvh.root_kind != gwn_bvh_child_kind::k_internal)
-        return result;
-
-    Index stack[StackCapacity];
-    int stack_size = 0;
-    stack[stack_size++] = bvh.root_index;
-
-    while (stack_size > 0) {
-        Index const node_index = stack[--stack_size];
-        GWN_ASSERT(stack_size >= 0, "ray query: stack underflow");
-        if (!gwn_index_in_bounds(node_index, bvh.nodes.size()))
-            continue;
-
-        auto const &topo_node = bvh.nodes[static_cast<std::size_t>(node_index)];
-        GWN_ASSERT(
-            gwn_index_in_bounds(node_index, aabb_tree.nodes.size()),
-            "ray query: node_index out of bounds for aabb_tree"
-        );
-        auto const &aabb_node = aabb_tree.nodes[static_cast<std::size_t>(node_index)];
-
-        int child_slot_order[Width];
-        Real child_entry_t[Width];
-        std::uint8_t child_kind[Width];
-        std::uint8_t constexpr k_invalid_kind =
-            static_cast<std::uint8_t>(gwn_bvh_child_kind::k_invalid);
-        Real constexpr k_infinite_t = std::numeric_limits<Real>::infinity();
-        GWN_PRAGMA_UNROLL
-        for (int i = 0; i < Width; ++i) {
-            child_slot_order[i] = 0;
-            child_entry_t[i] = k_infinite_t;
-            child_kind[i] = k_invalid_kind;
-        }
-        int child_count = 0;
-
-        GWN_PRAGMA_UNROLL
-        for (int s = 0; s < Width; ++s) {
-            auto const kind = static_cast<gwn_bvh_child_kind>(topo_node.child_kind[s]);
-            if (kind == gwn_bvh_child_kind::k_invalid)
-                continue;
-            if (kind != gwn_bvh_child_kind::k_internal && kind != gwn_bvh_child_kind::k_leaf)
+    auto visit_leaf = [&](gwn_bvh_child<Real> const &leaf) noexcept {
+        for (std::uint32_t primitive_offset = 0; primitive_offset < leaf.primitive_count();
+             ++primitive_offset) {
+            std::uint64_t const sorted_index = leaf.offset() + primitive_offset;
+            if (sorted_index >= bvh.triangles.size())
                 continue;
 
-            auto const interval = gwn_ray_aabb_intersect_interval_impl<Real>(
-                ray_ox, ray_oy, ray_oz, ray_dir_precomp, aabb_node.child_min_x[s],
-                aabb_node.child_min_y[s], aabb_node.child_min_z[s], aabb_node.child_max_x[s],
-                aabb_node.child_max_y[s], aabb_node.child_max_z[s], t_min, best.t
+            Real t_hit = Real(0);
+            Real u_hit = Real(0);
+            Real v_hit = Real(0);
+            gwn_query_vec3<Real> geometric_normal{};
+            auto const &triangle = bvh.triangles[static_cast<std::size_t>(sorted_index)];
+            gwn_query_vec3<Real> const v0(triangle.v0_x, triangle.v0_y, triangle.v0_z);
+            gwn_query_vec3<Real> const v1(
+                triangle.v0_x + triangle.e1_x, triangle.v0_y + triangle.e1_y,
+                triangle.v0_z + triangle.e1_z
             );
-            if (!interval.hit)
-                continue;
-
-            child_slot_order[child_count] = s;
-            child_entry_t[child_count] = interval.t_near;
-            child_kind[child_count] = topo_node.child_kind[s];
-            ++child_count;
-        }
-
-        if (child_count > 1)
-            gwn_sort_children_by_entry_t_impl<Width>(child_entry_t, child_slot_order, child_kind);
-
-        GWN_PRAGMA_UNROLL
-        for (int i = 0; i < Width; ++i) {
-            if (static_cast<gwn_bvh_child_kind>(child_kind[i]) != gwn_bvh_child_kind::k_leaf)
-                continue;
-            if (child_entry_t[i] > best.t)
-                continue;
-
-            int const s = child_slot_order[i];
-            gwn_ray_visit_leaf_primitive_range_impl<Width, Real, Index>(
-                geometry, bvh, origin, direction, t_min, topo_node.child_index[s],
-                topo_node.child_count[s], best
+            gwn_query_vec3<Real> const v2(
+                triangle.v0_x + triangle.e2_x, triangle.v0_y + triangle.e2_y,
+                triangle.v0_z + triangle.e2_z
             );
-        }
-
-        // Push internal children in reverse near-to-far order so the nearest
-        // node is popped first by the LIFO stack.
-        GWN_PRAGMA_UNROLL
-        for (int i = Width - 1; i >= 0; --i) {
-            if (static_cast<gwn_bvh_child_kind>(child_kind[i]) != gwn_bvh_child_kind::k_internal)
+            if (!gwn_ray_triangle_intersect_impl(
+                    origin, direction, v0, v1, v2, t_min, best.t, t_hit, u_hit, v_hit,
+                    geometric_normal
+                )) {
                 continue;
-            if (child_entry_t[i] > best.t)
-                continue;
-
-            if (stack_size >= StackCapacity) {
-                overflow_callback();
-                set_result_from_best();
-                result.status = gwn_ray_first_hit_status::k_overflow;
-                return result;
             }
-            stack[stack_size++] = topo_node.child_index[child_slot_order[i]];
+            if (best.found && !(t_hit < best.t))
+                continue;
+
+            // Triangle records stay on the hot path. The parallel mapping is read only after a
+            // hit survives the current distance bound and must report its original mesh ID.
+            best.t = t_hit;
+            best.primitive_id = bvh.primitive_indices[static_cast<std::size_t>(sorted_index)];
+            best.u = u_hit;
+            best.v = v_hit;
+            best.geometric_normal = geometric_normal;
+            best.found = true;
         }
+    };
+
+    if constexpr (UsePackedTraversal) {
+        static_assert(Width == 4, "Packed ray traversal requires BVH width 4.");
+        static_assert(std::is_same_v<Real, float>, "Packed ray traversal requires float.");
+        static_assert(
+            std::is_same_v<Index, std::uint32_t>, "Packed ray traversal requires uint32_t indices."
+        );
+        bool overflow = false;
+        // Select parallel handling once per ray so the common path keeps a branch-free slab test
+        // at every child while zero-direction rays retain exact containment semantics.
+        if (ray_dir.zero[0] || ray_dir.zero[1] || ray_dir.zero[2]) {
+            overflow = gwn_ray_first_hit_bvh4_packed_impl<StackCapacity, true>(
+                bvh, ray_ox, ray_oy, ray_oz, ray_dir, best, t_min, visit_leaf, overflow_callback
+            );
+        } else {
+            overflow = gwn_ray_first_hit_bvh4_packed_impl<StackCapacity, false>(
+                bvh, ray_ox, ray_oy, ray_oz, ray_dir, best, t_min, visit_leaf, overflow_callback
+            );
+        }
+        publish_best();
+        if (overflow)
+            result.status = gwn_ray_first_hit_status::k_overflow;
+        return result;
     }
 
-    set_result_from_best();
+    std::uint64_t stack[StackCapacity];
+    int stack_size = 0;
+    std::uint64_t reference = bvh.root.reference;
+    while (true) {
+        gwn_bvh_child<Real> current{};
+        current.reference = reference;
+        if (current.is_leaf()) {
+            visit_leaf(current);
+        } else if (current.is_internal() && current.offset() < bvh.nodes.size()) {
+            auto const &node = bvh.nodes[static_cast<std::size_t>(current.offset())];
+            Real child_entry_t[Width];
+            std::uint64_t child_reference[Width];
+            int child_count = 0;
+
+            GWN_DETAIL_PRAGMA_UNROLL
+            for (int child_slot = 0; child_slot < Width; ++child_slot) {
+                auto const &child = node.child(child_slot);
+                if (!child.is_valid())
+                    continue;
+
+                auto const interval = gwn_ray_aabb_intersect_interval_impl<Real>(
+                    ray_ox, ray_oy, ray_oz, ray_dir, child.bounds.min_x, child.bounds.min_y,
+                    child.bounds.min_z, child.bounds.max_x, child.bounds.max_y, child.bounds.max_z,
+                    t_min, best.t
+                );
+                if (!interval.hit)
+                    continue;
+                child_entry_t[child_count] = interval.t_near;
+                child_reference[child_count] = child.reference;
+                ++child_count;
+            }
+
+            auto compare_swap = [&](int const lhs, int const rhs) noexcept {
+                if (!(child_entry_t[lhs] > child_entry_t[rhs]))
+                    return;
+                using std::swap;
+                swap(child_entry_t[lhs], child_entry_t[rhs]);
+                swap(child_reference[lhs], child_reference[rhs]);
+            };
+            if constexpr (Width == 2) {
+                if (child_count == 2)
+                    compare_swap(0, 1);
+            } else if constexpr (Width == 4) {
+                // Fill inactive lanes with sentinels so the fixed five-comparison network also
+                // handles nodes whose arity is below four.
+                for (int child_slot = child_count; child_slot < Width; ++child_slot) {
+                    child_entry_t[child_slot] = std::numeric_limits<Real>::infinity();
+                    child_reference[child_slot] = 0u;
+                }
+                compare_swap(0, 1);
+                compare_swap(2, 3);
+                compare_swap(0, 2);
+                compare_swap(1, 3);
+                compare_swap(1, 2);
+            } else {
+                for (int pass = 0; pass < child_count; ++pass)
+                    for (int child_slot = pass & 1; child_slot + 1 < child_count; child_slot += 2)
+                        compare_swap(child_slot, child_slot + 1);
+            }
+
+            // Leaf work stays in the current node. Only internal references occupy the traversal
+            // stack, which preserves the topology-derived host capacity bound.
+            for (int child_slot = 0; child_slot < child_count; ++child_slot) {
+                gwn_bvh_child<Real> child{};
+                child.reference = child_reference[child_slot];
+                if (child.is_leaf() && child_entry_t[child_slot] <= best.t)
+                    visit_leaf(child);
+            }
+            // Reverse insertion makes the closest remaining internal child the next LIFO entry.
+            for (int child_slot = child_count - 1; child_slot >= 0; --child_slot) {
+                gwn_bvh_child<Real> child{};
+                child.reference = child_reference[child_slot];
+                if (!child.is_internal() || child_entry_t[child_slot] > best.t)
+                    continue;
+                if (stack_size >= StackCapacity) {
+                    overflow_callback();
+                    publish_best();
+                    result.status = gwn_ray_first_hit_status::k_overflow;
+                    return result;
+                }
+                stack[stack_size++] = child.reference;
+            }
+        }
+
+        if (stack_size == 0)
+            break;
+        reference = stack[--stack_size];
+    }
+
+    publish_best();
     return result;
 }
 
+/// \brief Invoke canonical ray first-hit traversal for one batch element.
 template <
     int Width, gwn_real_type Real, gwn_index_type Index, int StackCapacity,
-    typename OverflowCallback = gwn_traversal_overflow_trap_callback>
-struct gwn_ray_first_hit_batch_bvh_functor {
-    gwn_geometry_accessor<Real, Index> geometry{};
-    gwn_bvh_topology_accessor<Width, Real, Index> bvh{};
-    gwn_bvh_aabb_accessor<Width, Real, Index> aabb_tree{};
+    typename OverflowCallback = gwn_traversal_overflow_trap_callback,
+    bool UsePackedTraversal = false>
+struct gwn_ray_first_hit_batch_functor {
+    gwn_bvh_accessor<Width, Real, Index> bvh{};
     cuda::std::span<Real const> ray_origin_x{};
     cuda::std::span<Real const> ray_origin_y{};
     cuda::std::span<Real const> ray_origin_z{};
     cuda::std::span<Real const> ray_dir_x{};
     cuda::std::span<Real const> ray_dir_y{};
     cuda::std::span<Real const> ray_dir_z{};
-    cuda::std::span<Real> out_t{};
-    cuda::std::span<Index> out_primitive_id{};
+    cuda::std::span<gwn_ray_first_hit_result<Real, Index>> out_hit{};
     Real t_min{};
     Real t_max{};
     OverflowCallback overflow_callback{};
 
-    __device__ void operator()(std::size_t const ray_id) const {
-        auto const hit =
-            gwn_ray_first_hit_bvh_impl<Width, Real, Index, StackCapacity, OverflowCallback>(
-                geometry, bvh, aabb_tree, ray_origin_x[ray_id], ray_origin_y[ray_id],
-                ray_origin_z[ray_id], ray_dir_x[ray_id], ray_dir_y[ray_id], ray_dir_z[ray_id],
-                t_min, t_max, overflow_callback
-            );
-        out_t[ray_id] = hit.t;
-        out_primitive_id[ray_id] = hit.primitive_id;
+    void __device__ operator()(std::size_t const ray_id) const noexcept {
+        // The host launcher validates one accessor for the whole batch. Skipping the same span and
+        // root checks per ray keeps validation cost independent of query count.
+        auto const hit = gwn_ray_first_hit_impl<
+            Width, Real, Index, StackCapacity, OverflowCallback, UsePackedTraversal>(
+            bvh, ray_origin_x[ray_id], ray_origin_y[ray_id], ray_origin_z[ray_id],
+            ray_dir_x[ray_id], ray_dir_y[ray_id], ray_dir_z[ray_id], t_min, t_max, overflow_callback
+        );
+        out_hit[ray_id] = hit;
     }
 };
 

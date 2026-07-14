@@ -2,7 +2,7 @@
 
 #include <cmath>
 
-#include "../gwn_utils.cuh"
+#include "gwn_utils.cuh"
 
 namespace gwn {
 namespace detail {

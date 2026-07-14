@@ -1,14 +1,18 @@
 #pragma once
 
 /// \file gwn_query.cuh
-/// \brief Public query APIs for winding, gradients, distances, ray hits, Harnack tracing, and
-///        hybrid tracing.
+/// \brief Public query APIs for winding, gradients, unsigned distance, and ray hits.
 ///
 /// Query operations are available in two forms:
 /// - Device point APIs (`__device__` functions callable from user kernels)
 /// - Batch APIs (host-callable launchers that process arrays of queries)
 ///
-/// Most query families provide both point and batch variants for symmetry and flexibility.
+/// Batch APIs validate their objects and spans, enqueue work on the supplied stream, and return
+/// without synchronizing that stream. Device point APIs accept accessors and return values
+/// directly. Traversal queries invoke their overflow callback before returning an overflow value;
+/// the default callback traps.
+///
+/// Every query family provides both point and batch variants.
 /// Implementation details live in `include/gwn/detail/gwn_query_*_impl.cuh`.
 
 #include <cuda_runtime.h>
@@ -17,395 +21,346 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <type_traits>
 
-#include "detail/gwn_harnack_trace_impl.cuh"
-#include "detail/gwn_query_common_impl.cuh"
-#include "detail/gwn_query_distance_impl.cuh"
-#include "detail/gwn_query_geometry_impl.cuh"
-#include "detail/gwn_query_gradient_impl.cuh"
-#include "detail/gwn_query_hybrid_impl.cuh"
-#include "detail/gwn_query_ray_impl.cuh"
-#include "detail/gwn_query_winding_antipodal_impl.cuh"
-#include "detail/gwn_query_winding_impl.cuh"
+#include "detail/gwn_kernel_utils.cuh"
+#include "detail/gwn_query_vec3_impl.cuh"
 #include "gwn_boundary.cuh"
 #include "gwn_bvh.cuh"
 #include "gwn_geometry.cuh"
-#include "gwn_kernel_utils.cuh"
 
 namespace gwn {
 
 /// \brief 3-component column vector parameterised on scalar type \p Real.
 template <gwn_real_type Real> using gwn_vec3 = detail::gwn_query_vec3<Real>;
 
+/// \brief Completion state of a ray first-hit query.
+enum class gwn_ray_first_hit_status : std::uint8_t {
+    k_miss = 0,    ///< Traversal completed without a triangle hit.
+    k_hit = 1,     ///< Traversal completed with the nearest triangle hit.
+    k_overflow = 2 ///< Traversal exhausted its per-thread stack capacity.
+};
+
+/// \brief First-hit result of a ray query against mesh triangles.
+///
+/// Barycentric accuracy follows the precision of \p Real and the conditioning of the intersected
+/// triangle.
+template <gwn_real_type Real, gwn_index_type Index = std::uint32_t>
+struct gwn_ray_first_hit_result {
+    Real t{Real(-1)};                 ///< Ray parameter at the hit, or -1 for a miss.
+    Real u{Real(0)};                  ///< Barycentric weight of the second triangle vertex.
+    Real v{Real(0)};                  ///< Barycentric weight of the third triangle vertex.
+    Real geometric_normal_x{Real(0)}; ///< Unnormalized oriented geometric normal X component.
+    Real geometric_normal_y{Real(0)}; ///< Unnormalized oriented geometric normal Y component.
+    Real geometric_normal_z{Real(0)}; ///< Unnormalized oriented geometric normal Z component.
+    Index primitive_id{gwn_invalid_index<Index>()}; ///< Original mesh primitive ID.
+    gwn_ray_first_hit_status status{gwn_ray_first_hit_status::k_miss}; ///< Completion state.
+
+    /// \brief Return whether traversal completed with a triangle hit.
+    [[nodiscard]] __host__ __device__ constexpr bool hit() const noexcept {
+        return status == gwn_ray_first_hit_status::k_hit;
+    }
+
+private:
+    // Result arrays are copied as complete objects. Making the alignment tail an initialized member
+    // prevents those bytes from carrying indeterminate device state into a host transfer.
+    static constexpr std::size_t k_storage_padding_size = sizeof(Index) == 4 ? 3 : 7;
+    std::uint8_t storage_padding_[k_storage_padding_size]{};
+};
+
 /// \brief Default capacity of the per-thread BVH traversal stack.
 inline constexpr int k_gwn_default_traversal_stack_capacity = 64;
 
-namespace detail {
+} // namespace gwn
 
-template <gwn_real_type Real, gwn_index_type Index>
-[[nodiscard]] inline gwn_status gwn_validate_ray_first_hit_batch_spans(
-    cuda::std::span<Real const> const ray_origin_x, cuda::std::span<Real const> const ray_origin_y,
-    cuda::std::span<Real const> const ray_origin_z, cuda::std::span<Real const> const ray_dir_x,
-    cuda::std::span<Real const> const ray_dir_y, cuda::std::span<Real const> const ray_dir_z,
-    cuda::std::span<Real> const output_t, cuda::std::span<Index> const output_primitive_id
-) noexcept {
-    std::size_t const n = ray_origin_x.size();
-    if (ray_origin_y.size() != n || ray_origin_z.size() != n || ray_dir_x.size() != n ||
-        ray_dir_y.size() != n || ray_dir_z.size() != n || output_t.size() != n ||
-        output_primitive_id.size() != n) {
-        return gwn_status::invalid_argument("ray first-hit: mismatched span sizes");
-    }
+#include "detail/gwn_query_common_impl.cuh"
+#include "detail/gwn_query_distance_impl.cuh"
+#include "detail/gwn_query_geometry_impl.cuh"
+#include "detail/gwn_query_gradient_impl.cuh"
+#include "detail/gwn_query_ray_impl.cuh"
+#include "detail/gwn_query_winding_antipodal_impl.cuh"
+#include "detail/gwn_query_winding_impl.cuh"
 
-    if (!gwn_span_has_storage(ray_origin_x) || !gwn_span_has_storage(ray_origin_y) ||
-        !gwn_span_has_storage(ray_origin_z) || !gwn_span_has_storage(ray_dir_x) ||
-        !gwn_span_has_storage(ray_dir_y) || !gwn_span_has_storage(ray_dir_z) ||
-        !gwn_span_has_storage(output_t) || !gwn_span_has_storage(output_primitive_id)) {
-        return gwn_status::invalid_argument(
-            "ray first-hit: ray/output spans must use non-null storage when non-empty."
-        );
-    }
+namespace gwn {
 
-    return gwn_status::ok();
-}
-
-} // namespace detail
-
-/// \brief Compute unsigned point-to-triangle distance (\c __device__ only).
+/// \brief Compute unsigned point-to-mesh distance from a canonical BVH in device code.
+///
+/// \p culling_band is the initial distance bound and the result when no triangle is closer.
+/// Negative values are clamped to zero and infinity performs an unbounded search. Stack overflow
+/// invokes \p overflow_callback and returns NaN when the callback returns. \p bvh must be valid.
 template <
     int Width, gwn_real_type Real, gwn_index_type Index,
     int StackCapacity = k_gwn_default_traversal_stack_capacity,
     typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
-[[nodiscard]] __device__ inline Real gwn_unsigned_distance_point_bvh(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
-    gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree, Real const qx, Real const qy,
-    Real const qz, Real const culling_band = std::numeric_limits<Real>::infinity(),
-    OverflowCallback const &overflow_callback = {}
-) noexcept {
-    return detail::gwn_unsigned_distance_point_bvh_impl<
-        Width, Real, Index, StackCapacity, OverflowCallback>(
-        geometry, bvh, aabb_tree, qx, qy, qz, culling_band, overflow_callback
-    );
-}
-
-/// \brief Compute signed point-to-mesh distance using winding-number sign
-///        (\c __device__ only).
-template <
-    int Order, int Width, gwn_real_type Real, gwn_index_type Index,
-    int StackCapacity = k_gwn_default_traversal_stack_capacity,
-    typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
-[[nodiscard]] __device__ inline Real gwn_signed_distance_point_bvh(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
-    gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree,
-    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &moment_tree, Real const qx,
-    Real const qy, Real const qz, Real const winding_number_threshold = Real(0.5),
+[[nodiscard]] __device__ inline Real gwn_unsigned_distance(
+    gwn_bvh_accessor<Width, Real, Index> const &bvh, Real const qx, Real const qy, Real const qz,
     Real const culling_band = std::numeric_limits<Real>::infinity(),
-    Real const accuracy_scale = Real(2), OverflowCallback const &overflow_callback = {}
-) noexcept {
-    static_assert(
-        Order == 0 || Order == 1 || Order == 2,
-        "gwn_signed_distance_point_bvh currently supports Order 0, 1, and 2."
-    );
-
-    return detail::gwn_signed_distance_point_bvh_impl<
-        Order, Width, Real, Index, StackCapacity, OverflowCallback>(
-        geometry, bvh, aabb_tree, moment_tree, qx, qy, qz, winding_number_threshold, culling_band,
-        accuracy_scale, overflow_callback
-    );
-}
-
-/// \brief Compute unsigned point-to-boundary-edge distance (\c __device__ only).
-template <
-    int Width, gwn_real_type Real, gwn_index_type Index,
-    int StackCapacity = k_gwn_default_traversal_stack_capacity,
-    typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
-[[nodiscard]] __device__ inline Real gwn_unsigned_boundary_edge_distance_point_bvh(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
-    gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree, Real const qx, Real const qy,
-    Real const qz, Real const culling_band = std::numeric_limits<Real>::infinity(),
     OverflowCallback const &overflow_callback = {}
 ) noexcept {
-    return detail::gwn_unsigned_boundary_edge_distance_point_bvh_impl<
-        Width, Real, Index, StackCapacity, OverflowCallback>(
-        geometry, bvh, aabb_tree, qx, qy, qz, culling_band, overflow_callback
+    GWN_ASSERT(bvh.is_valid(), "gwn_unsigned_distance requires a valid BVH accessor.");
+    return detail::gwn_unsigned_distance_impl<Width, Real, Index, StackCapacity, OverflowCallback>(
+        bvh, qx, qy, qz, culling_band, overflow_callback
     );
 }
 
-/// \brief Compute point-to-boundary-edge distances for a batch.
+/// \brief Compute unsigned point-to-mesh distances for a batch.
+///
+/// Queries read bounds and leaf-ordered triangle records from \p bvh. \p culling_band limits the
+/// returned distance as described by \ref gwn_unsigned_distance. Each overflowed query writes NaN
+/// when its callback returns.
 template <
     int Width, gwn_real_type Real, gwn_index_type Index = std::uint32_t,
     int StackCapacity = k_gwn_default_traversal_stack_capacity,
     typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
-[[nodiscard]] gwn_status gwn_compute_unsigned_boundary_edge_distance_batch_bvh(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
-    gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree,
-    cuda::std::span<Real const> const query_x, cuda::std::span<Real const> const query_y,
-    cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output,
-    Real const culling_band = std::numeric_limits<Real>::infinity(),
-    cudaStream_t const stream = gwn_default_stream(), OverflowCallback const &overflow_callback = {}
-) noexcept {
-    static_assert(StackCapacity > 0, "Traversal stack capacity must be positive.");
-
-    if (!geometry.is_valid())
-        return gwn_status::invalid_argument("Geometry accessor contains mismatched span lengths.");
-    if (!bvh.is_valid())
-        return gwn_status::invalid_argument("BVH accessor is invalid.");
-    if (bvh.has_internal_root()) {
-        std::uint64_t const required_stack =
-            1u + std::uint64_t(Width - 1) * std::uint64_t(bvh.max_depth);
-        if (required_stack > std::uint64_t(StackCapacity))
-            return gwn_status::invalid_argument(
-                "Traversal stack capacity is below BVH depth bound."
-            );
-    }
-    if (!aabb_tree.is_valid_for(bvh))
-        return gwn_status::invalid_argument("BVH AABB tree is invalid for the given topology.");
-    if (query_x.size() != query_y.size() || query_x.size() != query_z.size())
-        return gwn_status::invalid_argument("Query SoA spans must have identical lengths.");
-    if (query_x.size() != output.size())
-        return gwn_status::invalid_argument("Output span size must match query count.");
-    if (!gwn_span_has_storage(query_x) || !gwn_span_has_storage(query_y) ||
-        !gwn_span_has_storage(query_z) || !gwn_span_has_storage(output)) {
-        return gwn_status::invalid_argument(
-            "Query/output spans must use non-null storage when non-empty."
-        );
-    }
-    if (output.empty())
-        return gwn_status::ok();
-
-    constexpr int k_block_size = detail::k_gwn_default_block_size;
-    return detail::gwn_launch_linear_kernel<k_block_size>(
-        output.size(),
-        detail::gwn_unsigned_boundary_edge_distance_batch_bvh_functor<
-            Width, Real, Index, StackCapacity, OverflowCallback>{
-            geometry, bvh, aabb_tree, query_x, query_y, query_z, output, culling_band,
-            overflow_callback
-        },
-        stream
-    );
-}
-
-/// \brief Width-4 convenience wrapper for batch boundary-edge distance queries.
-template <
-    gwn_real_type Real, gwn_index_type Index = std::uint32_t,
-    int StackCapacity = k_gwn_default_traversal_stack_capacity,
-    typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
-[[nodiscard]] gwn_status gwn_compute_unsigned_boundary_edge_distance_batch_bvh(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh4_topology_accessor<Real, Index> const &bvh,
-    gwn_bvh4_aabb_accessor<Real, Index> const &aabb_tree, cuda::std::span<Real const> const query_x,
-    cuda::std::span<Real const> const query_y, cuda::std::span<Real const> const query_z,
+[[nodiscard]] gwn_status gwn_compute_unsigned_distance_batch(
+    gwn_bvh_object<Width, Real, Index> const &bvh,
+    cuda::std::span<std::type_identity_t<Real> const> const query_x,
+    cuda::std::span<std::type_identity_t<Real> const> const query_y,
+    cuda::std::span<std::type_identity_t<Real> const> const query_z,
     cuda::std::span<Real> const output,
     Real const culling_band = std::numeric_limits<Real>::infinity(),
     cudaStream_t const stream = gwn_default_stream(), OverflowCallback const &overflow_callback = {}
 ) noexcept {
-    return gwn_compute_unsigned_boundary_edge_distance_batch_bvh<
-        4, Real, Index, StackCapacity, OverflowCallback>(
-        geometry, bvh, aabb_tree, query_x, query_y, query_z, output, culling_band, stream,
-        overflow_callback
+    auto const &accessor = bvh.accessor();
+    if (!accessor.is_valid())
+        return gwn_status::invalid_argument("BVH object contains no queryable data.");
+    GWN_RETURN_ON_ERROR(
+        (detail::gwn_validate_traversal_stack_capacity_impl<StackCapacity>(accessor))
     );
-}
-
-/// \brief First-hit result of a ray query against mesh triangles.
-template <gwn_real_type Real, gwn_index_type Index = std::uint32_t>
-using gwn_ray_first_hit_result = detail::gwn_ray_first_hit_result<Real, Index>;
-
-/// \brief Compute the nearest ray-triangle hit for a single ray
-///        (\c __device__ only).
-///
-/// Returns hit distance \c t, primitive id, and Embree-style barycentrics
-/// \c u/\c v (weights of triangle vertices v1/v2). Misses return
-/// \c t = -1, \c primitive_id = gwn_invalid_index<Index>(), and
-/// \c u = \c v = 0. The \c status field is one of
-/// \c k_miss, \c k_hit, or \c k_overflow.
-/// Ray direction vectors do not need to be normalized.
-template <
-    int Width, gwn_real_type Real, gwn_index_type Index,
-    int StackCapacity = k_gwn_default_traversal_stack_capacity,
-    typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
-[[nodiscard]] __device__ inline gwn_ray_first_hit_result<Real, Index> gwn_ray_first_hit_bvh(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
-    gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree, Real const ray_ox,
-    Real const ray_oy, Real const ray_oz, Real const ray_dx, Real const ray_dy, Real const ray_dz,
-    Real const t_min = Real(0), Real const t_max = std::numeric_limits<Real>::infinity(),
-    OverflowCallback const &overflow_callback = {}
-) noexcept {
-    static_assert(StackCapacity > 0, "Traversal stack capacity must be positive.");
-    return detail::gwn_ray_first_hit_bvh_impl<Width, Real, Index, StackCapacity, OverflowCallback>(
-        geometry, bvh, aabb_tree, ray_ox, ray_oy, ray_oz, ray_dx, ray_dy, ray_dz, t_min, t_max,
-        overflow_callback
-    );
-}
-
-/// \brief Compute the nearest ray-triangle hit (`t` + primitive id) for a
-///        batch of rays using BVH + AABB traversal.
-///
-/// Rays are evaluated over the interval [`t_min`, `t_max`]. Misses write
-/// `t = -1` and `primitive_id = gwn_invalid_index<Index>()`.
-template <
-    int Width, gwn_real_type Real, gwn_index_type Index = std::uint32_t,
-    int StackCapacity = k_gwn_default_traversal_stack_capacity,
-    typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
-[[nodiscard]] gwn_status gwn_compute_ray_first_hit_batch_bvh(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
-    gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree,
-    cuda::std::span<Real const> const ray_origin_x, cuda::std::span<Real const> const ray_origin_y,
-    cuda::std::span<Real const> const ray_origin_z, cuda::std::span<Real const> const ray_dir_x,
-    cuda::std::span<Real const> const ray_dir_y, cuda::std::span<Real const> const ray_dir_z,
-    cuda::std::span<Real> const output_t, cuda::std::span<Index> const output_primitive_id,
-    Real const t_min = Real(0), Real const t_max = std::numeric_limits<Real>::infinity(),
-    cudaStream_t const stream = gwn_default_stream(), OverflowCallback const &overflow_callback = {}
-) noexcept {
-    static_assert(StackCapacity > 0, "Traversal stack capacity must be positive.");
-
-    if (!geometry.is_valid())
-        return gwn_status::invalid_argument("Geometry accessor contains mismatched span lengths.");
-    if (!bvh.is_valid())
-        return gwn_status::invalid_argument("BVH accessor is invalid.");
-    if (bvh.has_internal_root()) {
-        std::uint64_t const required_stack =
-            1u + std::uint64_t(Width - 1) * std::uint64_t(bvh.max_depth);
-        if (required_stack > std::uint64_t(StackCapacity))
-            return gwn_status::invalid_argument(
-                "Traversal stack capacity is below BVH depth bound."
-            );
+    if (query_x.size() != query_y.size() || query_x.size() != query_z.size())
+        return gwn_status::invalid_argument("Query SoA spans must have identical lengths.");
+    if (query_x.size() != output.size())
+        return gwn_status::invalid_argument("Output span size must match query count.");
+    if (!gwn_span_has_storage(query_x) || !gwn_span_has_storage(query_y) ||
+        !gwn_span_has_storage(query_z) || !gwn_span_has_storage(output)) {
+        return gwn_status::invalid_argument(
+            "Query/output spans must use non-null storage when non-empty."
+        );
     }
-    if (!aabb_tree.is_valid_for(bvh))
-        return gwn_status::invalid_argument("BVH AABB tree is invalid for the given topology.");
-
-    gwn_status const span_status = detail::gwn_validate_ray_first_hit_batch_spans<Real, Index>(
-        ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x, ray_dir_y, ray_dir_z, output_t,
-        output_primitive_id
-    );
-    if (!span_status.is_ok())
-        return span_status;
-
-    if (!(t_max >= t_min))
-        return gwn_status::invalid_argument("ray first-hit: requires t_max >= t_min.");
-    std::size_t const n = ray_origin_x.size();
-    if (n == 0)
+    if (output.empty())
         return gwn_status::ok();
 
-    constexpr int k_block_size = detail::k_gwn_default_block_size;
-    return detail::gwn_launch_linear_kernel<k_block_size>(
-        n,
-        detail::gwn_ray_first_hit_batch_bvh_functor<
+    return detail::gwn_launch_linear_kernel<detail::k_gwn_default_block_size>(
+        output.size(),
+        detail::gwn_unsigned_distance_batch_functor<
             Width, Real, Index, StackCapacity, OverflowCallback>{
-            geometry, bvh, aabb_tree, ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x,
-            ray_dir_y, ray_dir_z, output_t, output_primitive_id, t_min, t_max, overflow_callback
+            accessor, query_x, query_y, query_z, output, culling_band, overflow_callback
         },
         stream
     );
 }
 
-/// \brief Width-4 convenience wrapper for batch ray first-hit queries.
-template <
-    gwn_real_type Real, gwn_index_type Index = std::uint32_t,
-    int StackCapacity = k_gwn_default_traversal_stack_capacity,
-    typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
-[[nodiscard]] gwn_status gwn_compute_ray_first_hit_batch_bvh(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh4_topology_accessor<Real, Index> const &bvh,
-    gwn_bvh4_aabb_accessor<Real, Index> const &aabb_tree,
-    cuda::std::span<Real const> const ray_origin_x, cuda::std::span<Real const> const ray_origin_y,
-    cuda::std::span<Real const> const ray_origin_z, cuda::std::span<Real const> const ray_dir_x,
-    cuda::std::span<Real const> const ray_dir_y, cuda::std::span<Real const> const ray_dir_z,
-    cuda::std::span<Real> const output_t, cuda::std::span<Index> const output_primitive_id,
-    Real const t_min = Real(0), Real const t_max = std::numeric_limits<Real>::infinity(),
-    cudaStream_t const stream = gwn_default_stream(), OverflowCallback const &overflow_callback = {}
-) noexcept {
-    return gwn_compute_ray_first_hit_batch_bvh<4, Real, Index, StackCapacity, OverflowCallback>(
-        geometry, bvh, aabb_tree, ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x, ray_dir_y,
-        ray_dir_z, output_t, output_primitive_id, t_min, t_max, stream, overflow_callback
-    );
-}
-
-/// \brief Compute exact winding number for a single query point (\c __device__ only).
+/// \brief Compute the nearest ray-triangle hit from a canonical BVH in device code.
 ///
-/// Uses BVH traversal and exact solid-angle evaluation at leaf nodes.
-/// Returns the winding number as a scalar value.
+/// The result contains hit distance, original primitive ID, barycentric weights for the second and
+/// third triangle vertices, and three scalar components of the unnormalized oriented geometric
+/// normal. A miss returns \c t=-1 and an invalid primitive ID. Stack overflow invokes
+/// \p overflow_callback and returns the best hit found with \c k_overflow status when the callback
+/// returns. \p bvh must be valid and the ray interval must satisfy `t_max >= t_min`.
 template <
     int Width, gwn_real_type Real, gwn_index_type Index,
     int StackCapacity = k_gwn_default_traversal_stack_capacity,
     typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
-[[nodiscard]] __device__ inline Real gwn_winding_number_point_bvh_exact(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh, Real const qx, Real const qy,
-    Real const qz, OverflowCallback const &overflow_callback = {}
+[[nodiscard]] __device__ inline gwn_ray_first_hit_result<Real, Index> gwn_ray_first_hit(
+    gwn_bvh_accessor<Width, Real, Index> const &bvh, Real const ray_ox, Real const ray_oy,
+    Real const ray_oz, Real const ray_dx, Real const ray_dy, Real const ray_dz,
+    Real const t_min = Real(0), Real const t_max = std::numeric_limits<Real>::infinity(),
+    OverflowCallback const &overflow_callback = {}
 ) noexcept {
-    return detail::gwn_winding_number_point_bvh_exact_impl<
-        Width, Real, Index, StackCapacity, OverflowCallback>(
-        geometry, bvh, qx, qy, qz, overflow_callback
+    GWN_ASSERT(bvh.is_valid(), "gwn_ray_first_hit requires a valid BVH accessor.");
+    GWN_ASSERT(t_max >= t_min, "gwn_ray_first_hit requires t_max >= t_min.");
+    return detail::gwn_ray_first_hit_impl<Width, Real, Index, StackCapacity, OverflowCallback>(
+        bvh, ray_ox, ray_oy, ray_oz, ray_dx, ray_dy, ray_dz, t_min, t_max, overflow_callback
     );
 }
 
-/// \brief Compute Taylor-approximated winding number for a single query point
-///        (\c __device__ only).
+/// \brief Compute nearest ray-triangle hits for a batch.
 ///
-/// Uses BVH traversal with Taylor moment approximation at far-field nodes
-/// and exact solid-angle evaluation at near-field leaf nodes.
-/// Returns the winding number as a scalar value.
+/// Rays are evaluated on the closed interval [\p t_min, \p t_max]. Each output record has the
+/// same fields and status semantics as \ref gwn_ray_first_hit. The launch is asynchronous with
+/// respect to the host.
+template <
+    int Width, gwn_real_type Real, gwn_index_type Index = std::uint32_t,
+    int StackCapacity = k_gwn_default_traversal_stack_capacity,
+    typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
+[[nodiscard]] gwn_status gwn_compute_ray_first_hit_batch(
+    gwn_bvh_object<Width, Real, Index> const &bvh,
+    cuda::std::span<std::type_identity_t<Real> const> const ray_origin_x,
+    cuda::std::span<std::type_identity_t<Real> const> const ray_origin_y,
+    cuda::std::span<std::type_identity_t<Real> const> const ray_origin_z,
+    cuda::std::span<std::type_identity_t<Real> const> const ray_dir_x,
+    cuda::std::span<std::type_identity_t<Real> const> const ray_dir_y,
+    cuda::std::span<std::type_identity_t<Real> const> const ray_dir_z,
+    cuda::std::span<gwn_ray_first_hit_result<Real, Index>> const output, Real const t_min = Real(0),
+    Real const t_max = std::numeric_limits<Real>::infinity(),
+    cudaStream_t const stream = gwn_default_stream(), OverflowCallback const &overflow_callback = {}
+) noexcept {
+    auto const &accessor = bvh.accessor();
+    if (!accessor.is_valid())
+        return gwn_status::invalid_argument("BVH object contains no queryable data.");
+    GWN_RETURN_ON_ERROR(
+        (detail::gwn_validate_traversal_stack_capacity_impl<StackCapacity>(accessor))
+    );
+
+    gwn_status const span_status = detail::gwn_validate_ray_first_hit_batch_spans<Real, Index>(
+        ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x, ray_dir_y, ray_dir_z, output
+    );
+    if (!span_status.is_ok())
+        return span_status;
+    if (!(t_max >= t_min))
+        return gwn_status::invalid_argument("ray first-hit: requires t_max >= t_min.");
+    if (ray_origin_x.empty())
+        return gwn_status::ok();
+
+    auto const launch = [&]<bool UsePackedTraversal>() noexcept {
+        return detail::gwn_launch_linear_kernel<detail::k_gwn_ray_first_hit_block_size>(
+            ray_origin_x.size(),
+            detail::gwn_ray_first_hit_batch_functor<
+                Width, Real, Index, StackCapacity, OverflowCallback, UsePackedTraversal>{
+                accessor,
+                ray_origin_x,
+                ray_origin_y,
+                ray_origin_z,
+                ray_dir_x,
+                ray_dir_y,
+                ray_dir_z,
+                output,
+                t_min,
+                t_max,
+                overflow_callback,
+            },
+            stream
+        );
+    };
+
+    if constexpr (
+        Width == 4 && std::is_same_v<Real, float> && std::is_same_v<Index, std::uint32_t>
+    ) {
+        // A leaf payload reserves its high bit and two child-slot bits, leaving 29 bits for the
+        // parent node offset. The same node-count limit also keeps internal payloads unambiguous.
+        constexpr std::uint64_t k_leaf_parent_limit = std::uint64_t(1) << 29;
+        // Dispatch before launch so the common kernel owns only its 32-bit pending-child stack.
+        if (accessor.has_internal_root() && accessor.nodes.size() < k_leaf_parent_limit &&
+            accessor.packed_stack_bound <= StackCapacity) {
+            return launch.template operator()<true>();
+        }
+    }
+    // Canonical traversal stores only internal references, whose bound was validated above.
+    return launch.template operator()<false>();
+}
+
+/// \brief Compute exact winding number from the canonical triangle sequence in device code.
+///
+/// Exact winding evaluates every triangle record directly. It does not read hierarchy nodes or
+/// allocate a traversal stack. \p bvh must be valid.
+template <int Width, gwn_real_type Real, gwn_index_type Index>
+[[nodiscard]] __device__ inline Real gwn_winding_number_exact(
+    gwn_bvh_accessor<Width, Real, Index> const &bvh, Real const qx, Real const qy, Real const qz
+) noexcept {
+    GWN_ASSERT(bvh.is_valid(), "gwn_winding_number_exact requires a valid BVH accessor.");
+    return detail::gwn_winding_number_exact_impl(bvh, qx, qy, qz);
+}
+
+/// \brief Compute exact winding numbers for a batch.
+///
+/// Each thread scans the complete canonical triangle sequence without hierarchy traversal.
+template <int Width, gwn_real_type Real, gwn_index_type Index = std::uint32_t>
+[[nodiscard]] gwn_status gwn_compute_winding_number_exact_batch(
+    gwn_bvh_object<Width, Real, Index> const &bvh,
+    cuda::std::span<std::type_identity_t<Real> const> const query_x,
+    cuda::std::span<std::type_identity_t<Real> const> const query_y,
+    cuda::std::span<std::type_identity_t<Real> const> const query_z,
+    cuda::std::span<Real> const output, cudaStream_t const stream = gwn_default_stream()
+) noexcept {
+    auto const &accessor = bvh.accessor();
+    if (!accessor.is_valid())
+        return gwn_status::invalid_argument("BVH object contains no queryable data.");
+    if (query_x.size() != query_y.size() || query_x.size() != query_z.size())
+        return gwn_status::invalid_argument("Query SoA spans must have identical lengths.");
+    if (query_x.size() != output.size())
+        return gwn_status::invalid_argument("Output span size must match query count.");
+    if (!gwn_span_has_storage(query_x) || !gwn_span_has_storage(query_y) ||
+        !gwn_span_has_storage(query_z) || !gwn_span_has_storage(output)) {
+        return gwn_status::invalid_argument(
+            "Query/output spans must use non-null storage when non-empty."
+        );
+    }
+    if (output.empty())
+        return gwn_status::ok();
+
+    return detail::gwn_launch_linear_kernel<detail::k_gwn_default_block_size>(
+        output.size(),
+        detail::gwn_winding_number_exact_batch_functor<Width, Real, Index>{
+            accessor, query_x, query_y, query_z, output
+        },
+        stream
+    );
+}
+
+/// \brief Compute Taylor-approximated winding number in device code.
+///
+/// Far-field children use \p moment; near-field leaves use the canonical triangle records.
+/// Stack overflow invokes \p overflow_callback and returns NaN when the callback returns.
+/// \p bvh and \p moment must be valid and aligned. \p accuracy_scale must be nonnegative;
+/// increasing it descends more children.
 template <
     int Order, int Width, gwn_real_type Real, gwn_index_type Index,
     int StackCapacity = k_gwn_default_traversal_stack_capacity,
     typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
-[[nodiscard]] __device__ inline Real gwn_winding_number_point_bvh_taylor(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
-    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &moment_tree, Real const qx,
-    Real const qy, Real const qz, Real const accuracy_scale = Real(2),
+[[nodiscard]] __device__ inline Real gwn_winding_number_taylor(
+    gwn_bvh_accessor<Width, Real, Index> const &bvh,
+    gwn_bvh_moment_accessor<Width, Order, Real, Index> const &moment, Real const qx, Real const qy,
+    Real const qz, Real const accuracy_scale = Real(2),
     OverflowCallback const &overflow_callback = {}
 ) noexcept {
     static_assert(
         Order == 0 || Order == 1 || Order == 2,
-        "gwn_winding_number_point_bvh_taylor currently supports Order 0, 1, and 2."
+        "gwn_winding_number_taylor supports Order 0, 1, and 2."
     );
-    return detail::gwn_winding_number_point_bvh_taylor_impl<
+    GWN_ASSERT(
+        moment.is_valid_for(bvh), "gwn_winding_number_taylor requires aligned BVH and moment data."
+    );
+    GWN_ASSERT(
+        accuracy_scale >= Real(0), "gwn_winding_number_taylor requires nonnegative accuracy scale."
+    );
+    return detail::gwn_winding_number_taylor_impl<
         Order, Width, Real, Index, StackCapacity, OverflowCallback>(
-        geometry, bvh, moment_tree, qx, qy, qz, accuracy_scale, overflow_callback
+        bvh, moment, qx, qy, qz, accuracy_scale, overflow_callback
     );
 }
 
-/// \brief Compute winding numbers for a batch using Taylor-accelerated BVH
-///        traversal.
+/// \brief Compute Taylor-approximated winding numbers for a batch.
+///
+/// \p accuracy_scale must be nonnegative. Each overflowed query writes NaN when its callback
+/// returns.
 template <
     int Order, int Width, gwn_real_type Real, gwn_index_type Index = std::uint32_t,
     int StackCapacity = k_gwn_default_traversal_stack_capacity,
     typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
-[[nodiscard]] gwn_status gwn_compute_winding_number_batch_bvh_taylor(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
-    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &moment_tree,
-    cuda::std::span<Real const> const query_x, cuda::std::span<Real const> const query_y,
-    cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output,
-    Real const accuracy_scale = Real(2), cudaStream_t const stream = gwn_default_stream(),
-    OverflowCallback const &overflow_callback = {}
+[[nodiscard]] gwn_status gwn_compute_winding_number_taylor_batch(
+    gwn_bvh_object<Width, Real, Index> const &bvh,
+    gwn_bvh_moment_object<Width, Order, Real, Index> const &moment,
+    cuda::std::span<std::type_identity_t<Real> const> const query_x,
+    cuda::std::span<std::type_identity_t<Real> const> const query_y,
+    cuda::std::span<std::type_identity_t<Real> const> const query_z,
+    cuda::std::span<Real> const output, Real const accuracy_scale = Real(2),
+    cudaStream_t const stream = gwn_default_stream(), OverflowCallback const &overflow_callback = {}
 ) noexcept {
     static_assert(
         Order == 0 || Order == 1 || Order == 2,
-        "gwn_compute_winding_number_batch_bvh_taylor currently supports Order 0, 1, and 2."
+        "gwn_compute_winding_number_taylor_batch supports Order 0, 1, and 2."
     );
-    static_assert(StackCapacity > 0, "Traversal stack capacity must be positive.");
-
-    if (!geometry.is_valid())
-        return gwn_status::invalid_argument("Geometry accessor contains mismatched span lengths.");
-    if (!bvh.is_valid())
-        return gwn_status::invalid_argument("BVH accessor is invalid.");
-    if (bvh.has_internal_root()) {
-        std::uint64_t const required_stack =
-            1u + std::uint64_t(Width - 1) * std::uint64_t(bvh.max_depth);
-        if (required_stack > std::uint64_t(StackCapacity))
-            return gwn_status::invalid_argument(
-                "Traversal stack capacity is below BVH depth bound."
-            );
-    }
-    if (!moment_tree.is_valid_for(bvh))
-        return gwn_status::invalid_argument("BVH moment tree is invalid for the given topology.");
+    auto const &bvh_accessor = bvh.accessor();
+    auto const &moment_accessor = moment.accessor();
+    if (!bvh_accessor.is_valid())
+        return gwn_status::invalid_argument("BVH object contains no queryable data.");
+    GWN_RETURN_ON_ERROR(
+        (detail::gwn_validate_traversal_stack_capacity_impl<StackCapacity>(bvh_accessor))
+    );
+    if (!moment_accessor.is_valid_for(bvh_accessor))
+        return gwn_status::invalid_argument("Moment object is not aligned with the BVH.");
+    if (!(accuracy_scale >= Real(0)))
+        return gwn_status::invalid_argument("Taylor accuracy scale must be nonnegative.");
     if (query_x.size() != query_y.size() || query_x.size() != query_z.size())
         return gwn_status::invalid_argument("Query SoA spans must have identical lengths.");
     if (query_x.size() != output.size())
@@ -419,108 +374,20 @@ template <
     if (output.empty())
         return gwn_status::ok();
 
-    constexpr int k_block_size = detail::k_gwn_default_block_size;
-    return detail::gwn_launch_linear_kernel<k_block_size>(
+    return detail::gwn_launch_linear_kernel<detail::k_gwn_default_block_size>(
         output.size(),
-        detail::gwn_winding_number_batch_bvh_taylor_functor<
+        detail::gwn_winding_number_taylor_batch_functor<
             Order, Width, Real, Index, StackCapacity, OverflowCallback>{
-            geometry, bvh, moment_tree, query_x, query_y, query_z, output, accuracy_scale,
-            overflow_callback
+            bvh_accessor,
+            moment_accessor,
+            query_x,
+            query_y,
+            query_z,
+            output,
+            accuracy_scale,
+            overflow_callback,
         },
         stream
-    );
-}
-
-/// \brief Width-4 convenience wrapper for Taylor BVH batch winding-number
-///        queries.
-///
-/// \copydetails gwn_compute_winding_number_batch_bvh_taylor
-template <
-    int Order, gwn_real_type Real, gwn_index_type Index = std::uint32_t,
-    int StackCapacity = k_gwn_default_traversal_stack_capacity,
-    typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
-[[nodiscard]] gwn_status gwn_compute_winding_number_batch_bvh_taylor(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh4_topology_accessor<Real, Index> const &bvh,
-    gwn_bvh4_moment_accessor<Order, Real, Index> const &moment_tree,
-    cuda::std::span<Real const> const query_x, cuda::std::span<Real const> const query_y,
-    cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output,
-    Real const accuracy_scale = Real(2), cudaStream_t const stream = gwn_default_stream(),
-    OverflowCallback const &overflow_callback = {}
-) noexcept {
-    return gwn_compute_winding_number_batch_bvh_taylor<
-        Order, 4, Real, Index, StackCapacity, OverflowCallback>(
-        geometry, bvh, moment_tree, query_x, query_y, query_z, output, accuracy_scale, stream,
-        overflow_callback
-    );
-}
-
-/// \brief Compute winding numbers by traversing the BVH and summing triangle
-///        solid angles.
-template <
-    int Width, gwn_real_type Real, gwn_index_type Index = std::uint32_t,
-    int StackCapacity = k_gwn_default_traversal_stack_capacity,
-    typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
-[[nodiscard]] gwn_status gwn_compute_winding_number_batch_bvh_exact(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
-    cuda::std::span<Real const> const query_x, cuda::std::span<Real const> const query_y,
-    cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output,
-    cudaStream_t const stream = gwn_default_stream(), OverflowCallback const &overflow_callback = {}
-) noexcept {
-    static_assert(StackCapacity > 0, "Traversal stack capacity must be positive.");
-
-    if (!geometry.is_valid())
-        return gwn_status::invalid_argument("Geometry accessor contains mismatched span lengths.");
-    if (!bvh.is_valid())
-        return gwn_status::invalid_argument("BVH accessor is invalid.");
-    if (bvh.has_internal_root()) {
-        std::uint64_t const required_stack =
-            1u + std::uint64_t(Width - 1) * std::uint64_t(bvh.max_depth);
-        if (required_stack > std::uint64_t(StackCapacity))
-            return gwn_status::invalid_argument(
-                "Traversal stack capacity is below BVH depth bound."
-            );
-    }
-    if (query_x.size() != query_y.size() || query_x.size() != query_z.size())
-        return gwn_status::invalid_argument("Query SoA spans must have identical lengths.");
-    if (query_x.size() != output.size())
-        return gwn_status::invalid_argument("Output span size must match query count.");
-    if (!gwn_span_has_storage(query_x) || !gwn_span_has_storage(query_y) ||
-        !gwn_span_has_storage(query_z) || !gwn_span_has_storage(output)) {
-        return gwn_status::invalid_argument(
-            "Query/output spans must use non-null storage when non-empty."
-        );
-    }
-    if (output.empty())
-        return gwn_status::ok();
-
-    constexpr int k_block_size = detail::k_gwn_default_block_size;
-    return detail::gwn_launch_linear_kernel<k_block_size>(
-        output.size(),
-        detail::gwn_winding_number_batch_bvh_exact_functor<
-            Width, Real, Index, StackCapacity, OverflowCallback>{
-            geometry, bvh, query_x, query_y, query_z, output, overflow_callback
-        },
-        stream
-    );
-}
-
-/// \brief Width-4 convenience wrapper for exact BVH batch winding-number queries.
-template <
-    gwn_real_type Real, gwn_index_type Index = std::uint32_t,
-    int StackCapacity = k_gwn_default_traversal_stack_capacity,
-    typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
-[[nodiscard]] gwn_status gwn_compute_winding_number_batch_bvh_exact(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh4_topology_accessor<Real, Index> const &bvh, cuda::std::span<Real const> const query_x,
-    cuda::std::span<Real const> const query_y, cuda::std::span<Real const> const query_z,
-    cuda::std::span<Real> const output, cudaStream_t const stream = gwn_default_stream(),
-    OverflowCallback const &overflow_callback = {}
-) noexcept {
-    return gwn_compute_winding_number_batch_bvh_exact<
-        4, Real, Index, StackCapacity, OverflowCallback>(
-        geometry, bvh, query_x, query_y, query_z, output, stream, overflow_callback
     );
 }
 
@@ -528,7 +395,10 @@ template <
 ///
 /// The query evaluates the signed ray-crossing term and the boundary spherical
 /// area term from Martens et al. Retry order is `+Z`, `+X`, `+Y`. When all
-/// three axes are singular, the result is NaN.
+/// three axes are singular, the result is NaN. Traversal overflow invokes
+/// \p overflow_callback and returns NaN when the callback returns. All accessors must be valid;
+/// \p boundary_chain must come from \p geometry's topology, and \p bvh must represent the same
+/// geometry state.
 ///
 /// Reference: Martens, Trettner, and Bessmeltsev, "The Antipodal Method:
 /// Fast, Accurate, and Robust 3D Generalized Winding Numbers," ACM TOG 45(4),
@@ -537,16 +407,25 @@ template <
     int Width, gwn_real_type Real, gwn_index_type Index,
     int StackCapacity = k_gwn_default_traversal_stack_capacity,
     typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
-[[nodiscard]] __device__ inline Real gwn_winding_number_point_bvh_antipodal(
+[[nodiscard]] __device__ inline Real gwn_winding_number_antipodal(
     gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
-    gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree,
+    gwn_bvh_accessor<Width, Real, Index> const &bvh,
     gwn_boundary_chain_accessor<Index> const &boundary_chain, Real const qx, Real const qy,
     Real const qz, OverflowCallback const &overflow_callback = {}
 ) noexcept {
-    return detail::gwn_winding_number_point_bvh_antipodal_impl<
+    GWN_ASSERT(
+        geometry.is_valid() && bvh.is_valid() && boundary_chain.is_valid(),
+        "gwn_winding_number_antipodal requires valid accessors."
+    );
+    GWN_ASSERT(
+        bvh.triangles.size() == geometry.triangle_count() &&
+            boundary_chain.mesh_vertex_count == geometry.vertex_count() &&
+            boundary_chain.mesh_triangle_count == geometry.triangle_count(),
+        "gwn_winding_number_antipodal requires accessors for the same mesh shape."
+    );
+    return detail::gwn_winding_number_antipodal_impl<
         Width, Real, Index, StackCapacity, OverflowCallback>(
-        geometry, bvh, aabb_tree, boundary_chain, qx, qy, qz, overflow_callback
+        geometry, bvh, boundary_chain, qx, qy, qz, overflow_callback
     );
 }
 
@@ -554,7 +433,9 @@ template <
 ///
 /// The query evaluates the signed ray-crossing term and the boundary spherical
 /// area term from Martens et al. Retry order is `+Z`, `+X`, `+Y`. Queries with
-/// three singular axes write NaN.
+/// three singular axes write NaN. Overflowed queries also write NaN when their
+/// callbacks return. The boundary chain must come from the geometry's topology, and the BVH must
+/// represent the same geometry state; structural counts are validated before launch.
 ///
 /// Reference: Martens, Trettner, and Bessmeltsev, "The Antipodal Method:
 /// Fast, Accurate, and Robust 3D Generalized Winding Numbers," ACM TOG 45(4),
@@ -563,35 +444,31 @@ template <
     int Width, gwn_real_type Real, gwn_index_type Index = std::uint32_t,
     int StackCapacity = k_gwn_default_traversal_stack_capacity,
     typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
-[[nodiscard]] gwn_status gwn_compute_winding_number_batch_bvh_antipodal(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
-    gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree,
-    gwn_boundary_chain_accessor<Index> const &boundary_chain,
-    cuda::std::span<Real const> const query_x, cuda::std::span<Real const> const query_y,
-    cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output,
-    cudaStream_t const stream = gwn_default_stream(), OverflowCallback const &overflow_callback = {}
+[[nodiscard]] gwn_status gwn_compute_winding_number_antipodal_batch(
+    gwn_geometry_object<Real, Index> const &geometry, gwn_bvh_object<Width, Real, Index> const &bvh,
+    gwn_boundary_chain_object<Index> const &boundary_chain,
+    cuda::std::span<std::type_identity_t<Real> const> const query_x,
+    cuda::std::span<std::type_identity_t<Real> const> const query_y,
+    cuda::std::span<std::type_identity_t<Real> const> const query_z,
+    cuda::std::span<Real> const output, cudaStream_t const stream = gwn_default_stream(),
+    OverflowCallback const &overflow_callback = {}
 ) noexcept {
-    static_assert(StackCapacity > 0, "Traversal stack capacity must be positive.");
-
-    if (!geometry.is_valid())
-        return gwn_status::invalid_argument("Geometry accessor contains mismatched span lengths.");
-    if (!bvh.is_valid())
-        return gwn_status::invalid_argument("BVH accessor is invalid.");
-    if (bvh.has_internal_root()) {
-        std::uint64_t const required_stack =
-            1u + std::uint64_t(Width - 1) * std::uint64_t(bvh.max_depth);
-        if (required_stack > std::uint64_t(StackCapacity))
-            return gwn_status::invalid_argument(
-                "Traversal stack capacity is below BVH depth bound."
-            );
-    }
-    if (!aabb_tree.is_valid_for(bvh))
-        return gwn_status::invalid_argument("BVH AABB tree is invalid for the given topology.");
-    if (!boundary_chain.is_valid())
-        return gwn_status::invalid_argument("Boundary chain accessor is invalid or unbuilt.");
-    if (boundary_chain.mesh_vertex_count != geometry.vertex_count() ||
-        boundary_chain.mesh_triangle_count != geometry.triangle_count()) {
+    auto const &geometry_accessor = geometry.accessor();
+    auto const &bvh_accessor = bvh.accessor();
+    auto const &boundary_accessor = boundary_chain.accessor();
+    if (!geometry_accessor.is_valid())
+        return gwn_status::invalid_argument("Geometry object contains no queryable data.");
+    if (!bvh_accessor.is_valid())
+        return gwn_status::invalid_argument("BVH object contains no queryable data.");
+    if (bvh_accessor.triangles.size() != geometry_accessor.triangle_count())
+        return gwn_status::invalid_argument("Geometry and BVH triangle counts differ.");
+    GWN_RETURN_ON_ERROR(
+        (detail::gwn_validate_traversal_stack_capacity_impl<StackCapacity>(bvh_accessor))
+    );
+    if (!boundary_accessor.is_valid())
+        return gwn_status::invalid_argument("Boundary chain object is unbuilt or invalid.");
+    if (boundary_accessor.mesh_vertex_count != geometry_accessor.vertex_count() ||
+        boundary_accessor.mesh_triangle_count != geometry_accessor.triangle_count()) {
         return gwn_status::invalid_argument("Boundary chain belongs to a different mesh shape.");
     }
     if (query_x.size() != query_y.size() || query_x.size() != query_z.size())
@@ -609,36 +486,12 @@ template <
 
     return detail::gwn_launch_linear_kernel<detail::k_gwn_default_block_size>(
         output.size(),
-        detail::gwn_winding_number_batch_bvh_antipodal_functor<
+        detail::gwn_winding_number_antipodal_batch_functor<
             Width, Real, Index, StackCapacity, OverflowCallback>{
-            geometry, bvh, aabb_tree, boundary_chain, query_x, query_y, query_z, output,
+            geometry_accessor, bvh_accessor, boundary_accessor, query_x, query_y, query_z, output,
             overflow_callback
         },
         stream
-    );
-}
-
-/// \brief Compute width-4 Antipodal winding numbers for a batch.
-///
-/// Uses the Antipodal retry order `+Z`, `+X`, `+Y`; queries with three singular
-/// axes write NaN.
-template <
-    gwn_real_type Real, gwn_index_type Index = std::uint32_t,
-    int StackCapacity = k_gwn_default_traversal_stack_capacity,
-    typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
-[[nodiscard]] gwn_status gwn_compute_winding_number_batch_bvh_antipodal(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh4_topology_accessor<Real, Index> const &bvh,
-    gwn_bvh4_aabb_accessor<Real, Index> const &aabb_tree,
-    gwn_boundary_chain_accessor<Index> const &boundary_chain,
-    cuda::std::span<Real const> const query_x, cuda::std::span<Real const> const query_y,
-    cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output,
-    cudaStream_t const stream = gwn_default_stream(), OverflowCallback const &overflow_callback = {}
-) noexcept {
-    return gwn_compute_winding_number_batch_bvh_antipodal<
-        4, Real, Index, StackCapacity, OverflowCallback>(
-        geometry, bvh, aabb_tree, boundary_chain, query_x, query_y, query_z, output, stream,
-        overflow_callback
     );
 }
 
@@ -646,21 +499,26 @@ template <
 ///
 /// The query differentiates the boundary spherical-area term from Martens et
 /// al. Retry order is `+Z`, `+X`, `+Y`. When all three axes are singular, the
-/// result is `(NaN, NaN, NaN)`.
+/// result is `(NaN, NaN, NaN)`. Both accessors must be valid, and \p boundary_chain must come from
+/// \p geometry's topology.
 ///
 /// Reference: The Antipodal Method: Fast, Accurate, and Robust 3D Generalized
 /// Winding Numbers. https://doi.org/10.1145/3811323
 template <gwn_real_type Real, gwn_index_type Index>
-[[nodiscard]] __device__ inline gwn_vec3<Real> gwn_winding_gradient_point_antipodal(
+[[nodiscard]] __device__ inline gwn_vec3<Real> gwn_winding_gradient_antipodal(
     gwn_geometry_accessor<Real, Index> const &geometry,
     gwn_boundary_chain_accessor<Index> const &boundary_chain, Real const qx, Real const qy,
     Real const qz
 ) noexcept {
-    if (!geometry.is_valid() || !boundary_chain.is_valid())
-        return detail::gwn_antipodal_gradient_nan_impl<Real>();
-    if (boundary_chain.mesh_vertex_count != geometry.vertex_count() ||
-        boundary_chain.mesh_triangle_count != geometry.triangle_count())
-        return detail::gwn_antipodal_gradient_nan_impl<Real>();
+    GWN_ASSERT(
+        geometry.is_valid() && boundary_chain.is_valid(),
+        "gwn_winding_gradient_antipodal requires valid accessors."
+    );
+    GWN_ASSERT(
+        boundary_chain.mesh_vertex_count == geometry.vertex_count() &&
+            boundary_chain.mesh_triangle_count == geometry.triangle_count(),
+        "gwn_winding_gradient_antipodal requires accessors for the same mesh shape."
+    );
 
     detail::gwn_query_vec3<Real> const query(qx, qy, qz);
     return detail::gwn_winding_gradient_point_antipodal_impl(geometry, boundary_chain, query);
@@ -670,25 +528,29 @@ template <gwn_real_type Real, gwn_index_type Index>
 ///
 /// The query differentiates the boundary spherical-area term from Martens et
 /// al. Retry order is `+Z`, `+X`, `+Y`. Queries with three singular axes write
-/// `(NaN, NaN, NaN)`.
+/// `(NaN, NaN, NaN)`. The boundary chain must come from the geometry's topology; structural counts
+/// are validated before launch.
 ///
 /// Reference: The Antipodal Method: Fast, Accurate, and Robust 3D Generalized
 /// Winding Numbers. https://doi.org/10.1145/3811323
 template <gwn_real_type Real, gwn_index_type Index = std::uint32_t>
-[[nodiscard]] gwn_status gwn_compute_winding_gradient_batch_antipodal(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_boundary_chain_accessor<Index> const &boundary_chain,
-    cuda::std::span<Real const> const query_x, cuda::std::span<Real const> const query_y,
-    cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output_x,
-    cuda::std::span<Real> const output_y, cuda::std::span<Real> const output_z,
-    cudaStream_t const stream = gwn_default_stream()
+[[nodiscard]] gwn_status gwn_compute_winding_gradient_antipodal_batch(
+    gwn_geometry_object<Real, Index> const &geometry,
+    gwn_boundary_chain_object<Index> const &boundary_chain,
+    cuda::std::span<std::type_identity_t<Real> const> const query_x,
+    cuda::std::span<std::type_identity_t<Real> const> const query_y,
+    cuda::std::span<std::type_identity_t<Real> const> const query_z,
+    cuda::std::span<Real> const output_x, cuda::std::span<Real> const output_y,
+    cuda::std::span<Real> const output_z, cudaStream_t const stream = gwn_default_stream()
 ) noexcept {
-    if (!geometry.is_valid())
-        return gwn_status::invalid_argument("Geometry accessor contains mismatched span lengths.");
-    if (!boundary_chain.is_valid())
-        return gwn_status::invalid_argument("Boundary chain accessor is invalid or unbuilt.");
-    if (boundary_chain.mesh_vertex_count != geometry.vertex_count() ||
-        boundary_chain.mesh_triangle_count != geometry.triangle_count()) {
+    auto const &geometry_accessor = geometry.accessor();
+    auto const &boundary_accessor = boundary_chain.accessor();
+    if (!geometry_accessor.is_valid())
+        return gwn_status::invalid_argument("Geometry object contains no queryable data.");
+    if (!boundary_accessor.is_valid())
+        return gwn_status::invalid_argument("Boundary chain object is unbuilt or invalid.");
+    if (boundary_accessor.mesh_vertex_count != geometry_accessor.vertex_count() ||
+        boundary_accessor.mesh_triangle_count != geometry_accessor.triangle_count()) {
         return gwn_status::invalid_argument("Boundary chain belongs to a different mesh shape.");
     }
     if (query_x.size() != query_y.size() || query_x.size() != query_z.size())
@@ -708,249 +570,81 @@ template <gwn_real_type Real, gwn_index_type Index = std::uint32_t>
 
     return detail::gwn_launch_linear_kernel<detail::k_gwn_default_block_size>(
         output_x.size(),
-        detail::gwn_winding_gradient_batch_antipodal_functor<Real, Index>{
-            geometry, boundary_chain, query_x, query_y, query_z, output_x, output_y, output_z
+        detail::gwn_winding_gradient_antipodal_batch_functor<Real, Index>{
+            geometry_accessor, boundary_accessor, query_x, query_y, query_z, output_x, output_y,
+            output_z
         },
         stream
     );
 }
 
-/// \brief Compute unsigned point-to-mesh distances for a batch.
-template <
-    int Width, gwn_real_type Real, gwn_index_type Index = std::uint32_t,
-    int StackCapacity = k_gwn_default_traversal_stack_capacity,
-    typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
-[[nodiscard]] gwn_status gwn_compute_unsigned_distance_batch_bvh(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
-    gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree,
-    cuda::std::span<Real const> const query_x, cuda::std::span<Real const> const query_y,
-    cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output,
-    Real const culling_band = std::numeric_limits<Real>::infinity(),
-    cudaStream_t const stream = gwn_default_stream(), OverflowCallback const &overflow_callback = {}
-) noexcept {
-    static_assert(StackCapacity > 0, "Traversal stack capacity must be positive.");
-
-    if (!geometry.is_valid())
-        return gwn_status::invalid_argument("Geometry accessor contains mismatched span lengths.");
-    if (!bvh.is_valid())
-        return gwn_status::invalid_argument("BVH accessor is invalid.");
-    if (bvh.has_internal_root()) {
-        std::uint64_t const required_stack =
-            1u + std::uint64_t(Width - 1) * std::uint64_t(bvh.max_depth);
-        if (required_stack > std::uint64_t(StackCapacity))
-            return gwn_status::invalid_argument(
-                "Traversal stack capacity is below BVH depth bound."
-            );
-    }
-    if (!aabb_tree.is_valid_for(bvh))
-        return gwn_status::invalid_argument("BVH AABB tree is invalid for the given topology.");
-    if (query_x.size() != query_y.size() || query_x.size() != query_z.size())
-        return gwn_status::invalid_argument("Query SoA spans must have identical lengths.");
-    if (query_x.size() != output.size())
-        return gwn_status::invalid_argument("Output span size must match query count.");
-    if (!gwn_span_has_storage(query_x) || !gwn_span_has_storage(query_y) ||
-        !gwn_span_has_storage(query_z) || !gwn_span_has_storage(output)) {
-        return gwn_status::invalid_argument(
-            "Query/output spans must use non-null storage when non-empty."
-        );
-    }
-    if (output.empty())
-        return gwn_status::ok();
-
-    constexpr int k_block_size = detail::k_gwn_default_block_size;
-    return detail::gwn_launch_linear_kernel<k_block_size>(
-        output.size(),
-        detail::gwn_unsigned_distance_batch_bvh_functor<
-            Width, Real, Index, StackCapacity, OverflowCallback>{
-            geometry, bvh, aabb_tree, query_x, query_y, query_z, output, culling_band,
-            overflow_callback
-        },
-        stream
-    );
-}
-
-/// \brief Width-4 convenience wrapper for batch unsigned distance queries.
-template <
-    gwn_real_type Real, gwn_index_type Index = std::uint32_t,
-    int StackCapacity = k_gwn_default_traversal_stack_capacity,
-    typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
-[[nodiscard]] gwn_status gwn_compute_unsigned_distance_batch_bvh(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh4_topology_accessor<Real, Index> const &bvh,
-    gwn_bvh4_aabb_accessor<Real, Index> const &aabb_tree, cuda::std::span<Real const> const query_x,
-    cuda::std::span<Real const> const query_y, cuda::std::span<Real const> const query_z,
-    cuda::std::span<Real> const output,
-    Real const culling_band = std::numeric_limits<Real>::infinity(),
-    cudaStream_t const stream = gwn_default_stream(), OverflowCallback const &overflow_callback = {}
-) noexcept {
-    return gwn_compute_unsigned_distance_batch_bvh<4, Real, Index, StackCapacity, OverflowCallback>(
-        geometry, bvh, aabb_tree, query_x, query_y, query_z, output, culling_band, stream,
-        overflow_callback
-    );
-}
-
-/// \brief Compute signed point-to-mesh distances for a batch using
-///        winding-number sign.
+/// \brief Compute Taylor-approximated winding gradient in device code.
 ///
-/// \tparam Order Taylor winding-number order (0, 1, or 2).
-template <
-    int Order, int Width, gwn_real_type Real, gwn_index_type Index = std::uint32_t,
-    int StackCapacity = k_gwn_default_traversal_stack_capacity,
-    typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
-[[nodiscard]] gwn_status gwn_compute_signed_distance_batch_bvh(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
-    gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree,
-    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &moment_tree,
-    cuda::std::span<Real const> const query_x, cuda::std::span<Real const> const query_y,
-    cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output,
-    Real const winding_number_threshold = Real(0.5),
-    Real const culling_band = std::numeric_limits<Real>::infinity(),
-    Real const accuracy_scale = Real(2), cudaStream_t const stream = gwn_default_stream(),
-    OverflowCallback const &overflow_callback = {}
-) noexcept {
-    static_assert(
-        Order == 0 || Order == 1 || Order == 2,
-        "gwn_compute_signed_distance_batch_bvh currently supports Order 0, 1, and 2."
-    );
-    static_assert(StackCapacity > 0, "Traversal stack capacity must be positive.");
-
-    if (!geometry.is_valid())
-        return gwn_status::invalid_argument("Geometry accessor contains mismatched span lengths.");
-    if (!bvh.is_valid())
-        return gwn_status::invalid_argument("BVH accessor is invalid.");
-    if (bvh.has_internal_root()) {
-        std::uint64_t const required_stack =
-            1u + std::uint64_t(Width - 1) * std::uint64_t(bvh.max_depth);
-        if (required_stack > std::uint64_t(StackCapacity))
-            return gwn_status::invalid_argument(
-                "Traversal stack capacity is below BVH depth bound."
-            );
-    }
-    if (!aabb_tree.is_valid_for(bvh))
-        return gwn_status::invalid_argument("BVH AABB tree is invalid for the given topology.");
-    if (!moment_tree.is_valid_for(bvh))
-        return gwn_status::invalid_argument("BVH moment tree is invalid for the given topology.");
-    if (query_x.size() != query_y.size() || query_x.size() != query_z.size())
-        return gwn_status::invalid_argument("Query SoA spans must have identical lengths.");
-    if (query_x.size() != output.size())
-        return gwn_status::invalid_argument("Output span size must match query count.");
-    if (!gwn_span_has_storage(query_x) || !gwn_span_has_storage(query_y) ||
-        !gwn_span_has_storage(query_z) || !gwn_span_has_storage(output)) {
-        return gwn_status::invalid_argument(
-            "Query/output spans must use non-null storage when non-empty."
-        );
-    }
-    if (output.empty())
-        return gwn_status::ok();
-
-    constexpr int k_block_size = detail::k_gwn_default_block_size;
-    return detail::gwn_launch_linear_kernel<k_block_size>(
-        output.size(),
-        detail::gwn_signed_distance_batch_bvh_functor<
-            Order, Width, Real, Index, StackCapacity, OverflowCallback>{
-            geometry, bvh, aabb_tree, moment_tree, query_x, query_y, query_z, output,
-            winding_number_threshold, culling_band, accuracy_scale, overflow_callback
-        },
-        stream
-    );
-}
-
-/// \brief Width-4 convenience wrapper for batch signed distance queries.
-template <
-    int Order, gwn_real_type Real, gwn_index_type Index = std::uint32_t,
-    int StackCapacity = k_gwn_default_traversal_stack_capacity,
-    typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
-[[nodiscard]] gwn_status gwn_compute_signed_distance_batch_bvh(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh4_topology_accessor<Real, Index> const &bvh,
-    gwn_bvh4_aabb_accessor<Real, Index> const &aabb_tree,
-    gwn_bvh4_moment_accessor<Order, Real, Index> const &moment_tree,
-    cuda::std::span<Real const> const query_x, cuda::std::span<Real const> const query_y,
-    cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output,
-    Real const winding_number_threshold = Real(0.5),
-    Real const culling_band = std::numeric_limits<Real>::infinity(),
-    Real const accuracy_scale = Real(2), cudaStream_t const stream = gwn_default_stream(),
-    OverflowCallback const &overflow_callback = {}
-) noexcept {
-    return gwn_compute_signed_distance_batch_bvh<
-        Order, 4, Real, Index, StackCapacity, OverflowCallback>(
-        geometry, bvh, aabb_tree, moment_tree, query_x, query_y, query_z, output,
-        winding_number_threshold, culling_band, accuracy_scale, stream, overflow_callback
-    );
-}
-
-/// \brief Compute Taylor-approximated winding-number gradient for a single
-///        query point (\c __device__ only).
-///
-/// Uses BVH traversal with Taylor moment approximation at far-field nodes
-/// and exact solid-angle gradient evaluation at near-field leaf nodes.
-/// Returns the gradient as a 3-component vector (gwn_vec3).
-///
-/// \tparam Order Taylor winding-number order (0, 1, or 2).
+/// Far-field children use \p moment; near-field leaves use exact solid-angle derivatives from the
+/// canonical triangle records. Stack overflow invokes \p overflow_callback and returns an all-NaN
+/// vector when the callback returns. \p bvh and \p moment must be valid and aligned.
+/// \p accuracy_scale must be nonnegative; increasing it descends more children.
 template <
     int Order, int Width, gwn_real_type Real, gwn_index_type Index,
     int StackCapacity = k_gwn_default_traversal_stack_capacity,
     typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
-[[nodiscard]] __device__ inline gwn_vec3<Real> gwn_winding_gradient_point_bvh_taylor(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
-    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &moment_tree, Real const qx,
-    Real const qy, Real const qz, Real const accuracy_scale = Real(2),
+[[nodiscard]] __device__ inline gwn_vec3<Real> gwn_winding_gradient_taylor(
+    gwn_bvh_accessor<Width, Real, Index> const &bvh,
+    gwn_bvh_moment_accessor<Width, Order, Real, Index> const &moment, Real const qx, Real const qy,
+    Real const qz, Real const accuracy_scale = Real(2),
     OverflowCallback const &overflow_callback = {}
 ) noexcept {
     static_assert(
         Order == 0 || Order == 1 || Order == 2,
-        "gwn_winding_gradient_point_bvh_taylor currently supports Order 0, 1, and 2."
+        "gwn_winding_gradient_taylor supports Order 0, 1, and 2."
     );
-    return detail::gwn_winding_gradient_point_bvh_taylor_impl<
+    GWN_ASSERT(
+        moment.is_valid_for(bvh),
+        "gwn_winding_gradient_taylor requires aligned BVH and moment data."
+    );
+    GWN_ASSERT(
+        accuracy_scale >= Real(0),
+        "gwn_winding_gradient_taylor requires nonnegative accuracy scale."
+    );
+    return detail::gwn_winding_gradient_taylor_impl<
         Order, Width, Real, Index, StackCapacity, OverflowCallback>(
-        geometry, bvh, moment_tree, qx, qy, qz, accuracy_scale, overflow_callback
+        bvh, moment, qx, qy, qz, accuracy_scale, overflow_callback
     );
 }
 
-/// \brief Compute winding-number gradient for a batch using
-///        Taylor-accelerated BVH traversal.
+/// \brief Compute Taylor-approximated winding gradients for a batch.
 ///
-/// Each query yields a 3-component gradient vector; the components are
-/// written to three separate output spans (SoA layout).
-///
-/// \tparam Order Taylor winding-number order (0, 1, or 2).
+/// \p accuracy_scale must be nonnegative. Each overflowed query writes an all-NaN vector when its
+/// callback returns.
 template <
     int Order, int Width, gwn_real_type Real, gwn_index_type Index = std::uint32_t,
     int StackCapacity = k_gwn_default_traversal_stack_capacity,
     typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
-[[nodiscard]] gwn_status gwn_compute_winding_gradient_batch_bvh_taylor(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
-    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &moment_tree,
-    cuda::std::span<Real const> const query_x, cuda::std::span<Real const> const query_y,
-    cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output_x,
-    cuda::std::span<Real> const output_y, cuda::std::span<Real> const output_z,
-    Real const accuracy_scale = Real(2), cudaStream_t const stream = gwn_default_stream(),
-    OverflowCallback const &overflow_callback = {}
+[[nodiscard]] gwn_status gwn_compute_winding_gradient_taylor_batch(
+    gwn_bvh_object<Width, Real, Index> const &bvh,
+    gwn_bvh_moment_object<Width, Order, Real, Index> const &moment,
+    cuda::std::span<std::type_identity_t<Real> const> const query_x,
+    cuda::std::span<std::type_identity_t<Real> const> const query_y,
+    cuda::std::span<std::type_identity_t<Real> const> const query_z,
+    cuda::std::span<Real> const output_x, cuda::std::span<Real> const output_y,
+    cuda::std::span<Real> const output_z, Real const accuracy_scale = Real(2),
+    cudaStream_t const stream = gwn_default_stream(), OverflowCallback const &overflow_callback = {}
 ) noexcept {
     static_assert(
         Order == 0 || Order == 1 || Order == 2,
-        "gwn_compute_winding_gradient_batch_bvh_taylor currently supports Order 0, 1, and 2."
+        "gwn_compute_winding_gradient_taylor_batch supports Order 0, 1, and 2."
     );
-    static_assert(StackCapacity > 0, "Traversal stack capacity must be positive.");
-
-    if (!geometry.is_valid())
-        return gwn_status::invalid_argument("Geometry accessor contains mismatched span lengths.");
-    if (!bvh.is_valid())
-        return gwn_status::invalid_argument("BVH accessor is invalid.");
-    if (bvh.has_internal_root()) {
-        std::uint64_t const required_stack =
-            1u + std::uint64_t(Width - 1) * std::uint64_t(bvh.max_depth);
-        if (required_stack > std::uint64_t(StackCapacity))
-            return gwn_status::invalid_argument(
-                "Traversal stack capacity is below BVH depth bound."
-            );
-    }
-    if (!moment_tree.is_valid_for(bvh))
-        return gwn_status::invalid_argument("BVH moment tree is invalid for the given topology.");
+    auto const &bvh_accessor = bvh.accessor();
+    auto const &moment_accessor = moment.accessor();
+    if (!bvh_accessor.is_valid())
+        return gwn_status::invalid_argument("BVH object contains no queryable data.");
+    GWN_RETURN_ON_ERROR(
+        (detail::gwn_validate_traversal_stack_capacity_impl<StackCapacity>(bvh_accessor))
+    );
+    if (!moment_accessor.is_valid_for(bvh_accessor))
+        return gwn_status::invalid_argument("Moment object is not aligned with the BVH.");
+    if (!(accuracy_scale >= Real(0)))
+        return gwn_status::invalid_argument("Taylor accuracy scale must be nonnegative.");
     if (query_x.size() != query_y.size() || query_x.size() != query_z.size())
         return gwn_status::invalid_argument("Query SoA spans must have identical lengths.");
     if (query_x.size() != output_x.size() || query_x.size() != output_y.size() ||
@@ -966,351 +660,22 @@ template <
     if (output_x.empty())
         return gwn_status::ok();
 
-    constexpr int k_block_size = detail::k_gwn_default_block_size;
-    return detail::gwn_launch_linear_kernel<k_block_size>(
+    return detail::gwn_launch_linear_kernel<detail::k_gwn_default_block_size>(
         output_x.size(),
-        detail::gwn_winding_gradient_batch_bvh_taylor_functor<
+        detail::gwn_winding_gradient_taylor_batch_functor<
             Order, Width, Real, Index, StackCapacity, OverflowCallback>{
-            geometry, bvh, moment_tree, query_x, query_y, query_z, output_x, output_y, output_z,
-            accuracy_scale, overflow_callback
+            bvh_accessor,
+            moment_accessor,
+            query_x,
+            query_y,
+            query_z,
+            output_x,
+            output_y,
+            output_z,
+            accuracy_scale,
+            overflow_callback,
         },
         stream
-    );
-}
-
-/// \brief Width-4 convenience wrapper for Taylor BVH batch winding-gradient
-///        queries.
-template <
-    int Order, gwn_real_type Real, gwn_index_type Index = std::uint32_t,
-    int StackCapacity = k_gwn_default_traversal_stack_capacity,
-    typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
-[[nodiscard]] gwn_status gwn_compute_winding_gradient_batch_bvh_taylor(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh4_topology_accessor<Real, Index> const &bvh,
-    gwn_bvh4_moment_accessor<Order, Real, Index> const &moment_tree,
-    cuda::std::span<Real const> const query_x, cuda::std::span<Real const> const query_y,
-    cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output_x,
-    cuda::std::span<Real> const output_y, cuda::std::span<Real> const output_z,
-    Real const accuracy_scale = Real(2), cudaStream_t const stream = gwn_default_stream(),
-    OverflowCallback const &overflow_callback = {}
-) noexcept {
-    return gwn_compute_winding_gradient_batch_bvh_taylor<
-        Order, 4, Real, Index, StackCapacity, OverflowCallback>(
-        geometry, bvh, moment_tree, query_x, query_y, query_z, output_x, output_y, output_z,
-        accuracy_scale, stream, overflow_callback
-    );
-}
-
-/// \brief Harnack trace result type.
-template <gwn_real_type Real>
-using gwn_harnack_trace_result = detail::gwn_harnack_trace_result<Real>;
-
-/// \brief Hybrid trace result type.
-template <gwn_real_type Real, gwn_index_type Index = std::uint32_t>
-using gwn_hybrid_trace_result = detail::gwn_hybrid_trace_result<Real, Index>;
-
-/// \brief Hybrid hit classification.
-using gwn_hybrid_hit_kind = detail::gwn_hybrid_hit_kind;
-
-/// \brief Hybrid triangle-hit normal policy.
-using gwn_hybrid_triangle_normal_policy = detail::gwn_hybrid_triangle_normal_policy;
-
-/// \brief Embree-style hybrid trace arguments.
-template <gwn_real_type Real>
-using gwn_hybrid_trace_arguments = detail::gwn_hybrid_trace_arguments<Real>;
-
-/// \brief Initialize \ref gwn_hybrid_trace_arguments with default values.
-template <gwn_real_type Real>
-inline void gwn_init_hybrid_trace_arguments(gwn_hybrid_trace_arguments<Real> &arguments) noexcept {
-    arguments = gwn_hybrid_trace_arguments<Real>{};
-}
-
-/// \brief Trace a single ray through the winding-number level set using the
-///        Harnack inequality for guaranteed step safety (\c __device__ only).
-///
-/// \tparam Order Taylor winding-number order (0, 1, or 2).
-/// \return \ref gwn_harnack_trace_result with hit parameter, normal, etc.
-template <
-    int Order, int Width, gwn_real_type Real, gwn_index_type Index,
-    int StackCapacity = k_gwn_default_traversal_stack_capacity,
-    typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
-[[nodiscard]] __device__ inline gwn_harnack_trace_result<Real> gwn_harnack_trace_ray_bvh_taylor(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
-    gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree,
-    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &moment_tree, Real const ray_ox,
-    Real const ray_oy, Real const ray_oz, Real const ray_dx, Real const ray_dy, Real const ray_dz,
-    Real const target_winding = Real(0.5), Real const epsilon = Real(1e-4),
-    int const max_iterations = 512, Real const t_max = Real(1e6),
-    Real const accuracy_scale = Real(2), OverflowCallback const &overflow_callback = {}
-) noexcept {
-    static_assert(
-        Order == 0 || Order == 1 || Order == 2,
-        "gwn_harnack_trace_ray_bvh_taylor currently supports Order 0, 1, and 2."
-    );
-    return detail::gwn_harnack_trace_ray_impl<
-        Order, Width, Real, Index, StackCapacity, OverflowCallback>(
-        geometry, bvh, aabb_tree, moment_tree, ray_ox, ray_oy, ray_oz, ray_dx, ray_dy, ray_dz,
-        target_winding, epsilon, max_iterations, t_max, accuracy_scale, overflow_callback
-    );
-}
-
-/// \brief Batch Harnack trace: trace N rays in parallel through the
-///        winding-number level set.
-///
-/// Each output span must have the same size as the ray-origin spans.
-/// On success, \c output_t[i] is the hit parameter for ray \c i (negative
-/// if no hit), and \c output_normal_{x,y,z}[i] are the surface normal.
-template <
-    int Order, int Width, gwn_real_type Real, gwn_index_type Index = std::uint32_t,
-    int StackCapacity = k_gwn_default_traversal_stack_capacity,
-    typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
-[[nodiscard]] gwn_status gwn_compute_harnack_trace_batch_bvh_taylor(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
-    gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree,
-    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &moment_tree,
-    cuda::std::span<Real const> const ray_origin_x, cuda::std::span<Real const> const ray_origin_y,
-    cuda::std::span<Real const> const ray_origin_z, cuda::std::span<Real const> const ray_dir_x,
-    cuda::std::span<Real const> const ray_dir_y, cuda::std::span<Real const> const ray_dir_z,
-    cuda::std::span<Real> const output_t, cuda::std::span<Real> const output_normal_x,
-    cuda::std::span<Real> const output_normal_y, cuda::std::span<Real> const output_normal_z,
-    Real const target_winding = Real(0.5), Real const epsilon = Real(1e-4),
-    int const max_iterations = 512, Real const t_max = Real(1e6),
-    Real const accuracy_scale = Real(2), cudaStream_t const stream = gwn_default_stream(),
-    OverflowCallback const &overflow_callback = {}
-) noexcept {
-    static_assert(
-        Order == 0 || Order == 1 || Order == 2,
-        "gwn_compute_harnack_trace_batch_bvh_taylor currently supports Order 0, 1, and 2."
-    );
-    if (!geometry.is_valid())
-        return gwn_status::invalid_argument("Geometry accessor contains mismatched span lengths.");
-    if (!bvh.is_valid())
-        return gwn_status::invalid_argument("BVH accessor is invalid.");
-    if (bvh.has_internal_root()) {
-        std::uint64_t const required_stack =
-            1u + std::uint64_t(Width - 1) * std::uint64_t(bvh.max_depth);
-        if (required_stack > std::uint64_t(StackCapacity))
-            return gwn_status::invalid_argument(
-                "Traversal stack capacity is below BVH depth bound."
-            );
-    }
-    if (!aabb_tree.is_valid_for(bvh))
-        return gwn_status::invalid_argument("BVH AABB tree is invalid for the given topology.");
-    if (!moment_tree.is_valid_for(bvh))
-        return gwn_status::invalid_argument("BVH moment tree is invalid for the given topology.");
-
-    std::size_t const n = ray_origin_x.size();
-    if (ray_origin_y.size() != n || ray_origin_z.size() != n || ray_dir_x.size() != n ||
-        ray_dir_y.size() != n || ray_dir_z.size() != n || output_t.size() != n ||
-        output_normal_x.size() != n || output_normal_y.size() != n || output_normal_z.size() != n) {
-        return gwn_status::invalid_argument("harnack trace: mismatched span sizes");
-    }
-    if (!gwn_span_has_storage(ray_origin_x) || !gwn_span_has_storage(ray_origin_y) ||
-        !gwn_span_has_storage(ray_origin_z) || !gwn_span_has_storage(ray_dir_x) ||
-        !gwn_span_has_storage(ray_dir_y) || !gwn_span_has_storage(ray_dir_z) ||
-        !gwn_span_has_storage(output_t) || !gwn_span_has_storage(output_normal_x) ||
-        !gwn_span_has_storage(output_normal_y) || !gwn_span_has_storage(output_normal_z)) {
-        return gwn_status::invalid_argument(
-            "Ray/output spans must use non-null storage when non-empty."
-        );
-    }
-    if (n == 0)
-        return gwn_status::ok();
-
-    detail::gwn_harnack_trace_batch_functor<
-        Order, Width, Real, Index, StackCapacity, OverflowCallback> const functor{
-        geometry,        bvh,
-        aabb_tree,       moment_tree,
-        ray_origin_x,    ray_origin_y,
-        ray_origin_z,    ray_dir_x,
-        ray_dir_y,       ray_dir_z,
-        output_t,        output_normal_x,
-        output_normal_y, output_normal_z,
-        target_winding,  epsilon,
-        max_iterations,  t_max,
-        accuracy_scale,  overflow_callback,
-    };
-
-    constexpr int k_block_size = detail::k_gwn_default_block_size;
-    return detail::gwn_launch_linear_kernel<k_block_size>(n, functor, stream);
-}
-
-/// \brief Width-4 convenience wrapper for batch Harnack trace.
-template <
-    int Order, gwn_real_type Real, gwn_index_type Index = std::uint32_t,
-    int StackCapacity = k_gwn_default_traversal_stack_capacity,
-    typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
-[[nodiscard]] gwn_status gwn_compute_harnack_trace_batch_bvh_taylor(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh4_topology_accessor<Real, Index> const &bvh,
-    gwn_bvh4_aabb_accessor<Real, Index> const &aabb_tree,
-    gwn_bvh4_moment_accessor<Order, Real, Index> const &moment_tree,
-    cuda::std::span<Real const> const ray_origin_x, cuda::std::span<Real const> const ray_origin_y,
-    cuda::std::span<Real const> const ray_origin_z, cuda::std::span<Real const> const ray_dir_x,
-    cuda::std::span<Real const> const ray_dir_y, cuda::std::span<Real const> const ray_dir_z,
-    cuda::std::span<Real> const output_t, cuda::std::span<Real> const output_normal_x,
-    cuda::std::span<Real> const output_normal_y, cuda::std::span<Real> const output_normal_z,
-    Real const target_winding = Real(0.5), Real const epsilon = Real(1e-4),
-    int const max_iterations = 512, Real const t_max = Real(1e6),
-    Real const accuracy_scale = Real(2), cudaStream_t const stream = gwn_default_stream(),
-    OverflowCallback const &overflow_callback = {}
-) noexcept {
-    return gwn_compute_harnack_trace_batch_bvh_taylor<
-        Order, 4, Real, Index, StackCapacity, OverflowCallback>(
-        geometry, bvh, aabb_tree, moment_tree, ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x,
-        ray_dir_y, ray_dir_z, output_t, output_normal_x, output_normal_y, output_normal_z,
-        target_winding, epsilon, max_iterations, t_max, accuracy_scale, stream, overflow_callback
-    );
-}
-
-/// \brief Trace a single ray using hybrid first-hit:
-///        ray-triangle first-hit + conditioned Harnack fill.
-///
-/// The routine always invokes ray-triangle first-hit first. If the mesh is
-/// globally closed (\c geometry.singular_edge_count == 0), Harnack fill is
-/// skipped.
-template <
-    int Order, int Width, gwn_real_type Real, gwn_index_type Index,
-    int StackCapacity = k_gwn_default_traversal_stack_capacity,
-    typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
-[[nodiscard]] __device__ inline gwn_hybrid_trace_result<Real, Index>
-gwn_hybrid_trace_ray_bvh_taylor(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
-    gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree,
-    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &moment_tree, Real const ray_ox,
-    Real const ray_oy, Real const ray_oz, Real const ray_dx, Real const ray_dy, Real const ray_dz,
-    gwn_hybrid_trace_arguments<Real> const &arguments = gwn_hybrid_trace_arguments<Real>{},
-    OverflowCallback const &overflow_callback = {}
-) noexcept {
-    static_assert(
-        Order == 0 || Order == 1 || Order == 2,
-        "gwn_hybrid_trace_ray_bvh_taylor currently supports Order 0, 1, and 2."
-    );
-    return detail::gwn_hybrid_trace_ray_impl<
-        Order, Width, Real, Index, StackCapacity, OverflowCallback>(
-        geometry, bvh, aabb_tree, moment_tree, ray_ox, ray_oy, ray_oz, ray_dx, ray_dy, ray_dz,
-        arguments, overflow_callback
-    );
-}
-
-/// \brief Batch hybrid trace (ray-triangle first-hit + conditioned Harnack).
-template <
-    int Order, int Width, gwn_real_type Real, gwn_index_type Index = std::uint32_t,
-    int StackCapacity = k_gwn_default_traversal_stack_capacity,
-    typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
-[[nodiscard]] gwn_status gwn_compute_hybrid_trace_batch_bvh_taylor(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh_topology_accessor<Width, Real, Index> const &bvh,
-    gwn_bvh_aabb_accessor<Width, Real, Index> const &aabb_tree,
-    gwn_bvh_moment_tree_accessor<Width, Order, Real, Index> const &moment_tree,
-    cuda::std::span<Real const> const ray_origin_x, cuda::std::span<Real const> const ray_origin_y,
-    cuda::std::span<Real const> const ray_origin_z, cuda::std::span<Real const> const ray_dir_x,
-    cuda::std::span<Real const> const ray_dir_y, cuda::std::span<Real const> const ray_dir_z,
-    cuda::std::span<Real> const output_t, cuda::std::span<Real> const output_normal_x,
-    cuda::std::span<Real> const output_normal_y, cuda::std::span<Real> const output_normal_z,
-    cuda::std::span<Index> const output_primitive_id,
-    gwn_hybrid_trace_arguments<Real> const &arguments = gwn_hybrid_trace_arguments<Real>{},
-    cudaStream_t const stream = gwn_default_stream(), OverflowCallback const &overflow_callback = {}
-) noexcept {
-    static_assert(
-        Order == 0 || Order == 1 || Order == 2,
-        "gwn_compute_hybrid_trace_batch_bvh_taylor currently supports Order 0, 1, and 2."
-    );
-    static_assert(StackCapacity > 0, "Traversal stack capacity must be positive.");
-
-    if (!geometry.is_valid())
-        return gwn_status::invalid_argument("Geometry accessor contains mismatched span lengths.");
-    if (!bvh.is_valid())
-        return gwn_status::invalid_argument("BVH accessor is invalid.");
-    if (bvh.has_internal_root()) {
-        std::uint64_t const required_stack =
-            1u + std::uint64_t(Width - 1) * std::uint64_t(bvh.max_depth);
-        if (required_stack > std::uint64_t(StackCapacity))
-            return gwn_status::invalid_argument(
-                "Traversal stack capacity is below BVH depth bound."
-            );
-    }
-    if (!aabb_tree.is_valid_for(bvh))
-        return gwn_status::invalid_argument("BVH AABB tree is invalid for the given topology.");
-    if (!moment_tree.is_valid_for(bvh))
-        return gwn_status::invalid_argument("BVH moment tree is invalid for the given topology.");
-    if (!(arguments.t_max >= arguments.t_min))
-        return gwn_status::invalid_argument("hybrid trace: requires arguments.t_max >= t_min.");
-
-    std::size_t const n = ray_origin_x.size();
-    if (ray_origin_y.size() != n || ray_origin_z.size() != n || ray_dir_x.size() != n ||
-        ray_dir_y.size() != n || ray_dir_z.size() != n || output_t.size() != n ||
-        output_normal_x.size() != n || output_normal_y.size() != n || output_normal_z.size() != n ||
-        output_primitive_id.size() != n) {
-        return gwn_status::invalid_argument("hybrid trace: mismatched span sizes");
-    }
-
-    if (!gwn_span_has_storage(ray_origin_x) || !gwn_span_has_storage(ray_origin_y) ||
-        !gwn_span_has_storage(ray_origin_z) || !gwn_span_has_storage(ray_dir_x) ||
-        !gwn_span_has_storage(ray_dir_y) || !gwn_span_has_storage(ray_dir_z) ||
-        !gwn_span_has_storage(output_t) || !gwn_span_has_storage(output_normal_x) ||
-        !gwn_span_has_storage(output_normal_y) || !gwn_span_has_storage(output_normal_z) ||
-        !gwn_span_has_storage(output_primitive_id)) {
-        return gwn_status::invalid_argument(
-            "hybrid trace: ray/output spans must use non-null storage when non-empty."
-        );
-    }
-
-    if (n == 0)
-        return gwn_status::ok();
-
-    detail::gwn_hybrid_trace_batch_functor<
-        Order, Width, Real, Index, StackCapacity, OverflowCallback> const functor{
-        geometry,
-        bvh,
-        aabb_tree,
-        moment_tree,
-        ray_origin_x,
-        ray_origin_y,
-        ray_origin_z,
-        ray_dir_x,
-        ray_dir_y,
-        ray_dir_z,
-        output_t,
-        output_normal_x,
-        output_normal_y,
-        output_normal_z,
-        output_primitive_id,
-        arguments,
-        overflow_callback,
-    };
-
-    constexpr int k_block_size = detail::k_gwn_default_block_size;
-    return detail::gwn_launch_linear_kernel<k_block_size>(n, functor, stream);
-}
-
-/// \brief Width-4 convenience wrapper for batch hybrid trace.
-template <
-    int Order, gwn_real_type Real, gwn_index_type Index = std::uint32_t,
-    int StackCapacity = k_gwn_default_traversal_stack_capacity,
-    typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
-[[nodiscard]] gwn_status gwn_compute_hybrid_trace_batch_bvh_taylor(
-    gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_bvh4_topology_accessor<Real, Index> const &bvh,
-    gwn_bvh4_aabb_accessor<Real, Index> const &aabb_tree,
-    gwn_bvh4_moment_accessor<Order, Real, Index> const &moment_tree,
-    cuda::std::span<Real const> const ray_origin_x, cuda::std::span<Real const> const ray_origin_y,
-    cuda::std::span<Real const> const ray_origin_z, cuda::std::span<Real const> const ray_dir_x,
-    cuda::std::span<Real const> const ray_dir_y, cuda::std::span<Real const> const ray_dir_z,
-    cuda::std::span<Real> const output_t, cuda::std::span<Real> const output_normal_x,
-    cuda::std::span<Real> const output_normal_y, cuda::std::span<Real> const output_normal_z,
-    cuda::std::span<Index> const output_primitive_id,
-    gwn_hybrid_trace_arguments<Real> const &arguments = gwn_hybrid_trace_arguments<Real>{},
-    cudaStream_t const stream = gwn_default_stream(), OverflowCallback const &overflow_callback = {}
-) noexcept {
-    return gwn_compute_hybrid_trace_batch_bvh_taylor<
-        Order, 4, Real, Index, StackCapacity, OverflowCallback>(
-        geometry, bvh, aabb_tree, moment_tree, ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x,
-        ray_dir_y, ray_dir_z, output_t, output_normal_x, output_normal_y, output_normal_z,
-        output_primitive_id, arguments, stream, overflow_callback
     );
 }
 
