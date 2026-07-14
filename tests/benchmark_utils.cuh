@@ -16,7 +16,7 @@
 
 #include <gwn/gwn_utils.cuh>
 
-#include "test_utils.hpp"
+#include "test_utils.cuh"
 
 namespace gwn::bench {
 

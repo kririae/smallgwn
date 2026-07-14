@@ -14,11 +14,12 @@
 #include <type_traits>
 #include <vector>
 
+#include <gwn/detail/gwn_device_array.cuh>
 #include <gwn/gwn.cuh>
 
-#include "benchmark_csv.hpp"
-#include "benchmark_utils.hpp"
-#include "test_utils.hpp"
+#include "benchmark_csv.cuh"
+#include "benchmark_utils.cuh"
+#include "test_utils.cuh"
 
 namespace {
 
@@ -35,16 +36,15 @@ constexpr int k_default_stack_capacity = gwn::k_gwn_default_traversal_stack_capa
 constexpr bool k_default_stream_sync_per_iter = true;
 constexpr std::uint64_t k_default_seed = 0xB3A9E5D4ULL;
 
-enum class benchmark_topology_builder {
+enum class benchmark_bvh_builder {
     k_lbvh,
     k_hploc,
 };
 
-[[nodiscard]] constexpr std::string_view
-to_string(benchmark_topology_builder const builder) noexcept {
+[[nodiscard]] constexpr std::string_view to_string(benchmark_bvh_builder const builder) noexcept {
     switch (builder) {
-    case benchmark_topology_builder::k_lbvh: return "lbvh";
-    case benchmark_topology_builder::k_hploc: return "hploc";
+    case benchmark_bvh_builder::k_lbvh: return "lbvh";
+    case benchmark_bvh_builder::k_hploc: return "hploc";
     }
     return "unknown";
 }
@@ -60,7 +60,8 @@ struct benchmark_cli_options {
     bool stream_sync_per_iter{k_default_stream_sync_per_iter};
     std::filesystem::path csv_path{"smallgwn_bench.csv"};
     std::uint64_t seed{k_default_seed};
-    benchmark_topology_builder topology_builder{benchmark_topology_builder::k_lbvh};
+    benchmark_bvh_builder builder{benchmark_bvh_builder::k_lbvh};
+    bool skip_exact{false};
 };
 
 void print_usage(char const *argv0) {
@@ -80,9 +81,10 @@ void print_usage(char const *argv0) {
               << k_default_stack_capacity << ")\n"
               << "  --stream-sync-per-iter <0|1>  Sync stream every iteration (default: "
               << (k_default_stream_sync_per_iter ? 1 : 0) << ")\n"
-              << "  --builder <lbvh|hploc>        Topology builder (default: lbvh)\n"
+              << "  --builder <lbvh|hploc>        BVH builder (default: lbvh)\n"
               << "  --csv <path>                  CSV output path (default: smallgwn_bench.csv)\n"
               << "  --seed <u64>                  RNG seed (default: " << k_default_seed << ")\n"
+              << "  --skip-exact                  Skip the O(queries * triangles) exact stage\n"
               << "  --help                        Show this message\n";
 }
 
@@ -224,9 +226,9 @@ parse_cli(int const argc, char const *const *argv, benchmark_cli_options &option
                 return parse_cli_result::k_error;
             }
             if (*value == "lbvh")
-                options.topology_builder = benchmark_topology_builder::k_lbvh;
+                options.builder = benchmark_bvh_builder::k_lbvh;
             else if (*value == "hploc")
-                options.topology_builder = benchmark_topology_builder::k_hploc;
+                options.builder = benchmark_bvh_builder::k_hploc;
             else {
                 std::cerr << "Invalid --builder value (must be lbvh or hploc).\n";
                 return parse_cli_result::k_error;
@@ -249,6 +251,10 @@ parse_cli(int const argc, char const *const *argv, benchmark_cli_options &option
                 std::cerr << "Invalid --seed value.\n";
                 return parse_cli_result::k_error;
             }
+            continue;
+        }
+        if (arg == "--skip-exact") {
+            options.skip_exact = true;
             continue;
         }
 
@@ -287,36 +293,30 @@ collect_models(benchmark_cli_options const &options) {
 }
 
 template <int StackCapacity, int Order>
-gwn::gwn_status run_taylor_query(
-    gwn::gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn::gwn_bvh4_topology_accessor<Real, Index> const &topology,
-    gwn::gwn_bvh4_moment_accessor<Order, Real, Index> const &moment,
+[[nodiscard]] gwn::gwn_status run_taylor_query(
+    gwn::gwn_bvh4_object<Real, Index> const &bvh,
+    gwn::gwn_bvh4_moment_object<Order, Real, Index> const &moment,
     cuda::std::span<Real const> const query_x, cuda::std::span<Real const> const query_y,
     cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output,
     float const accuracy_scale, cudaStream_t const stream
 ) noexcept {
-    return gwn::gwn_compute_winding_number_batch_bvh_taylor<Order, 4, Real, Index, StackCapacity>(
-        geometry, topology, moment, query_x, query_y, query_z, output, accuracy_scale, stream
+    return gwn::gwn_compute_winding_number_taylor_batch<Order, 4, Real, Index, StackCapacity>(
+        bvh, moment, query_x, query_y, query_z, output, accuracy_scale, stream
     );
 }
 
-template <int StackCapacity>
-gwn::gwn_status run_exact_query(
-    gwn::gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn::gwn_bvh4_topology_accessor<Real, Index> const &topology,
-    cuda::std::span<Real const> const query_x, cuda::std::span<Real const> const query_y,
-    cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output,
-    cudaStream_t const stream
+[[nodiscard]] gwn::gwn_status run_exact_query(
+    gwn::gwn_bvh4_object<Real, Index> const &bvh, cuda::std::span<Real const> const query_x,
+    cuda::std::span<Real const> const query_y, cuda::std::span<Real const> const query_z,
+    cuda::std::span<Real> const output, cudaStream_t const stream
 ) noexcept {
-    return gwn::gwn_compute_winding_number_batch_bvh_exact<Real, Index, StackCapacity>(
-        geometry, topology, query_x, query_y, query_z, output, stream
+    return gwn::gwn_compute_winding_number_exact_batch(
+        bvh, query_x, query_y, query_z, output, stream
     );
 }
 
-template <int StackCapacity> struct antipodal_bvh_crossing_functor {
-    gwn::gwn_geometry_accessor<Real, Index> geometry{};
-    gwn::gwn_bvh4_topology_accessor<Real, Index> topology{};
-    gwn::gwn_bvh4_aabb_accessor<Real, Index> aabb_tree{};
+template <int StackCapacity> struct antipodal_crossing_functor {
+    gwn::gwn_bvh4_accessor<Real, Index> bvh{};
     cuda::std::span<Real const> query_x{};
     cuda::std::span<Real const> query_y{};
     cuda::std::span<Real const> query_z{};
@@ -329,9 +329,8 @@ template <int StackCapacity> struct antipodal_bvh_crossing_functor {
         Real value = std::numeric_limits<Real>::quiet_NaN();
         for (int retry_id = 0; retry_id < 3; ++retry_id) {
             auto const result =
-                gwn::detail::gwn_signed_ray_crossing_count_bvh_impl<4, Real, Index, StackCapacity>(
-                    geometry, topology, aabb_tree, query,
-                    gwn::detail::gwn_antipodal_ray_axis_for_retry_impl(retry_id)
+                gwn::detail::gwn_signed_ray_crossing_count_impl<4, Real, Index, StackCapacity>(
+                    bvh, query, gwn::detail::gwn_antipodal_ray_axis_for_retry_impl(retry_id)
                 );
             if (result.status == gwn::detail::gwn_antipodal_axis_result::k_singular)
                 continue;
@@ -343,20 +342,15 @@ template <int StackCapacity> struct antipodal_bvh_crossing_functor {
 };
 
 template <int StackCapacity>
-gwn::gwn_status run_antipodal_bvh_crossing_query(
-    gwn::gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn::gwn_bvh4_topology_accessor<Real, Index> const &topology,
-    gwn::gwn_bvh4_aabb_accessor<Real, Index> const &aabb_tree,
-    cuda::std::span<Real const> const query_x, cuda::std::span<Real const> const query_y,
-    cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output,
-    cudaStream_t const stream
+gwn::gwn_status run_antipodal_crossing_query(
+    gwn::gwn_bvh4_accessor<Real, Index> const &bvh, cuda::std::span<Real const> const query_x,
+    cuda::std::span<Real const> const query_y, cuda::std::span<Real const> const query_z,
+    cuda::std::span<Real> const output, cudaStream_t const stream
 ) noexcept {
     return gwn::detail::gwn_launch_linear_kernel<gwn::detail::k_gwn_default_block_size>(
         output.size(),
-        antipodal_bvh_crossing_functor<StackCapacity>{
-            geometry,
-            topology,
-            aabb_tree,
+        antipodal_crossing_functor<StackCapacity>{
+            bvh,
             query_x,
             query_y,
             query_z,
@@ -367,16 +361,13 @@ gwn::gwn_status run_antipodal_bvh_crossing_query(
 }
 
 template <int StackCapacity>
-gwn::gwn_status run_antipodal_bvh_crossing(
-    gwn::gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn::gwn_bvh4_topology_accessor<Real, Index> const &topology,
-    gwn::gwn_bvh4_aabb_accessor<Real, Index> const &aabb_tree,
-    cuda::std::span<Real const> const query_x, cuda::std::span<Real const> const query_y,
-    cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output,
-    cudaStream_t const stream
+gwn::gwn_status run_antipodal_crossing(
+    gwn::gwn_bvh4_accessor<Real, Index> const &bvh, cuda::std::span<Real const> const query_x,
+    cuda::std::span<Real const> const query_y, cuda::std::span<Real const> const query_z,
+    cuda::std::span<Real> const output, cudaStream_t const stream
 ) noexcept {
-    return run_antipodal_bvh_crossing_query<StackCapacity>(
-        geometry, topology, aabb_tree, query_x, query_y, query_z, output, stream
+    return run_antipodal_crossing_query<StackCapacity>(
+        bvh, query_x, query_y, query_z, output, stream
     );
 }
 
@@ -429,48 +420,44 @@ gwn::gwn_status run_antipodal_boundary_query(
 }
 
 gwn::gwn_status run_antipodal_gradient_query(
-    gwn::gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn::gwn_boundary_chain_accessor<Index> const &boundary_chain,
+    gwn::gwn_geometry_object<Real, Index> const &geometry,
+    gwn::gwn_boundary_chain_object<Index> const &boundary_chain,
     cuda::std::span<Real const> const query_x, cuda::std::span<Real const> const query_y,
     cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output_x,
     cuda::std::span<Real> const output_y, cuda::std::span<Real> const output_z,
     cudaStream_t const stream
 ) noexcept {
-    return gwn::gwn_compute_winding_gradient_batch_antipodal<Real, Index>(
+    return gwn::gwn_compute_winding_gradient_antipodal_batch(
         geometry, boundary_chain, query_x, query_y, query_z, output_x, output_y, output_z, stream
     );
 }
 
 template <int StackCapacity>
 gwn::gwn_status run_antipodal_query(
-    gwn::gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn::gwn_bvh4_topology_accessor<Real, Index> const &topology,
-    gwn::gwn_bvh4_aabb_accessor<Real, Index> const &aabb_tree,
-    gwn::gwn_boundary_chain_accessor<Index> const &boundary_chain,
+    gwn::gwn_geometry_object<Real, Index> const &geometry,
+    gwn::gwn_bvh4_object<Real, Index> const &bvh,
+    gwn::gwn_boundary_chain_object<Index> const &boundary_chain,
     cuda::std::span<Real const> const query_x, cuda::std::span<Real const> const query_y,
     cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output,
     cudaStream_t const stream
 ) noexcept {
-    return gwn::gwn_compute_winding_number_batch_bvh_antipodal<Real, Index, StackCapacity>(
-        geometry, topology, aabb_tree, boundary_chain, query_x, query_y, query_z, output, stream
+    return gwn::gwn_compute_winding_number_antipodal_batch<4, Real, Index, StackCapacity>(
+        geometry, bvh, boundary_chain, query_x, query_y, query_z, output, stream
     );
 }
 
 template <int StackCapacity>
 gwn::gwn_status run_ray_first_hit(
-    gwn::gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn::gwn_bvh4_topology_accessor<Real, Index> const &topology,
-    gwn::gwn_bvh4_aabb_accessor<Real, Index> const &aabb_tree,
-    cuda::std::span<Real const> const ray_origin_x, cuda::std::span<Real const> const ray_origin_y,
-    cuda::std::span<Real const> const ray_origin_z, cuda::std::span<Real const> const ray_dir_x,
-    cuda::std::span<Real const> const ray_dir_y, cuda::std::span<Real const> const ray_dir_z,
-    cuda::std::span<Real> const output_t, cuda::std::span<Index> const output_primitive_id,
+    gwn::gwn_bvh4_object<Real, Index> const &bvh, cuda::std::span<Real const> const ray_origin_x,
+    cuda::std::span<Real const> const ray_origin_y, cuda::std::span<Real const> const ray_origin_z,
+    cuda::std::span<Real const> const ray_dir_x, cuda::std::span<Real const> const ray_dir_y,
+    cuda::std::span<Real const> const ray_dir_z,
+    cuda::std::span<gwn::gwn_ray_first_hit_result<Real, Index>> const output,
     cudaStream_t const stream
 ) noexcept {
-    return gwn::gwn_compute_ray_first_hit_batch_bvh<Real, Index, StackCapacity>(
-        geometry, topology, aabb_tree, ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x,
-        ray_dir_y, ray_dir_z, output_t, output_primitive_id, Real(0),
-        std::numeric_limits<Real>::infinity(), stream
+    return gwn::gwn_compute_ray_first_hit_batch<4, Real, Index, StackCapacity>(
+        bvh, ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x, ray_dir_y, ray_dir_z, output,
+        Real(0), std::numeric_limits<Real>::infinity(), stream
     );
 }
 
@@ -569,7 +556,7 @@ int run_benchmark(
     csv_context.timestamp = gwn::bench::gwn_now_timestamp_string();
     csv_context.gpu_name = device_prop.name;
     csv_context.cuda_runtime_version = runtime_version;
-    csv_context.topology_builder = std::string(to_string(options.topology_builder));
+    csv_context.builder = std::string(to_string(options.builder));
     csv_context.accuracy_scale = options.accuracy_scale;
     csv_context.stack_capacity = StackCapacity;
     csv_context.seed = options.seed;
@@ -580,7 +567,7 @@ int run_benchmark(
     std::cout << "  Models: " << models.size() << ", Queries/model: " << options.query_count
               << ", Warmup: " << options.warmup_iters << ", Iters: " << options.measure_iters
               << "\n";
-    std::cout << "  Topology builder: " << to_string(options.topology_builder) << "\n";
+    std::cout << "  BVH builder: " << to_string(options.builder) << "\n";
     std::cout << "  CSV: " << options.csv_path.string() << "\n\n";
 
     std::size_t successful_models = 0;
@@ -636,74 +623,62 @@ int run_benchmark(
 
         auto const query_host =
             gwn::bench::gwn_make_mixed_query_soa(mesh, options.query_count, options.seed);
-        auto const ray_host = gwn::bench::gwn_make_mixed_ray_soa(
-            mesh, options.query_count, options.seed ^ 0xD1B54A32D192ED03ULL
-        );
+        auto const ray_host =
+            gwn::bench::gwn_make_mixed_ray_soa(mesh, options.query_count, options.seed);
 
-        gwn::gwn_device_array<Real> d_qx(stream);
-        gwn::gwn_device_array<Real> d_qy(stream);
-        gwn::gwn_device_array<Real> d_qz(stream);
-        gwn::gwn_device_array<Real> d_out(stream);
-        gwn::gwn_device_array<Real> d_grad_x(stream);
-        gwn::gwn_device_array<Real> d_grad_y(stream);
-        gwn::gwn_device_array<Real> d_grad_z(stream);
-        gwn::gwn_device_array<Real> d_ray_ox(stream);
-        gwn::gwn_device_array<Real> d_ray_oy(stream);
-        gwn::gwn_device_array<Real> d_ray_oz(stream);
-        gwn::gwn_device_array<Real> d_ray_dx(stream);
-        gwn::gwn_device_array<Real> d_ray_dy(stream);
-        gwn::gwn_device_array<Real> d_ray_dz(stream);
-        gwn::gwn_device_array<Real> d_ray_t(stream);
-        gwn::gwn_device_array<Index> d_ray_pi(stream);
+        gwn::detail::gwn_device_array<Real> d_qx(stream);
+        gwn::detail::gwn_device_array<Real> d_qy(stream);
+        gwn::detail::gwn_device_array<Real> d_qz(stream);
+        gwn::detail::gwn_device_array<Real> d_out(stream);
+        gwn::detail::gwn_device_array<Real> d_grad_x(stream);
+        gwn::detail::gwn_device_array<Real> d_grad_y(stream);
+        gwn::detail::gwn_device_array<Real> d_grad_z(stream);
+        gwn::detail::gwn_device_array<Real> d_ray_ox(stream);
+        gwn::detail::gwn_device_array<Real> d_ray_oy(stream);
+        gwn::detail::gwn_device_array<Real> d_ray_oz(stream);
+        gwn::detail::gwn_device_array<Real> d_ray_dx(stream);
+        gwn::detail::gwn_device_array<Real> d_ray_dy(stream);
+        gwn::detail::gwn_device_array<Real> d_ray_dz(stream);
+        gwn::detail::gwn_device_array<gwn::gwn_ray_first_hit_result<Real, Index>> d_ray_hit(stream);
 
-        gwn::gwn_status const qx_status = d_qx.copy_from_host(
+        d_qx.copy_from_host(
             cuda::std::span<Real const>(query_host[0].data(), query_host[0].size()), stream
         );
-        gwn::gwn_status const qy_status = d_qy.copy_from_host(
+        d_qy.copy_from_host(
             cuda::std::span<Real const>(query_host[1].data(), query_host[1].size()), stream
         );
-        gwn::gwn_status const qz_status = d_qz.copy_from_host(
+        d_qz.copy_from_host(
             cuda::std::span<Real const>(query_host[2].data(), query_host[2].size()), stream
         );
-        gwn::gwn_status const out_status = d_out.resize(options.query_count, stream);
-        gwn::gwn_status const grad_x_status = d_grad_x.resize(options.query_count, stream);
-        gwn::gwn_status const grad_y_status = d_grad_y.resize(options.query_count, stream);
-        gwn::gwn_status const grad_z_status = d_grad_z.resize(options.query_count, stream);
-        gwn::gwn_status const ray_ox_status = d_ray_ox.copy_from_host(
+        d_out.resize(options.query_count, stream);
+        d_grad_x.resize(options.query_count, stream);
+        d_grad_y.resize(options.query_count, stream);
+        d_grad_z.resize(options.query_count, stream);
+        d_ray_ox.copy_from_host(
             cuda::std::span<Real const>(ray_host.origin[0].data(), ray_host.origin[0].size()),
             stream
         );
-        gwn::gwn_status const ray_oy_status = d_ray_oy.copy_from_host(
+        d_ray_oy.copy_from_host(
             cuda::std::span<Real const>(ray_host.origin[1].data(), ray_host.origin[1].size()),
             stream
         );
-        gwn::gwn_status const ray_oz_status = d_ray_oz.copy_from_host(
+        d_ray_oz.copy_from_host(
             cuda::std::span<Real const>(ray_host.origin[2].data(), ray_host.origin[2].size()),
             stream
         );
-        gwn::gwn_status const ray_dx_status = d_ray_dx.copy_from_host(
+        d_ray_dx.copy_from_host(
             cuda::std::span<Real const>(ray_host.direction[0].data(), ray_host.direction[0].size()),
             stream
         );
-        gwn::gwn_status const ray_dy_status = d_ray_dy.copy_from_host(
+        d_ray_dy.copy_from_host(
             cuda::std::span<Real const>(ray_host.direction[1].data(), ray_host.direction[1].size()),
             stream
         );
-        gwn::gwn_status const ray_dz_status = d_ray_dz.copy_from_host(
+        d_ray_dz.copy_from_host(
             cuda::std::span<Real const>(ray_host.direction[2].data(), ray_host.direction[2].size()),
             stream
         );
-        gwn::gwn_status const ray_t_status = d_ray_t.resize(options.query_count, stream);
-        gwn::gwn_status const ray_pi_status = d_ray_pi.resize(options.query_count, stream);
-
-        if (!qx_status.is_ok() || !qy_status.is_ok() || !qz_status.is_ok() || !out_status.is_ok() ||
-            !grad_x_status.is_ok() || !grad_y_status.is_ok() || !grad_z_status.is_ok() ||
-            !ray_ox_status.is_ok() || !ray_oy_status.is_ok() || !ray_oz_status.is_ok() ||
-            !ray_dx_status.is_ok() || !ray_dy_status.is_ok() || !ray_dz_status.is_ok() ||
-            !ray_t_status.is_ok() || !ray_pi_status.is_ok()) {
-            std::cerr << "Query buffer setup failed for model " << model_path.string() << "\n";
-            continue;
-        }
+        d_ray_hit.resize(options.query_count, stream);
         gwn::gwn_status const query_sync_status =
             gwn::gwn_cuda_to_status(cudaStreamSynchronize(stream));
         if (!query_sync_status.is_ok()) {
@@ -712,59 +687,36 @@ int run_benchmark(
             continue;
         }
 
-        gwn::gwn_bvh4_topology_object<Real, Index> topology;
-        gwn::gwn_bvh4_aabb_object<Real, Index> aabb_tree;
+        gwn::gwn_bvh4_object<Real, Index> bvh;
         gwn::gwn_bvh4_moment_object<0, Real, Index> moment_tree_o0;
         gwn::gwn_bvh4_moment_object<1, Real, Index> moment_tree_o1;
         gwn::gwn_bvh4_moment_object<2, Real, Index> moment_tree_o2;
         gwn::gwn_boundary_chain_object<Index> boundary_chain;
-        std::string const builder_name{to_string(options.topology_builder)};
+        std::string const builder_name{to_string(options.builder)};
 
-        auto build_topology = [&]() noexcept -> gwn::gwn_status {
-            if (options.topology_builder == benchmark_topology_builder::k_hploc) {
-                return gwn::gwn_bvh_topology_build_hploc<k_bvh_width, Real, Index>(
-                    geometry, topology, stream
-                );
-            }
-            return gwn::gwn_bvh_topology_build_lbvh<k_bvh_width, Real, Index>(
-                geometry, topology, stream
+        auto build_bvh = [&]() noexcept -> gwn::gwn_status {
+            gwn::gwn_bvh_build_method const method =
+                options.builder == benchmark_bvh_builder::k_hploc
+                    ? gwn::gwn_bvh_build_method::k_hploc
+                    : gwn::gwn_bvh_build_method::k_lbvh;
+            return gwn::gwn_build_bvh(
+                geometry, bvh, gwn::gwn_bvh_build_options{.method = method}, stream
             );
         };
 
-        auto build_facade_o0 = [&]() noexcept -> gwn::gwn_status {
-            if (options.topology_builder == benchmark_topology_builder::k_hploc) {
-                return gwn::gwn_bvh_facade_build_topology_aabb_moment_hploc<
-                    0, k_bvh_width, Real, Index>(
-                    geometry, topology, aabb_tree, moment_tree_o0, stream
-                );
-            }
-            return gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<0, k_bvh_width, Real, Index>(
-                geometry, topology, aabb_tree, moment_tree_o0, stream
-            );
+        auto build_bvh_moment_o0 = [&]() noexcept -> gwn::gwn_status {
+            GWN_RETURN_ON_ERROR(build_bvh());
+            return gwn::gwn_refit_bvh_moment<0>(bvh, moment_tree_o0, stream);
         };
 
-        auto build_facade_o1 = [&]() noexcept -> gwn::gwn_status {
-            if (options.topology_builder == benchmark_topology_builder::k_hploc) {
-                return gwn::gwn_bvh_facade_build_topology_aabb_moment_hploc<
-                    1, k_bvh_width, Real, Index>(
-                    geometry, topology, aabb_tree, moment_tree_o1, stream
-                );
-            }
-            return gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<1, k_bvh_width, Real, Index>(
-                geometry, topology, aabb_tree, moment_tree_o1, stream
-            );
+        auto build_bvh_moment_o1 = [&]() noexcept -> gwn::gwn_status {
+            GWN_RETURN_ON_ERROR(build_bvh());
+            return gwn::gwn_refit_bvh_moment<1>(bvh, moment_tree_o1, stream);
         };
 
-        auto build_facade_o2 = [&]() noexcept -> gwn::gwn_status {
-            if (options.topology_builder == benchmark_topology_builder::k_hploc) {
-                return gwn::gwn_bvh_facade_build_topology_aabb_moment_hploc<
-                    2, k_bvh_width, Real, Index>(
-                    geometry, topology, aabb_tree, moment_tree_o2, stream
-                );
-            }
-            return gwn::gwn_bvh_facade_build_topology_aabb_moment_lbvh<2, k_bvh_width, Real, Index>(
-                geometry, topology, aabb_tree, moment_tree_o2, stream
-            );
+        auto build_bvh_moment_o2 = [&]() noexcept -> gwn::gwn_status {
+            GWN_RETURN_ON_ERROR(build_bvh());
+            return gwn::gwn_refit_bvh_moment<2>(bvh, moment_tree_o2, stream);
         };
 
         std::cout << "Model: " << model_path.string() << " (V=" << mesh.vertex_x.size()
@@ -775,70 +727,57 @@ int run_benchmark(
             csv_writer.append_row(csv_context, model_path.string(), result);
         };
 
-        auto const topology_stage = run_stage(
-            std::string("topology_build_") + builder_name, "triangles/s", mesh.tri_i0.size(),
-            options, mesh.vertex_x.size(), mesh.tri_i0.size(), options.query_count, stream,
-            [&]() noexcept { return gwn::gwn_status::ok(); }, build_topology
+        auto const bvh_stage = run_stage(
+            std::string("bvh_build_") + builder_name, "triangles/s", mesh.tri_i0.size(), options,
+            mesh.vertex_x.size(), mesh.tri_i0.size(), options.query_count, stream,
+            [&]() noexcept { return gwn::gwn_status::ok(); }, build_bvh
         );
-        emit_result(topology_stage);
+        emit_result(bvh_stage);
 
-        auto const refit_aabb_stage = run_stage(
-            "refit_aabb", "triangles/s", mesh.tri_i0.size(), options, mesh.vertex_x.size(),
-            mesh.tri_i0.size(), options.query_count, stream, build_topology, [&]() noexcept {
-            return gwn::gwn_bvh_refit_aabb<k_bvh_width, Real, Index>(
-                geometry, topology, aabb_tree, stream
-            );
-        }
+        auto const refit_bvh_stage = run_stage(
+            "refit_bvh", "triangles/s", mesh.tri_i0.size(), options, mesh.vertex_x.size(),
+            mesh.tri_i0.size(), options.query_count, stream, build_bvh,
+            [&]() noexcept { return gwn::gwn_refit_bvh(geometry, bvh, stream); }
         );
-        emit_result(refit_aabb_stage);
+        emit_result(refit_bvh_stage);
 
-        auto setup_topology_and_aabb = [&]() noexcept {
-            gwn::gwn_status const topology_status = build_topology();
-            if (!topology_status.is_ok())
-                return topology_status;
-            return gwn::gwn_bvh_refit_aabb<k_bvh_width, Real, Index>(
-                geometry, topology, aabb_tree, stream
-            );
-        };
-
-        auto setup_topology_aabb_and_boundary = [&]() noexcept {
-            gwn::gwn_status const setup_status = setup_topology_and_aabb();
+        auto setup_bvh_and_boundary = [&]() noexcept {
+            gwn::gwn_status const setup_status = build_bvh();
             if (!setup_status.is_ok())
                 return setup_status;
-            return gwn::gwn_build_boundary_chain(geometry.accessor(), boundary_chain, stream);
+            return gwn::gwn_build_boundary_chain(geometry, boundary_chain, stream);
         };
         auto setup_boundary = [&]() noexcept {
-            return gwn::gwn_build_boundary_chain(geometry.accessor(), boundary_chain, stream);
+            return gwn::gwn_build_boundary_chain(geometry, boundary_chain, stream);
         };
 
         double ray_mix_hit_ratio = 0.0;
-        auto setup_topology_aabb_and_validate_rays = [&]() noexcept -> gwn::gwn_status {
-            gwn::gwn_status const setup_status = setup_topology_and_aabb();
+        auto setup_bvh_and_validate_rays = [&]() -> gwn::gwn_status {
+            gwn::gwn_status const setup_status = build_bvh();
             if (!setup_status.is_ok())
                 return setup_status;
 
             gwn::gwn_status const ray_status = run_ray_first_hit<StackCapacity>(
-                geometry.accessor(), topology.accessor(), aabb_tree.accessor(), d_ray_ox.span(),
-                d_ray_oy.span(), d_ray_oz.span(), d_ray_dx.span(), d_ray_dy.span(), d_ray_dz.span(),
-                d_ray_t.span(), d_ray_pi.span(), stream
+                bvh, d_ray_ox.span(), d_ray_oy.span(), d_ray_oz.span(), d_ray_dx.span(),
+                d_ray_dy.span(), d_ray_dz.span(), d_ray_hit.span(), stream
             );
             if (!ray_status.is_ok())
                 return ray_status;
 
-            std::vector<Real> ray_t_host(options.query_count, Real(-1));
-            gwn::gwn_status const copy_status = d_ray_t.copy_to_host(
-                cuda::std::span<Real>(ray_t_host.data(), ray_t_host.size()), stream
+            std::vector<gwn::gwn_ray_first_hit_result<Real, Index>> ray_hit_host(
+                options.query_count
             );
-            if (!copy_status.is_ok())
-                return copy_status;
-
+            d_ray_hit.copy_to_host(
+                cuda::std::span<gwn::gwn_ray_first_hit_result<Real, Index>>(ray_hit_host), stream
+            );
             gwn::gwn_status const sync_status =
                 gwn::gwn_cuda_to_status(cudaStreamSynchronize(stream));
             if (!sync_status.is_ok())
                 return sync_status;
 
             std::size_t const hit_count = static_cast<std::size_t>(std::count_if(
-                ray_t_host.begin(), ray_t_host.end(), [](Real const t) { return t >= Real(0); }
+                ray_hit_host.begin(), ray_hit_host.end(),
+                [](gwn::gwn_ray_first_hit_result<Real, Index> const &hit) { return hit.hit(); }
             ));
             ray_mix_hit_ratio =
                 static_cast<double>(hit_count) / static_cast<double>(options.query_count);
@@ -853,34 +792,22 @@ int run_benchmark(
 
         auto const refit_moment_o0_stage = run_stage(
             "refit_moment_o0", "triangles/s", mesh.tri_i0.size(), options, mesh.vertex_x.size(),
-            mesh.tri_i0.size(), options.query_count, stream, setup_topology_and_aabb,
-            [&]() noexcept {
-            return gwn::gwn_bvh_refit_moment<0, k_bvh_width, Real, Index>(
-                geometry, topology, aabb_tree, moment_tree_o0, stream
-            );
-        }
+            mesh.tri_i0.size(), options.query_count, stream, build_bvh,
+            [&]() noexcept { return gwn::gwn_refit_bvh_moment<0>(bvh, moment_tree_o0, stream); }
         );
         emit_result(refit_moment_o0_stage);
 
         auto const refit_moment_o1_stage = run_stage(
             "refit_moment_o1", "triangles/s", mesh.tri_i0.size(), options, mesh.vertex_x.size(),
-            mesh.tri_i0.size(), options.query_count, stream, setup_topology_and_aabb,
-            [&]() noexcept {
-            return gwn::gwn_bvh_refit_moment<1, k_bvh_width, Real, Index>(
-                geometry, topology, aabb_tree, moment_tree_o1, stream
-            );
-        }
+            mesh.tri_i0.size(), options.query_count, stream, build_bvh,
+            [&]() noexcept { return gwn::gwn_refit_bvh_moment<1>(bvh, moment_tree_o1, stream); }
         );
         emit_result(refit_moment_o1_stage);
 
         auto const refit_moment_o2_stage = run_stage(
             "refit_moment_o2", "triangles/s", mesh.tri_i0.size(), options, mesh.vertex_x.size(),
-            mesh.tri_i0.size(), options.query_count, stream, setup_topology_and_aabb,
-            [&]() noexcept {
-            return gwn::gwn_bvh_refit_moment<2, k_bvh_width, Real, Index>(
-                geometry, topology, aabb_tree, moment_tree_o2, stream
-            );
-        }
+            mesh.tri_i0.size(), options.query_count, stream, build_bvh,
+            [&]() noexcept { return gwn::gwn_refit_bvh_moment<2>(bvh, moment_tree_o2, stream); }
         );
         emit_result(refit_moment_o2_stage);
 
@@ -888,40 +815,40 @@ int run_benchmark(
             "build_boundary_chain", "triangles/s", mesh.tri_i0.size(), options,
             mesh.vertex_x.size(), mesh.tri_i0.size(), options.query_count, stream,
             [&]() noexcept { return gwn::gwn_status::ok(); }, [&]() noexcept {
-            return gwn::gwn_build_boundary_chain(geometry.accessor(), boundary_chain, stream);
+            return gwn::gwn_build_boundary_chain(geometry, boundary_chain, stream);
         }
         );
         emit_result(boundary_chain_stage);
         if (boundary_chain_stage.success)
             std::cout << "    boundary_edges=" << boundary_chain.accessor().edge_count() << "\n";
 
-        auto const facade_o0_stage = run_stage(
-            "facade_o0", "triangles/s", mesh.tri_i0.size(), options, mesh.vertex_x.size(),
+        auto const build_bvh_moment_o0_stage = run_stage(
+            "build_bvh_moment_o0", "triangles/s", mesh.tri_i0.size(), options, mesh.vertex_x.size(),
             mesh.tri_i0.size(), options.query_count, stream,
-            [&]() noexcept { return gwn::gwn_status::ok(); }, build_facade_o0
+            [&]() noexcept { return gwn::gwn_status::ok(); }, build_bvh_moment_o0
         );
-        emit_result(facade_o0_stage);
+        emit_result(build_bvh_moment_o0_stage);
 
-        auto const facade_o1_stage = run_stage(
-            "facade_o1", "triangles/s", mesh.tri_i0.size(), options, mesh.vertex_x.size(),
+        auto const build_bvh_moment_o1_stage = run_stage(
+            "build_bvh_moment_o1", "triangles/s", mesh.tri_i0.size(), options, mesh.vertex_x.size(),
             mesh.tri_i0.size(), options.query_count, stream,
-            [&]() noexcept { return gwn::gwn_status::ok(); }, build_facade_o1
+            [&]() noexcept { return gwn::gwn_status::ok(); }, build_bvh_moment_o1
         );
-        emit_result(facade_o1_stage);
+        emit_result(build_bvh_moment_o1_stage);
 
-        auto const facade_o2_stage = run_stage(
-            "facade_o2", "triangles/s", mesh.tri_i0.size(), options, mesh.vertex_x.size(),
+        auto const build_bvh_moment_o2_stage = run_stage(
+            "build_bvh_moment_o2", "triangles/s", mesh.tri_i0.size(), options, mesh.vertex_x.size(),
             mesh.tri_i0.size(), options.query_count, stream,
-            [&]() noexcept { return gwn::gwn_status::ok(); }, build_facade_o2
+            [&]() noexcept { return gwn::gwn_status::ok(); }, build_bvh_moment_o2
         );
-        emit_result(facade_o2_stage);
+        emit_result(build_bvh_moment_o2_stage);
 
         auto const query_o0_stage = run_stage(
             "query_taylor_o0", "queries/s", options.query_count, options, mesh.vertex_x.size(),
-            mesh.tri_i0.size(), options.query_count, stream, build_facade_o0, [&]() noexcept {
+            mesh.tri_i0.size(), options.query_count, stream, build_bvh_moment_o0, [&]() noexcept {
             return run_taylor_query<StackCapacity, 0>(
-                geometry.accessor(), topology.accessor(), moment_tree_o0.accessor(), d_qx.span(),
-                d_qy.span(), d_qz.span(), d_out.span(), options.accuracy_scale, stream
+                bvh, moment_tree_o0, d_qx.span(), d_qy.span(), d_qz.span(), d_out.span(),
+                options.accuracy_scale, stream
             );
         }
         );
@@ -929,10 +856,10 @@ int run_benchmark(
 
         auto const query_o1_stage = run_stage(
             "query_taylor_o1", "queries/s", options.query_count, options, mesh.vertex_x.size(),
-            mesh.tri_i0.size(), options.query_count, stream, build_facade_o1, [&]() noexcept {
+            mesh.tri_i0.size(), options.query_count, stream, build_bvh_moment_o1, [&]() noexcept {
             return run_taylor_query<StackCapacity, 1>(
-                geometry.accessor(), topology.accessor(), moment_tree_o1.accessor(), d_qx.span(),
-                d_qy.span(), d_qz.span(), d_out.span(), options.accuracy_scale, stream
+                bvh, moment_tree_o1, d_qx.span(), d_qy.span(), d_qz.span(), d_out.span(),
+                options.accuracy_scale, stream
             );
         }
         );
@@ -940,37 +867,38 @@ int run_benchmark(
 
         auto const query_o2_stage = run_stage(
             "query_taylor_o2", "queries/s", options.query_count, options, mesh.vertex_x.size(),
-            mesh.tri_i0.size(), options.query_count, stream, build_facade_o2, [&]() noexcept {
+            mesh.tri_i0.size(), options.query_count, stream, build_bvh_moment_o2, [&]() noexcept {
             return run_taylor_query<StackCapacity, 2>(
-                geometry.accessor(), topology.accessor(), moment_tree_o2.accessor(), d_qx.span(),
-                d_qy.span(), d_qz.span(), d_out.span(), options.accuracy_scale, stream
+                bvh, moment_tree_o2, d_qx.span(), d_qy.span(), d_qz.span(), d_out.span(),
+                options.accuracy_scale, stream
             );
         }
         );
         emit_result(query_o2_stage);
 
-        auto const query_exact_stage = run_stage(
-            "query_exact", "queries/s", options.query_count, options, mesh.vertex_x.size(),
-            mesh.tri_i0.size(), options.query_count, stream, build_topology, [&]() noexcept {
-            return run_exact_query<StackCapacity>(
-                geometry.accessor(), topology.accessor(), d_qx.span(), d_qy.span(), d_qz.span(),
-                d_out.span(), stream
+        std::optional<gwn::bench::gwn_benchmark_stage_result> query_exact_stage{};
+        if (!options.skip_exact) {
+            query_exact_stage = run_stage(
+                "query_exact", "queries/s", options.query_count, options, mesh.vertex_x.size(),
+                mesh.tri_i0.size(), options.query_count, stream, build_bvh, [&]() noexcept {
+                return run_exact_query(
+                    bvh, d_qx.span(), d_qy.span(), d_qz.span(), d_out.span(), stream
+                );
+            }
             );
+            emit_result(*query_exact_stage);
         }
-        );
-        emit_result(query_exact_stage);
 
-        auto const query_antipodal_bvh_stage = run_stage(
-            "query_antipodal_bvh_crossings", "queries/s", options.query_count, options,
-            mesh.vertex_x.size(), mesh.tri_i0.size(), options.query_count, stream,
-            setup_topology_and_aabb, [&]() noexcept {
-            return run_antipodal_bvh_crossing<StackCapacity>(
-                geometry.accessor(), topology.accessor(), aabb_tree.accessor(), d_qx.span(),
-                d_qy.span(), d_qz.span(), d_out.span(), stream
+        auto const query_antipodal_crossing_stage = run_stage(
+            "query_antipodal_crossings", "queries/s", options.query_count, options,
+            mesh.vertex_x.size(), mesh.tri_i0.size(), options.query_count, stream, build_bvh,
+            [&]() noexcept {
+            return run_antipodal_crossing<StackCapacity>(
+                bvh.accessor(), d_qx.span(), d_qy.span(), d_qz.span(), d_out.span(), stream
             );
         }
         );
-        emit_result(query_antipodal_bvh_stage);
+        emit_result(query_antipodal_crossing_stage);
 
         auto const query_antipodal_boundary_stage = run_stage(
             "query_antipodal_boundary", "queries/s", options.query_count, options,
@@ -989,8 +917,8 @@ int run_benchmark(
             mesh.vertex_x.size(), mesh.tri_i0.size(), options.query_count, stream, setup_boundary,
             [&]() noexcept {
             return run_antipodal_gradient_query(
-                geometry.accessor(), boundary_chain.accessor(), d_qx.span(), d_qy.span(),
-                d_qz.span(), d_grad_x.span(), d_grad_y.span(), d_grad_z.span(), stream
+                geometry, boundary_chain, d_qx.span(), d_qy.span(), d_qz.span(), d_grad_x.span(),
+                d_grad_y.span(), d_grad_z.span(), stream
             );
         }
         );
@@ -998,11 +926,10 @@ int run_benchmark(
 
         auto const query_antipodal_stage = run_stage(
             "query_antipodal", "queries/s", options.query_count, options, mesh.vertex_x.size(),
-            mesh.tri_i0.size(), options.query_count, stream, setup_topology_aabb_and_boundary,
+            mesh.tri_i0.size(), options.query_count, stream, setup_bvh_and_boundary,
             [&]() noexcept {
             return run_antipodal_query<StackCapacity>(
-                geometry.accessor(), topology.accessor(), aabb_tree.accessor(),
-                boundary_chain.accessor(), d_qx.span(), d_qy.span(), d_qz.span(), d_out.span(),
+                geometry, bvh, boundary_chain, d_qx.span(), d_qy.span(), d_qz.span(), d_out.span(),
                 stream
             );
         }
@@ -1015,29 +942,28 @@ int run_benchmark(
             std::cout << "    taylor_o2_vs_antipodal_speedup=" << std::fixed << std::setprecision(3)
                       << speedup << std::defaultfloat << "\n";
         }
-        if (query_exact_stage.success && query_antipodal_stage.success &&
-            query_antipodal_stage.latency_mean_ms > 0.0) {
+        if (query_exact_stage.has_value() && query_exact_stage->success &&
+            query_antipodal_stage.success && query_antipodal_stage.latency_mean_ms > 0.0) {
             double const speedup =
-                query_exact_stage.latency_mean_ms / query_antipodal_stage.latency_mean_ms;
+                query_exact_stage->latency_mean_ms / query_antipodal_stage.latency_mean_ms;
             std::cout << "    current_exact_point_kernel_vs_antipodal_speedup=" << std::fixed
                       << std::setprecision(3) << speedup << std::defaultfloat << "\n";
         }
-        if (query_antipodal_bvh_stage.success && query_antipodal_boundary_stage.success &&
-            query_antipodal_bvh_stage.latency_mean_ms > 0.0) {
-            double const boundary_to_bvh = query_antipodal_boundary_stage.latency_mean_ms /
-                                           query_antipodal_bvh_stage.latency_mean_ms;
-            std::cout << "    antipodal_boundary_vs_bvh_time=" << std::fixed << std::setprecision(3)
-                      << boundary_to_bvh << std::defaultfloat << "\n";
+        if (query_antipodal_crossing_stage.success && query_antipodal_boundary_stage.success &&
+            query_antipodal_crossing_stage.latency_mean_ms > 0.0) {
+            double const boundary_to_crossing = query_antipodal_boundary_stage.latency_mean_ms /
+                                                query_antipodal_crossing_stage.latency_mean_ms;
+            std::cout << "    antipodal_boundary_vs_crossing_time=" << std::fixed
+                      << std::setprecision(3) << boundary_to_crossing << std::defaultfloat << "\n";
         }
 
         auto const ray_first_hit_stage = run_stage(
             "query_ray_first_hit", "rays/s", options.query_count, options, mesh.vertex_x.size(),
-            mesh.tri_i0.size(), options.query_count, stream, setup_topology_aabb_and_validate_rays,
+            mesh.tri_i0.size(), options.query_count, stream, setup_bvh_and_validate_rays,
             [&]() noexcept {
             return run_ray_first_hit<StackCapacity>(
-                geometry.accessor(), topology.accessor(), aabb_tree.accessor(), d_ray_ox.span(),
-                d_ray_oy.span(), d_ray_oz.span(), d_ray_dx.span(), d_ray_dy.span(), d_ray_dz.span(),
-                d_ray_t.span(), d_ray_pi.span(), stream
+                bvh, d_ray_ox.span(), d_ray_oy.span(), d_ray_oz.span(), d_ray_dx.span(),
+                d_ray_dy.span(), d_ray_dz.span(), d_ray_hit.span(), stream
             );
         }
         );
@@ -1047,14 +973,10 @@ int run_benchmark(
                       << ray_mix_hit_ratio << std::defaultfloat << "\n";
         }
 
-        auto setup_dynamic_topology = [&]() noexcept -> gwn::gwn_status {
-            return build_topology();
-        };
-
         auto const dynamic_refit_query_o2_stage = run_stage(
             "dynamic_refit_query_o2", "queries/s", options.query_count, options,
-            mesh.vertex_x.size(), mesh.tri_i0.size(), options.query_count, stream,
-            setup_dynamic_topology, [&]() noexcept {
+            mesh.vertex_x.size(), mesh.tri_i0.size(), options.query_count, stream, build_bvh,
+            [&]() noexcept {
             GWN_RETURN_ON_ERROR(
                 gwn::gwn_update_geometry(
                     geometry, cuda::std::span<Real const>(dynamic_x.data(), dynamic_x.size()),
@@ -1062,12 +984,11 @@ int run_benchmark(
                     cuda::std::span<Real const>(dynamic_z.data(), dynamic_z.size()), stream
                 )
             );
-            GWN_RETURN_ON_ERROR((gwn::gwn_bvh_refit_aabb_moment<2, k_bvh_width, Real, Index>(
-                geometry, topology, aabb_tree, moment_tree_o2, stream
-            )));
+            GWN_RETURN_ON_ERROR(gwn::gwn_refit_bvh(geometry, bvh, stream));
+            GWN_RETURN_ON_ERROR(gwn::gwn_refit_bvh_moment<2>(bvh, moment_tree_o2, stream));
             return run_taylor_query<StackCapacity, 2>(
-                geometry.accessor(), topology.accessor(), moment_tree_o2.accessor(), d_qx.span(),
-                d_qy.span(), d_qz.span(), d_out.span(), options.accuracy_scale, stream
+                bvh, moment_tree_o2, d_qx.span(), d_qy.span(), d_qz.span(), d_out.span(),
+                options.accuracy_scale, stream
             );
         }
         );
