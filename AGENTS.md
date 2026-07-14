@@ -37,6 +37,15 @@ These instructions apply to the `smallgwn/` project tree.
 
 ## Architecture & Design Rules
 
+Four decisions generate most rules below. (1) Owning host objects pair with trivially copyable
+device accessors: objects manage lifetime, accessors are the device-facing view. (2) Public host
+entrypoints that can fail are `noexcept` and return `gwn_status`; detail host execution code throws
+and is translated at the seam. (3) No lifetime operation or stream-binding transfer synchronizes
+implicitly; allocation, use, and release remain stream-ordered. (4) Prefer exact contracts over
+conservative ones (topology-exact stack bounds, closed-interval slab tests, staging-then-swap
+replacement) so validity is checkable instead of assumed. When a situation is not covered by a
+rule below, derive the answer from these four decisions.
+
 ### Public / Detail Split
 - Public headers under `include/gwn/` expose the minimal API surface.
   Implementation lives in `include/gwn/detail/`; public headers may `#include` detail headers
@@ -67,6 +76,15 @@ These instructions apply to the `smallgwn/` project tree.
   Each `gwn_refit_bvh_moment<Order,...>` call does a full replace of the moment accessor.
 - A successful BVH refit advances its revision and makes existing moment objects stale. Refit each
   required moment order explicitly before its next query.
+- Accessors are trivially copyable snapshots of an object's device state. Any successful build,
+  refit, clear, or destruction invalidates previously copied accessors. `revision` is the
+  alignment identity: zero means no published queryable BVH state, and moment validity requires
+  `bvh_revision == bvh.revision` in addition to structural checks.
+- `accessor()` is mutable by design: it is the expert escape hatch for assembling custom
+  accessors (tests rely on it). Any non-empty span installed through this path must be the base of a
+  distinct allocation owned by the object and releasable through the stream allocator; aliases,
+  subspans, and shared allocations are not valid owner state. `clear()` and the destructor release
+  exactly those owned allocations.
 - Public BVH entrypoints are object-based; accessor-based routines are detail-only.
 
 ### Query
@@ -82,13 +100,26 @@ These instructions apply to the `smallgwn/` project tree.
   descends more children.
 - Traversal stack capacity: template `StackCapacity` (default `k_gwn_default_traversal_stack_capacity = 64`).
   Query APIs accept an optional device-side overflow callback; default callback traps via `gwn_trap()`.
+  For library-built BVHs with intact stack-bound metadata, host validation makes stack overflow
+  unreachable in batch launches; the overflow-callback contract is exercised through device point
+  APIs, where no host validation runs.
 
 ### Stream & Memory
-- Stream binding is explicit via `gwn_stream_mixin`.
-  `clear()`/destructor release on the currently bound stream;
-  successful stream-parameterized mutations update the bound stream. `set_stream()` does not add
-  synchronization: call `clear()` before `set_stream()` to release on the current binding, or
-  establish cross-stream ordering before rebinding an allocation that remains owned.
+- Lifetime-stream invariant: an owning object's bound stream is the stream on which the current
+  allocation's prior uses are ordered. `clear()` and the destructor release on that stream. This
+  remains safe only while callers maintain the invariant for custom kernels and cross-stream batch
+  queries by ordering all later mutation or release after those uses.
+- `set_stream()` is an unsynchronized invariant transfer: the caller asserts that all prior uses
+  are already ordered on the new stream (event/wait established beforehand). It never inserts
+  synchronization and matches the CCCL `cuda::buffer` model. Call `clear()` before `set_stream()`
+  to release on the current binding, or establish cross-stream ordering before rebinding an
+  allocation that remains owned.
+- Replacement operations preserve the invariant through staging and swap: the displaced
+  allocation keeps its old stream binding and is destroyed there, while the replacement adopts the
+  operation's stream. New replacement-style operations must follow this pattern.
+- Batch queries enqueue on the supplied stream and never synchronize with an object's bound stream.
+  The caller orders producing work before the query and orders the query before any later mutation
+  or release, or transfers the lifetime binding after establishing that dependency.
 - Memory: stream allocator path only (`cudaMallocAsync`/`cudaFreeAsync`), no synchronous fallback.
 - Dynamic vertex-position updates use `gwn_update_geometry(...)`, then `gwn_refit_bvh(...)`, then
   `gwn_refit_bvh_moment<Order>(...)` for every moment order in use. Triangle-index or primitive-count
@@ -98,7 +129,9 @@ These instructions apply to the `smallgwn/` project tree.
   the BVH unqueryable and binds its retained allocations to the refit stream for clear or rebuild.
 - `detail::gwn_device_array<T>` is an exception-based implementation buffer. It owns uninitialized
   typed device storage, remembers the lifetime stream, and releases through the stream allocator.
-  Same-size `resize()` is a no-op that preserves the stream binding. Deallocation and lifetime
+  Same-size `resize()` is a no-op that preserves the stream binding. Its stream-parameterized
+  operations (`clear(stream)`, `resize(count, stream)`) release or replace on the supplied stream;
+  the caller establishes ordering before supplying a different stream. Deallocation and lifetime
   operations are `noexcept`; allocation, copy, and memset operations report failure by exception.
 - Public interfaces accept spans and never expose `detail::gwn_device_array`.
 
@@ -136,14 +169,10 @@ configurations, and missing data. All fallback logic must be explicit and caller
 ### Helper discipline
 Every file-level helper must name a real algorithm step, shared production behavior, tested
 semantic unit, numerical convention, precondition, or traversal boundary.
-
-Use a local lambda for function-local repeated scalar logic. Inline one-line forwarding, field
-extraction, trivial predicates, and wrappers that only rename an expression. Delete helpers you
-cannot defend in review.
-
-Keep new file-level helpers to the minimum necessary. Prefer a local lambda when behavior is used
-within one function; introduce a file-level helper only when a lambda cannot express the behavior
-cleanly or when the behavior is genuinely shared.
+Prefer a local lambda when behavior is used within one function; introduce a file-level helper only
+when a lambda cannot express the behavior cleanly or the behavior is genuinely shared. Inline
+one-line forwarding, field extraction, trivial predicates, and wrappers that only rename an
+expression. Delete helpers you cannot defend in review.
 
 Keep indentation shallow as logical complexity grows. Prefer early returns, explicit phase
 boundaries, and local lambdas over deeply nested control flow.
@@ -189,15 +218,18 @@ Every public interface declaration must have doxygen (`\brief` minimum). Functio
 non-obvious behavior, preconditions, or side effects should have a full doxygen block. Detail code
 may omit doxygen for trivial forwarding wrappers.
 
-## C++ Resource Management & Idioms
-- **RAII & Non-copyable**: Owning objects delete copy ctor/assignment.
-- **Copy/Move-and-Swap**: Provide `noexcept` swap for strong exception safety.
-
 ## Error Handling Rules
-- Public host functions return `gwn_status`; detail execution code uses exceptions. A public
+- Public host functions return `gwn_status`; detail host execution code uses exceptions. A public
   function implementation may use status-returning primitives, but its `noexcept` seam must catch
   and translate every exception. Use `gwn_assert` for invariant violations (fatal, debug-only).
   Use `gwn_status` for recoverable or user-facing errors.
+- State guarantees: operations that replace whole objects (upload, build, moment refit, boundary
+  build) give the strong guarantee via staging and swap; failure preserves the previous object,
+  its data, and its stream binding. In-place mutations document their weaker contract explicitly
+  (`gwn_update_geometry` may leave some position components updated; a mid-refit failure leaves
+  the BVH unqueryable but releasable). New operations must state which guarantee they give.
+- `gwn_status` factories allocate their message strings inside `noexcept` functions: host allocation
+  failure during error reporting terminates by design and is not a recoverable state.
 - `gwn_status` accessors and factories are `noexcept`; `gwn_throw_if_error` is the explicit
   exception-raising convenience.
 - `GWN_RETURN_ON_ERROR(expr)`: uses `gwn_status_result_` variable name to avoid shadowing.
