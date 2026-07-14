@@ -1,109 +1,54 @@
 #pragma once
 
 /// \file gwn_bvh_refit.cuh
-/// \brief Public API for BVH payload refit (AABB bounds and Taylor moments).
+/// \brief Public API for canonical BVH and Taylor moment refit.
 ///
 /// \remark Public entrypoints are object-based; accessor-level refit routines
 ///         are internal under \c gwn::detail.
 
 #include <cuda_runtime_api.h>
 
-#include "detail/gwn_bvh_refit_aabb_impl.cuh"
 #include "detail/gwn_bvh_refit_moment_impl.cuh"
 #include "gwn_bvh.cuh"
 #include "gwn_geometry.cuh"
 
 namespace gwn {
 
-/// \brief Refit axis-aligned bounding boxes for every node of an existing BVH
-///        topology.
+/// \brief Refit all geometry-derived data in a canonical BVH.
 ///
-/// Leaf AABBs are computed from triangle bounds; internal-node AABBs are
-/// propagated bottom-up through an asynchronous GPU refit pass.
-///
-/// On success the bound stream of \p aabb_tree is updated to \p stream.
-///
-/// \param[in]     geometry   Uploaded triangle mesh.
-/// \param[in]     topology   Previously built BVH topology.
-/// \param[in,out] aabb_tree  Destination AABB tree object; previous data is
-///                           released before writing.
-/// \param[in]     stream     CUDA stream for all asynchronous work.
-///
-/// \return \c gwn_status::ok() on success.
+/// Bounds and leaf-ordered triangle records are replaced from \p geometry while hierarchy
+/// references, primitive order, root kind, and maximum depth are preserved. The geometry must
+/// retain the triangle indexing used to build \p bvh. On success \p bvh is rebound to \p stream.
+/// A failure before mutation begins preserves the previous BVH and stream binding. A later failure
+/// makes the BVH unqueryable and binds it to \p stream; callers may then clear or rebuild it.
 template <int Width, gwn_real_type Real, gwn_index_type Index>
-[[nodiscard]] gwn_status gwn_bvh_refit_aabb(
-    gwn_geometry_object<Real, Index> const &geometry,
-    gwn_bvh_topology_object<Width, Real, Index> const &topology,
-    gwn_bvh_aabb_tree_object<Width, Real, Index> &aabb_tree,
+[[nodiscard]] gwn_status gwn_refit_bvh(
+    gwn_geometry_object<Real, Index> const &geometry, gwn_bvh_object<Width, Real, Index> &bvh,
     cudaStream_t const stream = gwn_default_stream()
-) noexcept {
-    GWN_RETURN_ON_ERROR((detail::gwn_bvh_refit_aabb_impl<Width, Real, Index>(
-        geometry.accessor(), topology.accessor(), aabb_tree.accessor(), stream
-    )));
-    aabb_tree.set_stream(stream);
-    return gwn_status::ok();
-}
+) noexcept;
 
-/// \brief Refit Taylor multipole moments for every node of an existing BVH.
+/// \brief Refit one Taylor moment order from a canonical BVH.
 ///
-/// Computes order-\p Order Taylor expansion data used by the approximate
-/// winding-number query path.  The AABB tree is required to derive the
-/// \c max_p_dist2 far-field radius for each node.
-///
-/// Each call performs a **full replace** of the moment data, only the
-/// requested \p Order slot is populated.  To maintain multiple orders
-/// simultaneously, use separate \c gwn_bvh_moment_tree_object instances.
-///
-/// On success the bound stream of \p moment_tree is updated to \p stream.
-///
-/// \param[in]     geometry     Uploaded triangle mesh.
-/// \param[in]     topology     Previously built BVH topology.
-/// \param[in]     aabb_tree    Previously refit AABB tree (used for
-///                             \c max_p_dist2 computation).
-/// \param[in,out] moment_tree  Destination moment tree object; previous data
-///                             is released before writing.
-/// \param[in]     stream       CUDA stream for all asynchronous work.
-///
-/// \return \c gwn_status::ok() on success.
+/// Triangle records provide the additive leaf moments and child-local bounds provide the
+/// far-field radius. The selected \p moment is fully replaced; other moment objects are not
+/// modified. On success \p moment is rebound to \p stream.
 template <int Order, int Width, gwn_real_type Real, gwn_index_type Index>
-[[nodiscard]] gwn_status gwn_bvh_refit_moment(
-    gwn_geometry_object<Real, Index> const &geometry,
-    gwn_bvh_topology_object<Width, Real, Index> const &topology,
-    gwn_bvh_aabb_tree_object<Width, Real, Index> const &aabb_tree,
-    gwn_bvh_moment_tree_object<Width, Order, Real, Index> &moment_tree,
+[[nodiscard]] gwn_status gwn_refit_bvh_moment(
+    gwn_bvh_object<Width, Real, Index> const &bvh,
+    gwn_bvh_moment_object<Width, Order, Real, Index> &moment,
     cudaStream_t const stream = gwn_default_stream()
 ) noexcept {
-    GWN_RETURN_ON_ERROR((detail::gwn_bvh_refit_moment_impl<Order, Width, Real, Index>(
-        geometry.accessor(), topology.accessor(), aabb_tree.accessor(), moment_tree.accessor(),
-        stream
+    gwn_bvh_moment_object<Width, Order, Real, Index> staging;
+    staging.set_stream(stream);
+    GWN_RETURN_ON_ERROR((detail::gwn_refit_bvh_moment_impl<Order, Width, Real, Index>(
+        bvh.accessor(), staging.accessor(), stream
     )));
-    moment_tree.set_stream(stream);
+    swap(moment, staging);
+    // staging owns the replaced moment and retains its original stream. Its destructor therefore
+    // releases old coefficients only after work already ordered on that stream.
     return gwn_status::ok();
-}
-
-/// \brief Refit AABB bounds, then refit Taylor moments for an existing
-///        topology.
-///
-/// Use this after vertex-position updates when Taylor queries will reuse the
-/// existing BVH topology. Taylor moment refit reads AABB bounds for node radius
-/// data, so AABB refit is enqueued first.
-///
-/// \return \c gwn_status::ok() when both refit passes succeed, including any
-///         immediate validation they perform before enqueueing GPU work.
-template <int Order, int Width, gwn_real_type Real, gwn_index_type Index>
-[[nodiscard]] gwn_status gwn_bvh_refit_aabb_moment(
-    gwn_geometry_object<Real, Index> const &geometry,
-    gwn_bvh_topology_object<Width, Real, Index> const &topology,
-    gwn_bvh_aabb_tree_object<Width, Real, Index> &aabb_tree,
-    gwn_bvh_moment_tree_object<Width, Order, Real, Index> &moment_tree,
-    cudaStream_t const stream = gwn_default_stream()
-) noexcept {
-    GWN_RETURN_ON_ERROR(
-        (gwn_bvh_refit_aabb<Width, Real, Index>(geometry, topology, aabb_tree, stream))
-    );
-    return gwn_bvh_refit_moment<Order, Width, Real, Index>(
-        geometry, topology, aabb_tree, moment_tree, stream
-    );
 }
 
 } // namespace gwn
+
+#include "detail/gwn_bvh_refit_impl.cuh"
