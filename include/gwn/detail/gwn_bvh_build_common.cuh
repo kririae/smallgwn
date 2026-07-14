@@ -13,8 +13,9 @@
 
 #include "../gwn_bvh.cuh"
 #include "../gwn_geometry.cuh"
-#include "../gwn_kernel_utils.cuh"
 #include "gwn_bvh_status_helpers.cuh"
+#include "gwn_device_array.cuh"
+#include "gwn_kernel_utils.cuh"
 
 namespace gwn {
 namespace detail {
@@ -102,25 +103,26 @@ template <gwn_real_type Real>
     return dx * dy + dy * dz + dz * dx;
 }
 
+/// \brief Reduce one coordinate span to host-visible extrema using shared CUB scratch storage.
 template <gwn_real_type Real>
-gwn_status gwn_reduce_minmax(
+void gwn_reduce_minmax(
     cuda::std::span<Real const> const values, gwn_device_array<Real> &min_result,
     gwn_device_array<Real> &max_result, gwn_device_array<std::uint8_t> &temp_storage,
     Real &host_min, Real &host_max, cudaStream_t const stream
-) noexcept {
+) {
     if (values.empty())
         return gwn_bvh_invalid_argument(
-            k_gwn_bvh_phase_topology_preprocess, "Reduction input span is empty."
+            k_gwn_bvh_phase_build_preprocess, "Reduction input span is empty."
         );
     auto const item_count = static_cast<std::uint64_t>(values.size());
     std::size_t min_temp_bytes = 0;
     std::size_t max_temp_bytes = 0;
-    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
+    gwn_throw_status_error(gwn_cuda_to_status(
         cub::DeviceReduce::Min(
             nullptr, min_temp_bytes, values.data(), min_result.data(), item_count, stream
         )
     ));
-    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
+    gwn_throw_status_error(gwn_cuda_to_status(
         cub::DeviceReduce::Max(
             nullptr, max_temp_bytes, values.data(), max_result.data(), item_count, stream
         )
@@ -128,29 +130,28 @@ gwn_status gwn_reduce_minmax(
 
     std::size_t const required_temp_bytes = std::max(min_temp_bytes, max_temp_bytes);
     if (temp_storage.size() < required_temp_bytes)
-        GWN_RETURN_ON_ERROR(temp_storage.resize(required_temp_bytes, stream));
+        temp_storage.resize(required_temp_bytes, stream);
 
     std::size_t temp_storage_bytes = required_temp_bytes;
 
-    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
+    gwn_throw_status_error(gwn_cuda_to_status(
         cub::DeviceReduce::Min(
             temp_storage.data(), temp_storage_bytes, values.data(), min_result.data(), item_count,
             stream
         )
     ));
-    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
+    gwn_throw_status_error(gwn_cuda_to_status(
         cub::DeviceReduce::Max(
             temp_storage.data(), temp_storage_bytes, values.data(), max_result.data(), item_count,
             stream
         )
     ));
-    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
+    gwn_throw_status_error(gwn_cuda_to_status(
         cudaMemcpyAsync(&host_min, min_result.data(), sizeof(Real), cudaMemcpyDeviceToHost, stream)
     ));
-    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
+    gwn_throw_status_error(gwn_cuda_to_status(
         cudaMemcpyAsync(&host_max, max_result.data(), sizeof(Real), cudaMemcpyDeviceToHost, stream)
     ));
-    return gwn_status::ok();
 }
 
 template <gwn_real_type Real, gwn_index_type Index, class MortonCode>
@@ -231,54 +232,45 @@ template <gwn_real_type Real> struct gwn_scene_aabb {
 };
 
 template <gwn_real_type Real, gwn_index_type Index, class MortonCode>
-struct gwn_topology_build_preprocess {
+struct gwn_bvh_build_preprocess_data {
     gwn_device_array<Index> sorted_primitive_indices{};
     gwn_device_array<MortonCode> sorted_morton_codes{};
     gwn_device_array<gwn_aabb<Real>> primitive_aabbs{};
     gwn_device_array<gwn_aabb<Real>> sorted_primitive_aabbs{};
 };
 
+/// \brief Compute the scene bounds used to normalize primitive Morton coordinates.
 template <gwn_real_type Real, gwn_index_type Index>
-gwn_status gwn_compute_scene_aabb(
+void gwn_compute_scene_aabb(
     gwn_geometry_accessor<Real, Index> const &geometry, gwn_scene_aabb<Real> &result,
     cudaStream_t const stream
-) noexcept {
+) {
     gwn_device_array<Real> axis_min{};
     gwn_device_array<Real> axis_max{};
     gwn_device_array<std::uint8_t> reduce_temp{};
-    GWN_RETURN_ON_ERROR(axis_min.resize(1, stream));
-    GWN_RETURN_ON_ERROR(axis_max.resize(1, stream));
-    GWN_RETURN_ON_ERROR(
-        gwn_reduce_minmax<Real>(
-            geometry.vertex_x, axis_min, axis_max, reduce_temp, result.min_x, result.max_x, stream
-        )
+    axis_min.resize(1, stream);
+    axis_max.resize(1, stream);
+    gwn_reduce_minmax<Real>(
+        geometry.vertex_x, axis_min, axis_max, reduce_temp, result.min_x, result.max_x, stream
     );
-    GWN_RETURN_ON_ERROR(
-        gwn_reduce_minmax<Real>(
-            geometry.vertex_y, axis_min, axis_max, reduce_temp, result.min_y, result.max_y, stream
-        )
+    gwn_reduce_minmax<Real>(
+        geometry.vertex_y, axis_min, axis_max, reduce_temp, result.min_y, result.max_y, stream
     );
-    GWN_RETURN_ON_ERROR(
-        gwn_reduce_minmax<Real>(
-            geometry.vertex_z, axis_min, axis_max, reduce_temp, result.min_z, result.max_z, stream
-        )
+    gwn_reduce_minmax<Real>(
+        geometry.vertex_z, axis_min, axis_max, reduce_temp, result.min_z, result.max_z, stream
     );
-    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaStreamSynchronize(stream)));
+    gwn_throw_status_error(gwn_cuda_to_status(cudaStreamSynchronize(stream)));
 
-    GWN_ASSERT(isfinite(result.min_x) && isfinite(result.max_x), "scene AABB x not finite");
-    GWN_ASSERT(isfinite(result.min_y) && isfinite(result.max_y), "scene AABB y not finite");
-    GWN_ASSERT(isfinite(result.min_z) && isfinite(result.max_z), "scene AABB z not finite");
-    GWN_ASSERT(result.min_x <= result.max_x, "scene AABB x: min > max");
-    GWN_ASSERT(result.min_y <= result.max_y, "scene AABB y: min > max");
-    GWN_ASSERT(result.min_z <= result.max_z, "scene AABB z: min > max");
+    GWN_ASSERT(!(result.max_x < result.min_x), "scene AABB x: min > max");
+    GWN_ASSERT(!(result.max_y < result.min_y), "scene AABB y: min > max");
+    GWN_ASSERT(!(result.max_z < result.min_z), "scene AABB z: min > max");
 
     auto const safe_inv = [](Real const lo, Real const hi) noexcept {
-        return (hi > lo) ? Real(1) / (hi - lo) : Real(1);
+        return hi == lo ? Real(1) : Real(1) / (hi - lo);
     };
     result.inv_x = safe_inv(result.min_x, result.max_x);
     result.inv_y = safe_inv(result.min_y, result.max_y);
     result.inv_z = safe_inv(result.min_z, result.max_z);
-    return gwn_status::ok();
 }
 
 /// \brief Compute primitive AABBs + Morton keys and radix-sort primitive order.
@@ -296,13 +288,13 @@ gwn_status gwn_compute_scene_aabb(
 ///
 /// \return \c gwn_status::ok() on success.
 template <class MortonCode, gwn_real_type Real, gwn_index_type Index>
-gwn_status gwn_compute_and_sort_morton(
+void gwn_compute_and_sort_morton(
     gwn_geometry_accessor<Real, Index> const &geometry, gwn_scene_aabb<Real> const &scene,
     gwn_device_array<Index> &sorted_primitive_indices,
     gwn_device_array<MortonCode> &sorted_morton_codes,
     gwn_device_array<gwn_aabb<Real>> &primitive_aabbs,
     gwn_device_array<gwn_aabb<Real>> &sorted_primitive_aabbs, cudaStream_t const stream
-) noexcept {
+) {
     static_assert(
         std::is_same_v<MortonCode, std::uint32_t> || std::is_same_v<MortonCode, std::uint64_t>,
         "MortonCode must be std::uint32_t or std::uint64_t."
@@ -312,14 +304,14 @@ gwn_status gwn_compute_and_sort_morton(
 
     gwn_device_array<MortonCode> morton_codes{};
     gwn_device_array<Index> primitive_indices{};
-    GWN_RETURN_ON_ERROR(primitive_aabbs.resize(primitive_count, stream));
-    GWN_RETURN_ON_ERROR(morton_codes.resize(primitive_count, stream));
-    GWN_RETURN_ON_ERROR(primitive_indices.resize(primitive_count, stream));
+    primitive_aabbs.resize(primitive_count, stream);
+    morton_codes.resize(primitive_count, stream);
+    primitive_indices.resize(primitive_count, stream);
 
     auto const primitive_aabbs_span = primitive_aabbs.span();
     auto const morton_codes_span = morton_codes.span();
     auto const primitive_indices_span = primitive_indices.span();
-    GWN_RETURN_ON_ERROR(
+    gwn_throw_status_error(
         gwn_launch_linear_kernel<k_block_size>(
             primitive_count,
             gwn_compute_triangle_aabbs_and_morton_functor<Real, Index, MortonCode>{
@@ -333,20 +325,20 @@ gwn_status gwn_compute_and_sort_morton(
     auto const radix_item_count = static_cast<std::uint64_t>(primitive_count);
 
     gwn_device_array<std::uint8_t> radix_sort_temp{};
-    GWN_RETURN_ON_ERROR(sorted_morton_codes.resize(primitive_count, stream));
-    GWN_RETURN_ON_ERROR(sorted_primitive_indices.resize(primitive_count, stream));
+    sorted_morton_codes.resize(primitive_count, stream);
+    sorted_primitive_indices.resize(primitive_count, stream);
     auto const radix_sort_end_bit = static_cast<int>(sizeof(MortonCode) * 8);
 
     std::size_t radix_sort_temp_bytes = 0;
-    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
+    gwn_throw_status_error(gwn_cuda_to_status(
         cub::DeviceRadixSort::SortPairs(
             nullptr, radix_sort_temp_bytes, morton_codes_span.data(), sorted_morton_codes.data(),
             primitive_indices_span.data(), sorted_primitive_indices.data(), radix_item_count, 0,
             radix_sort_end_bit, stream
         )
     ));
-    GWN_RETURN_ON_ERROR(radix_sort_temp.resize(radix_sort_temp_bytes, stream));
-    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
+    radix_sort_temp.resize(radix_sort_temp_bytes, stream);
+    gwn_throw_status_error(gwn_cuda_to_status(
         cub::DeviceRadixSort::SortPairs(
             radix_sort_temp.data(), radix_sort_temp_bytes, morton_codes_span.data(),
             sorted_morton_codes.data(), primitive_indices_span.data(),
@@ -358,8 +350,8 @@ gwn_status gwn_compute_and_sort_morton(
         sorted_primitive_indices.size() == primitive_count, "sorted primitive indices size mismatch"
     );
 
-    GWN_RETURN_ON_ERROR(sorted_primitive_aabbs.resize(primitive_count, stream));
-    GWN_RETURN_ON_ERROR(
+    sorted_primitive_aabbs.resize(primitive_count, stream);
+    gwn_throw_status_error(
         gwn_launch_linear_kernel<k_block_size>(
             primitive_count,
             gwn_gather_sorted_aabbs_functor<Real, Index>{
@@ -372,18 +364,17 @@ gwn_status gwn_compute_and_sort_morton(
             stream
         )
     );
-
-    return gwn_status::ok();
 }
 
+/// \brief Materialize sorted Morton codes, primitive IDs, and primitive bounds for BVH build.
 template <class MortonCode, gwn_real_type Real, gwn_index_type Index>
-gwn_status gwn_bvh_topology_build_preprocess(
+void gwn_bvh_build_preprocess(
     gwn_geometry_accessor<Real, Index> const &geometry,
-    gwn_topology_build_preprocess<Real, Index, MortonCode> &preprocess, cudaStream_t const stream
-) noexcept {
+    gwn_bvh_build_preprocess_data<Real, Index, MortonCode> &preprocess, cudaStream_t const stream
+) {
     gwn_scene_aabb<Real> scene{};
-    GWN_RETURN_ON_ERROR(gwn_compute_scene_aabb(geometry, scene, stream));
-    return gwn_compute_and_sort_morton<MortonCode>(
+    gwn_compute_scene_aabb(geometry, scene, stream);
+    gwn_compute_and_sort_morton<MortonCode>(
         geometry, scene, preprocess.sorted_primitive_indices, preprocess.sorted_morton_codes,
         preprocess.primitive_aabbs, preprocess.sorted_primitive_aabbs, stream
     );
