@@ -120,13 +120,6 @@ public:
     /// \brief Release owned device storage on the currently bound stream.
     void clear() noexcept { detail::gwn_release_accessor(accessor_, stream()); }
 
-    /// \brief Release storage on the old bound stream, then bind \p clear_stream.
-    void clear(cudaStream_t clear_stream) noexcept {
-        cudaStream_t const release_stream = stream();
-        detail::gwn_release_accessor(accessor_, release_stream);
-        set_stream(clear_stream);
-    }
-
     /// \brief Return the mutable device accessor.
     [[nodiscard]] accessor_type &accessor() noexcept { return accessor_; }
 

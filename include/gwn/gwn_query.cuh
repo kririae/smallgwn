@@ -178,7 +178,10 @@ template <
 ///
 /// Rays are evaluated on the closed interval [\p t_min, \p t_max]. Each output record has the
 /// same fields and status semantics as \ref gwn_ray_first_hit. The launch is asynchronous with
-/// respect to the host.
+/// respect to the host. For width-4 float BVHs with uint32 indices, the launcher selects packed
+/// traversal when the root is internal, node references fit the packed encoding, and
+/// \c packed_stack_bound does not exceed \p StackCapacity. Otherwise it selects canonical
+/// traversal with identical result semantics.
 template <
     int Width, gwn_real_type Real, gwn_index_type Index = std::uint32_t,
     int StackCapacity = k_gwn_default_traversal_stack_capacity,

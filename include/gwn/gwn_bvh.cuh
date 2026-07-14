@@ -355,12 +355,6 @@ public:
     /// \brief Release owned storage on the currently bound stream.
     void clear() noexcept { detail::gwn_release_bvh_accessor(accessor_, stream()); }
 
-    /// \brief Release owned storage on the current stream, then bind \p next_stream.
-    void clear(cudaStream_t const next_stream) noexcept {
-        detail::gwn_release_bvh_accessor(accessor_, stream());
-        set_stream(next_stream);
-    }
-
     /// \brief Return the mutable non-owning device accessor.
     [[nodiscard]] accessor_type &accessor() noexcept { return accessor_; }
 
@@ -413,12 +407,6 @@ public:
 
     /// \brief Release owned storage on the currently bound stream.
     void clear() noexcept { detail::gwn_release_bvh_moment_accessor(accessor_, stream()); }
-
-    /// \brief Release owned storage on the current stream, then bind \p next_stream.
-    void clear(cudaStream_t const next_stream) noexcept {
-        detail::gwn_release_bvh_moment_accessor(accessor_, stream());
-        set_stream(next_stream);
-    }
 
     /// \brief Return the mutable non-owning device accessor.
     [[nodiscard]] accessor_type &accessor() noexcept { return accessor_; }

@@ -17,8 +17,9 @@ namespace gwn {
 /// \brief Refit all geometry-derived data in a canonical BVH.
 ///
 /// Bounds and leaf-ordered triangle records are replaced from \p geometry while hierarchy
-/// references, primitive order, root kind, and maximum depth are preserved. The geometry must
-/// retain the triangle indexing used to build \p bvh. On success \p bvh is rebound to \p stream.
+/// references, primitive order, root kind, \c internal_stack_bound, and \c packed_stack_bound are
+/// preserved. The geometry must retain the triangle indexing used to build \p bvh. On success
+/// \p bvh is rebound to \p stream.
 /// A failure before mutation begins preserves the previous BVH and stream binding. A later failure
 /// makes the BVH unqueryable and binds it to \p stream; callers may then clear or rebuild it.
 template <int Width, gwn_real_type Real, gwn_index_type Index>

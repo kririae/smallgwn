@@ -4,7 +4,7 @@ if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
     set(CMAKE_CUDA_ARCHITECTURES native)
 endif()
 
-project(smallgwn LANGUAGES CXX CUDA)
+project(smallgwn VERSION 0.1.0 LANGUAGES CXX CUDA)
 
 find_package(CUDAToolkit REQUIRED)
 
