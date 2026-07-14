@@ -3,10 +3,19 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "gwn_bvh_topology_build_common.cuh"
+#include "gwn_bvh_build_common.cuh"
+#include "gwn_device_array.cuh"
 
 namespace gwn {
 namespace detail {
+
+/// \brief Child kind used only while constructing the transient binary hierarchy.
+enum class gwn_binary_child_kind : std::uint8_t {
+    k_invalid = 0,
+    k_internal = 1,
+    k_leaf = 2,
+};
+
 template <gwn_index_type Index> struct gwn_binary_child_ref {
     Index index{};
     std::uint8_t kind{};
@@ -17,7 +26,7 @@ template <gwn_index_type Index> struct gwn_binary_node {
     gwn_binary_child_ref<Index> right{};
 };
 
-template <gwn_index_type Index, class MortonCode> struct gwn_build_binary_topology_functor {
+template <gwn_index_type Index, class MortonCode> struct gwn_build_binary_hierarchy_functor {
     cuda::std::span<MortonCode const> morton_codes{};
     cuda::std::span<gwn_binary_node<Index>> binary_nodes{};
     cuda::std::span<Index> internal_parent{};
@@ -86,30 +95,30 @@ template <gwn_index_type Index, class MortonCode> struct gwn_build_binary_topolo
         auto const split_index = static_cast<Index>(split);
         auto const split_plus_one_index = static_cast<Index>(split + 1);
         if (split == first) {
-            node.left.kind = static_cast<std::uint8_t>(gwn_bvh_child_kind::k_leaf);
+            node.left.kind = static_cast<std::uint8_t>(gwn_binary_child_kind::k_leaf);
             node.left.index = split_index;
         } else {
-            node.left.kind = static_cast<std::uint8_t>(gwn_bvh_child_kind::k_internal);
+            node.left.kind = static_cast<std::uint8_t>(gwn_binary_child_kind::k_internal);
             node.left.index = split_index;
         }
 
         if ((split + 1) == last) {
-            node.right.kind = static_cast<std::uint8_t>(gwn_bvh_child_kind::k_leaf);
+            node.right.kind = static_cast<std::uint8_t>(gwn_binary_child_kind::k_leaf);
             node.right.index = split_plus_one_index;
         } else {
-            node.right.kind = static_cast<std::uint8_t>(gwn_bvh_child_kind::k_internal);
+            node.right.kind = static_cast<std::uint8_t>(gwn_binary_child_kind::k_internal);
             node.right.index = split_plus_one_index;
         }
 
         binary_nodes[internal_id_u] = node;
-        if (node.left.kind == static_cast<std::uint8_t>(gwn_bvh_child_kind::k_internal)) {
+        if (node.left.kind == static_cast<std::uint8_t>(gwn_binary_child_kind::k_internal)) {
             internal_parent[static_cast<std::size_t>(node.left.index)] = internal_id_index;
             internal_parent_slot[static_cast<std::size_t>(node.left.index)] = 0;
         } else {
             leaf_parent[static_cast<std::size_t>(node.left.index)] = internal_id_index;
             leaf_parent_slot[static_cast<std::size_t>(node.left.index)] = 0;
         }
-        if (node.right.kind == static_cast<std::uint8_t>(gwn_bvh_child_kind::k_internal)) {
+        if (node.right.kind == static_cast<std::uint8_t>(gwn_binary_child_kind::k_internal)) {
             internal_parent[static_cast<std::size_t>(node.right.index)] = internal_id_index;
             internal_parent_slot[static_cast<std::size_t>(node.right.index)] = 1;
         } else {
@@ -188,33 +197,32 @@ template <gwn_index_type Index> struct gwn_binary_parent_temporaries {
     gwn_device_array<std::uint8_t> leaf_parent_slot;
 };
 
+/// \brief Allocate and initialize the shared binary-hierarchy parent buffers.
 template <gwn_index_type Index>
-gwn_status gwn_prepare_binary_topology_buffers(
+void gwn_prepare_binary_hierarchy_buffers(
     std::size_t const primitive_count, gwn_device_array<gwn_binary_node<Index>> &binary_nodes,
     gwn_device_array<Index> &binary_internal_parent, gwn_binary_parent_temporaries<Index> &temps,
     cudaStream_t const stream
-) noexcept {
+) {
     std::size_t const internal_count = primitive_count - 1;
-    GWN_RETURN_ON_ERROR(binary_nodes.resize(internal_count, stream));
-    GWN_RETURN_ON_ERROR(binary_internal_parent.resize(internal_count, stream));
-    GWN_RETURN_ON_ERROR(temps.internal_parent_slot.resize(internal_count, stream));
-    GWN_RETURN_ON_ERROR(temps.leaf_parent.resize(primitive_count, stream));
-    GWN_RETURN_ON_ERROR(temps.leaf_parent_slot.resize(primitive_count, stream));
+    binary_nodes.resize(internal_count, stream);
+    binary_internal_parent.resize(internal_count, stream);
+    temps.internal_parent_slot.resize(internal_count, stream);
+    temps.leaf_parent.resize(primitive_count, stream);
+    temps.leaf_parent_slot.resize(primitive_count, stream);
 
-    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
+    gwn_throw_status_error(gwn_cuda_to_status(
         cudaMemsetAsync(binary_internal_parent.data(), 0xff, internal_count * sizeof(Index), stream)
     ));
-    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemsetAsync(
+    gwn_throw_status_error(gwn_cuda_to_status(cudaMemsetAsync(
         temps.internal_parent_slot.data(), 0xff, internal_count * sizeof(std::uint8_t), stream
     )));
-    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(
+    gwn_throw_status_error(gwn_cuda_to_status(
         cudaMemsetAsync(temps.leaf_parent.data(), 0xff, primitive_count * sizeof(Index), stream)
     ));
-    GWN_RETURN_ON_ERROR(gwn_cuda_to_status(cudaMemsetAsync(
+    gwn_throw_status_error(gwn_cuda_to_status(cudaMemsetAsync(
         temps.leaf_parent_slot.data(), 0xff, primitive_count * sizeof(std::uint8_t), stream
     )));
-
-    return gwn_status::ok();
 }
 
 } // namespace detail
