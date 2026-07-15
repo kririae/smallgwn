@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cuda/std/cmath>
+
 #include <cmath>
 #include <cstddef>
 #include <limits>
@@ -324,7 +326,8 @@ template <
 
                 // Accept only a finite far-field expansion. Otherwise traversal descends until
                 // leaf triangles contribute their exact solid-angle direct sum.
-                if (std::isfinite(omega_approx)) {
+                // TODO: `std::isfinite` will support constexpr starting in C++23.
+                if (cuda::std::isfinite(omega_approx)) {
                     omega_sum += omega_approx;
                     if constexpr (ComputeGradient) {
                         grad_sum.x += grad_approx_x;

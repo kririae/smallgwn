@@ -18,6 +18,11 @@ target_include_directories(smallgwn
 target_compile_features(smallgwn INTERFACE cxx_std_20 cuda_std_20)
 target_link_libraries(smallgwn INTERFACE CUDA::cudart)
 target_compile_options(smallgwn INTERFACE "$<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>")
+if(MSVC)
+    target_compile_options(smallgwn INTERFACE
+        $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/Zc:preprocessor>
+    )
+endif()
 
 option(
     SMALLGWN_BUILD_EIGEN_BRIDGE

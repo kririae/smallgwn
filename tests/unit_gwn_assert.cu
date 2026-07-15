@@ -41,16 +41,14 @@ TEST(smallgwn_unit_assert, force_assert_false_terminates_with_default_message) {
 
 TEST(smallgwn_unit_assert, force_assert_false_terminates_with_formatted_message) {
     GWN_EXPECT_ABORT_WITH_STDERR(
-        { GWN_FORCE_ASSERT(false, "value=%d", 7); },
-        "Assertion \\(false\\) failed[[:space:][:print:]]*value=7"
+        { GWN_FORCE_ASSERT(false, "value=%d", 7); }, "Assertion \\(false\\) failed.*value=7"
     );
 }
 
 #if !defined(NDEBUG)
 TEST(smallgwn_unit_assert, assert_false_terminates_in_debug_builds) {
     GWN_EXPECT_ABORT_WITH_STDERR(
-        { GWN_ASSERT(false, "debug-value=%d", 9); },
-        "Assertion \\(false\\) failed[[:space:][:print:]]*debug-value=9"
+        { GWN_ASSERT(false, "debug-value=%d", 9); }, "Assertion \\(false\\) failed.*debug-value=9"
     );
 }
 #endif

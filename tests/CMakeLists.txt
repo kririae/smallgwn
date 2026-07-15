@@ -36,6 +36,9 @@ function(smallgwn_configure_test_target target)
     target_include_directories(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
     target_include_directories(${target} SYSTEM PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/reference_hdk")
     smallgwn_apply_strict_warnings(${target})
+    if(MSVC)
+        target_link_options(${target} PRIVATE $<$<LINK_LANGUAGE:CUDA>:/SUBSYSTEM:CONSOLE>)
+    endif()
 endfunction()
 
 add_executable(smallgwn_unit
