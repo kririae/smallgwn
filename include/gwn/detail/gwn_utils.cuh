@@ -6,7 +6,6 @@
 #include <cuda/std/span>
 #include <cuda_runtime_api.h>
 
-#include <format>
 #include <limits>
 #include <source_location>
 #include <stdexcept>
@@ -29,7 +28,8 @@ public:
         cudaError_t const result, char const *const operation,
         std::source_location const location = std::source_location::current()
     )
-        : std::runtime_error(std::format("{} failed.", operation)), result_{result},
+        // TODO: Bypass MSVC bugs.
+        : std::runtime_error(std::string{operation} + " failed."), result_{result},
           location_{location} {}
 
     [[nodiscard]] cudaError_t result() const noexcept { return result_; }

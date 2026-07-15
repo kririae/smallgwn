@@ -9,7 +9,6 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
-#include <format>
 #include <limits>
 #include <source_location>
 #include <stdexcept>
@@ -50,6 +49,8 @@ public:
 #if defined(__CUDA_ARCH__)
     asm volatile("trap;");
     __builtin_unreachable();
+#elif defined(_MSC_VER)
+    std::abort();
 #else
     __builtin_trap();
 #endif
@@ -245,11 +246,10 @@ public:
     ) noexcept {
         char const *const error_name = cudaGetErrorName(cuda_result);
         char const *const error_message = cudaGetErrorString(cuda_result);
-        message += std::format(
-            " [cuda_error={} ({}): \"{}\"]", static_cast<int>(cuda_result),
-            error_name != nullptr ? error_name : "unknown",
-            error_message != nullptr ? error_message : "unknown"
-        );
+        // TODO: Bypass MSVC bugs.
+        message += std::string{" [cuda_error="} + std::to_string(static_cast<int>(cuda_result)) +
+                   " (" + (error_name != nullptr ? error_name : "unknown") + "): \"" +
+                   (error_message != nullptr ? error_message : "unknown") + "\"]";
         return gwn_status(gwn_error::cuda_runtime_error, std::move(message), location);
     }
 
@@ -341,7 +341,9 @@ inline void gwn_throw_if_error(gwn_status const &status) {
     std::string message = status.message();
     if (status.has_location()) {
         std::source_location const location = status.location();
-        message += std::format(" at {}:{}", location.file_name(), location.line());
+        // TODO: Bypass MSVC bugs.
+        message +=
+            std::string{" at "} + location.file_name() + ":" + std::to_string(location.line());
     }
     throw std::runtime_error(message);
 }

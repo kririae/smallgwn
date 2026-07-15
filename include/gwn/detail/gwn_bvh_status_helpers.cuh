@@ -3,7 +3,6 @@
 #include <cuda_runtime_api.h>
 
 #include <exception>
-#include <format>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -26,7 +25,8 @@ inline constexpr std::string_view k_gwn_bvh_phase_refit_moment = "bvh.refit.mome
 
 [[nodiscard]] inline std::string
 gwn_bvh_format_message(std::string_view const phase, std::string_view const message) {
-    return std::format("{}: {}", phase, message);
+    // TODO: Bypass MSVC bugs.
+    return std::string{phase} + ": " + std::string{message};
 }
 
 [[noreturn]] inline void
@@ -55,17 +55,20 @@ gwn_try_translate_status(char const *const function_name, Function &&function) n
     } catch (gwn_cuda_exception const &exception) {
         return gwn_status::cuda_runtime_error(
             exception.result(), exception.location(),
-            std::format("{}: {}", function_name, exception.what())
+            // TODO: Bypass MSVC bugs.
+            std::string{function_name} + ": " + exception.what()
         );
     } catch (std::invalid_argument const &exception) {
         return gwn_status::invalid_argument(exception.what());
     } catch (std::exception const &exception) {
         return gwn_status::internal_error(
-            std::format("Unhandled std::exception in {}: {}", function_name, exception.what())
+            // TODO: Bypass MSVC bugs.
+            std::string{"Unhandled std::exception in "} + function_name + ": " + exception.what()
         );
     } catch (...) {
         return gwn_status::internal_error(
-            std::format("Unhandled unknown exception in {}.", function_name)
+            // TODO: Bypass MSVC bugs.
+            std::string{"Unhandled unknown exception in "} + function_name + "."
         );
     }
 }
