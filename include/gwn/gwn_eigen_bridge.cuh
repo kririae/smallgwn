@@ -114,12 +114,12 @@ template <
     }
 
     return gwn_upload_geometry(
-        object, cuda::std::span<Real const>(x.get(), vertex_count_u),
-        cuda::std::span<Real const>(y.get(), vertex_count_u),
-        cuda::std::span<Real const>(z.get(), vertex_count_u),
-        cuda::std::span<Index const>(i0.get(), triangle_count_u),
-        cuda::std::span<Index const>(i1.get(), triangle_count_u),
-        cuda::std::span<Index const>(i2.get(), triangle_count_u), stream
+        object, gwn_host_span<Real const>(x.get(), vertex_count_u),
+        gwn_host_span<Real const>(y.get(), vertex_count_u),
+        gwn_host_span<Real const>(z.get(), vertex_count_u),
+        gwn_host_span<Index const>(i0.get(), triangle_count_u),
+        gwn_host_span<Index const>(i1.get(), triangle_count_u),
+        gwn_host_span<Index const>(i2.get(), triangle_count_u), stream
     );
 } catch (std::exception const &) {
     return gwn_status::internal_error(

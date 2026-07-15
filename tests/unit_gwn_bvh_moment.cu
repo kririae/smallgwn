@@ -30,12 +30,12 @@ struct octahedron_mesh {
 ) {
     octahedron_mesh const mesh{};
     return gwn::gwn_upload_geometry(
-        geometry, cuda::std::span<Real const>(mesh.x.data(), mesh.x.size()),
-        cuda::std::span<Real const>(mesh.y.data(), mesh.y.size()),
-        cuda::std::span<Real const>(mesh.z.data(), mesh.z.size()),
-        cuda::std::span<Index const>(mesh.i0.data(), mesh.i0.size()),
-        cuda::std::span<Index const>(mesh.i1.data(), mesh.i1.size()),
-        cuda::std::span<Index const>(mesh.i2.data(), mesh.i2.size()), stream
+        geometry, gwn::gwn_host_span<Real const>(mesh.x.data(), mesh.x.size()),
+        gwn::gwn_host_span<Real const>(mesh.y.data(), mesh.y.size()),
+        gwn::gwn_host_span<Real const>(mesh.z.data(), mesh.z.size()),
+        gwn::gwn_host_span<Index const>(mesh.i0.data(), mesh.i0.size()),
+        gwn::gwn_host_span<Index const>(mesh.i1.data(), mesh.i1.size()),
+        gwn::gwn_host_span<Index const>(mesh.i2.data(), mesh.i2.size()), stream
     );
 }
 
@@ -73,11 +73,17 @@ void expect_moment_query_matches_exact(gwn::gwn_bvh_build_method const method) {
     // A deliberately large beta makes every finite cluster descend, so both public APIs evaluate
     // the same triangle set without using Taylor coefficients.
     ASSERT_TRUE((gwn::gwn_compute_winding_number_taylor_batch<Order>(
-                     bvh, moment, d_x.span(), d_y.span(), d_z.span(), d_taylor.span(), Real(1e6)
+                     bvh, moment, gwn::tests::device_input_span(d_x.span()),
+                     gwn::tests::device_input_span(d_y.span()),
+                     gwn::tests::device_input_span(d_z.span()),
+                     gwn::tests::device_span(d_taylor.span()), Real(1e6)
     )
                      .is_ok()));
     ASSERT_TRUE((gwn::gwn_compute_winding_number_exact_batch(
-                     bvh, d_x.span(), d_y.span(), d_z.span(), d_exact.span()
+                     bvh, gwn::tests::device_input_span(d_x.span()),
+                     gwn::tests::device_input_span(d_y.span()),
+                     gwn::tests::device_input_span(d_z.span()),
+                     gwn::tests::device_span(d_exact.span())
     )
                      .is_ok()));
     ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
@@ -121,8 +127,8 @@ TEST_F(GwnBvhMomentTest, moment_from_replaced_bvh_is_rejected) {
     EXPECT_FALSE(moment.accessor().is_valid_for(bvh.accessor()));
 
     gwn::gwn_status const stale_status = gwn::gwn_compute_winding_number_taylor_batch<1>(
-        bvh, moment, cuda::std::span<Real const>{}, cuda::std::span<Real const>{},
-        cuda::std::span<Real const>{}, cuda::std::span<Real>{}
+        bvh, moment, gwn::gwn_device_span<Real const>{}, gwn::gwn_device_span<Real const>{},
+        gwn::gwn_device_span<Real const>{}, gwn::gwn_device_span<Real>{}
     );
     EXPECT_EQ(stale_status.error(), gwn::gwn_error::invalid_argument);
 
@@ -143,8 +149,8 @@ TEST_F(GwnBvhMomentTest, moment_from_refit_bvh_is_rejected) {
     EXPECT_FALSE(moment.accessor().is_valid_for(bvh.accessor()));
 
     gwn::gwn_status const stale_status = gwn::gwn_compute_winding_number_taylor_batch<1>(
-        bvh, moment, cuda::std::span<Real const>{}, cuda::std::span<Real const>{},
-        cuda::std::span<Real const>{}, cuda::std::span<Real>{}
+        bvh, moment, gwn::gwn_device_span<Real const>{}, gwn::gwn_device_span<Real const>{},
+        gwn::gwn_device_span<Real const>{}, gwn::gwn_device_span<Real>{}
     );
     EXPECT_EQ(stale_status.error(), gwn::gwn_error::invalid_argument);
 }
@@ -153,10 +159,12 @@ TEST_F(GwnBvhMomentTest, leaf_root_moment_uses_exact_triangle_record) {
     gwn::tests::SingleTriangleMesh const mesh{};
     gwn::gwn_geometry_object<Real, Index> geometry{};
     ASSERT_TRUE((gwn::gwn_upload_geometry(
-                     geometry, cuda::std::span<Real const>(mesh.vx),
-                     cuda::std::span<Real const>(mesh.vy), cuda::std::span<Real const>(mesh.vz),
-                     cuda::std::span<Index const>(mesh.i0), cuda::std::span<Index const>(mesh.i1),
-                     cuda::std::span<Index const>(mesh.i2)
+                     geometry, gwn::tests::host_span(cuda::std::span<Real const>(mesh.vx)),
+                     gwn::tests::host_span(cuda::std::span<Real const>(mesh.vy)),
+                     gwn::tests::host_span(cuda::std::span<Real const>(mesh.vz)),
+                     gwn::tests::host_span(cuda::std::span<Index const>(mesh.i0)),
+                     gwn::tests::host_span(cuda::std::span<Index const>(mesh.i1)),
+                     gwn::tests::host_span(cuda::std::span<Index const>(mesh.i2))
     )
                      .is_ok()));
 
@@ -177,11 +185,17 @@ TEST_F(GwnBvhMomentTest, leaf_root_moment_uses_exact_triangle_record) {
     std::array<Real, 1> const host_query{Real(2)};
     query.copy_from_host(cuda::std::span<Real const>(host_query));
     ASSERT_TRUE((gwn::gwn_compute_winding_number_taylor_batch<2>(
-                     bvh, moment, query.span(), query.span(), query.span(), taylor.span(), Real(0)
+                     bvh, moment, gwn::tests::device_input_span(query.span()),
+                     gwn::tests::device_input_span(query.span()),
+                     gwn::tests::device_input_span(query.span()),
+                     gwn::tests::device_span(taylor.span()), Real(0)
     )
                      .is_ok()));
     ASSERT_TRUE((gwn::gwn_compute_winding_number_exact_batch(
-                     bvh, query.span(), query.span(), query.span(), exact.span()
+                     bvh, gwn::tests::device_input_span(query.span()),
+                     gwn::tests::device_input_span(query.span()),
+                     gwn::tests::device_input_span(query.span()),
+                     gwn::tests::device_span(exact.span())
     )
                      .is_ok()));
     ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
@@ -240,8 +254,10 @@ TEST_F(GwnBvhMomentStreamTest, moment_replacement_preserves_old_stream_ordering)
     // Keep readers of the old coefficients queued on A while replacement is built on B. The old
     // allocation must be released behind those readers on A, not on the replacement stream.
     ASSERT_TRUE((gwn::gwn_compute_winding_number_taylor_batch<0>(
-                     bvh, moment, query_x.span(), query_y.span(), query_z.span(), output.span(),
-                     Real(2), stream_a_
+                     bvh, moment, gwn::tests::device_span(query_x.span()),
+                     gwn::tests::device_span(query_y.span()),
+                     gwn::tests::device_span(query_z.span()),
+                     gwn::tests::device_span(output.span()), Real(2), stream_a_
     )
                      .is_ok()));
     ASSERT_TRUE(gwn::gwn_refit_bvh_moment<0>(bvh, moment, stream_b_).is_ok());

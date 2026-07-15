@@ -94,9 +94,12 @@ TEST_F(GwnBvhTest, default_build_produces_a_complete_leaf_root) {
     gwn::tests::SingleTriangleMesh const mesh{};
     gwn::gwn_geometry_object<Real, Index> geometry;
     gwn::gwn_status status = gwn::gwn_upload_geometry(
-        geometry, cuda::std::span<Real const>(mesh.vx), cuda::std::span<Real const>(mesh.vy),
-        cuda::std::span<Real const>(mesh.vz), cuda::std::span<Index const>(mesh.i0),
-        cuda::std::span<Index const>(mesh.i1), cuda::std::span<Index const>(mesh.i2)
+        geometry, gwn::tests::host_span(cuda::std::span<Real const>(mesh.vx)),
+        gwn::tests::host_span(cuda::std::span<Real const>(mesh.vy)),
+        gwn::tests::host_span(cuda::std::span<Real const>(mesh.vz)),
+        gwn::tests::host_span(cuda::std::span<Index const>(mesh.i0)),
+        gwn::tests::host_span(cuda::std::span<Index const>(mesh.i1)),
+        gwn::tests::host_span(cuda::std::span<Index const>(mesh.i2))
     );
     ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
 
@@ -145,9 +148,12 @@ TEST_F(GwnBvhTest, build_produces_complete_query_records) {
 
     gwn::gwn_geometry_object<Real, Index> geometry;
     gwn::gwn_status status = gwn::gwn_upload_geometry(
-        geometry, cuda::std::span<Real const>(x), cuda::std::span<Real const>(y),
-        cuda::std::span<Real const>(z), cuda::std::span<Index const>(i0),
-        cuda::std::span<Index const>(i1), cuda::std::span<Index const>(i2)
+        geometry, gwn::tests::host_span(cuda::std::span<Real const>(x)),
+        gwn::tests::host_span(cuda::std::span<Real const>(y)),
+        gwn::tests::host_span(cuda::std::span<Real const>(z)),
+        gwn::tests::host_span(cuda::std::span<Index const>(i0)),
+        gwn::tests::host_span(cuda::std::span<Index const>(i1)),
+        gwn::tests::host_span(cuda::std::span<Index const>(i2))
     );
     SMALLGWN_SKIP_IF_STATUS_CUDA_UNAVAILABLE(status);
     ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
@@ -221,9 +227,12 @@ TEST_F(GwnBvhTest, refit_replaces_geometry_data_and_preserves_primitive_order) {
 
     gwn::gwn_geometry_object<Real, Index> geometry;
     gwn::gwn_status status = gwn::gwn_upload_geometry(
-        geometry, cuda::std::span<Real const>(x), cuda::std::span<Real const>(y),
-        cuda::std::span<Real const>(z), cuda::std::span<Index const>(i0),
-        cuda::std::span<Index const>(i1), cuda::std::span<Index const>(i2)
+        geometry, gwn::tests::host_span(cuda::std::span<Real const>(x)),
+        gwn::tests::host_span(cuda::std::span<Real const>(y)),
+        gwn::tests::host_span(cuda::std::span<Real const>(z)),
+        gwn::tests::host_span(cuda::std::span<Index const>(i0)),
+        gwn::tests::host_span(cuda::std::span<Index const>(i1)),
+        gwn::tests::host_span(cuda::std::span<Index const>(i2))
     );
     SMALLGWN_SKIP_IF_STATUS_CUDA_UNAVAILABLE(status);
     ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
@@ -239,8 +248,9 @@ TEST_F(GwnBvhTest, refit_replaces_geometry_data_and_preserves_primitive_order) {
     y = {Real(5), Real(5), Real(9), Real(-4), Real(-4), Real(2)};
     z = {Real(3), Real(3), Real(3), Real(-6), Real(-6), Real(-6)};
     status = gwn::gwn_update_geometry(
-        geometry, cuda::std::span<Real const>(x), cuda::std::span<Real const>(y),
-        cuda::std::span<Real const>(z)
+        geometry, gwn::tests::host_span(cuda::std::span<Real const>(x)),
+        gwn::tests::host_span(cuda::std::span<Real const>(y)),
+        gwn::tests::host_span(cuda::std::span<Real const>(z))
     );
     ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
     status = gwn::gwn_refit_bvh(geometry, bvh);
@@ -280,9 +290,12 @@ TEST_F(GwnBvhStreamTest, object_replacement_preserves_failure_and_stream_contrac
     gwn::tests::SingleTriangleMesh const mesh{};
     gwn::gwn_geometry_object<Real, Index> geometry;
     gwn::gwn_status status = gwn::gwn_upload_geometry(
-        geometry, cuda::std::span<Real const>(mesh.vx), cuda::std::span<Real const>(mesh.vy),
-        cuda::std::span<Real const>(mesh.vz), cuda::std::span<Index const>(mesh.i0),
-        cuda::std::span<Index const>(mesh.i1), cuda::std::span<Index const>(mesh.i2), stream_a_
+        geometry, gwn::tests::host_span(cuda::std::span<Real const>(mesh.vx)),
+        gwn::tests::host_span(cuda::std::span<Real const>(mesh.vy)),
+        gwn::tests::host_span(cuda::std::span<Real const>(mesh.vz)),
+        gwn::tests::host_span(cuda::std::span<Index const>(mesh.i0)),
+        gwn::tests::host_span(cuda::std::span<Index const>(mesh.i1)),
+        gwn::tests::host_span(cuda::std::span<Index const>(mesh.i2)), stream_a_
     );
     ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
 
@@ -348,10 +361,12 @@ TEST_F(GwnBvhStreamTest, hploc_multi_triangle_replacement_rebinds_stream) {
     gwn::tests::SingleTriangleMesh const single_mesh{};
     gwn::gwn_geometry_object<Real, Index> single_geometry;
     gwn::gwn_status status = gwn::gwn_upload_geometry(
-        single_geometry, cuda::std::span<Real const>(single_mesh.vx),
-        cuda::std::span<Real const>(single_mesh.vy), cuda::std::span<Real const>(single_mesh.vz),
-        cuda::std::span<Index const>(single_mesh.i0), cuda::std::span<Index const>(single_mesh.i1),
-        cuda::std::span<Index const>(single_mesh.i2), stream_a_
+        single_geometry, gwn::tests::host_span(cuda::std::span<Real const>(single_mesh.vx)),
+        gwn::tests::host_span(cuda::std::span<Real const>(single_mesh.vy)),
+        gwn::tests::host_span(cuda::std::span<Real const>(single_mesh.vz)),
+        gwn::tests::host_span(cuda::std::span<Index const>(single_mesh.i0)),
+        gwn::tests::host_span(cuda::std::span<Index const>(single_mesh.i1)),
+        gwn::tests::host_span(cuda::std::span<Index const>(single_mesh.i2)), stream_a_
     );
     ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
 
@@ -370,9 +385,12 @@ TEST_F(GwnBvhStreamTest, hploc_multi_triangle_replacement_rebinds_stream) {
 
     gwn::gwn_geometry_object<Real, Index> multi_geometry;
     status = gwn::gwn_upload_geometry(
-        multi_geometry, cuda::std::span<Real const>(x), cuda::std::span<Real const>(y),
-        cuda::std::span<Real const>(z), cuda::std::span<Index const>(i0),
-        cuda::std::span<Index const>(i1), cuda::std::span<Index const>(i2), stream_b_
+        multi_geometry, gwn::tests::host_span(cuda::std::span<Real const>(x)),
+        gwn::tests::host_span(cuda::std::span<Real const>(y)),
+        gwn::tests::host_span(cuda::std::span<Real const>(z)),
+        gwn::tests::host_span(cuda::std::span<Index const>(i0)),
+        gwn::tests::host_span(cuda::std::span<Index const>(i1)),
+        gwn::tests::host_span(cuda::std::span<Index const>(i2)), stream_b_
     );
     ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
 
@@ -395,9 +413,12 @@ TEST_F(GwnBvhStreamTest, refit_rejects_topology_change_without_mutating_bvh) {
     gwn::tests::SingleTriangleMesh const mesh{};
     gwn::gwn_geometry_object<Real, Index> one_triangle;
     gwn::gwn_status status = gwn::gwn_upload_geometry(
-        one_triangle, cuda::std::span<Real const>(mesh.vx), cuda::std::span<Real const>(mesh.vy),
-        cuda::std::span<Real const>(mesh.vz), cuda::std::span<Index const>(mesh.i0),
-        cuda::std::span<Index const>(mesh.i1), cuda::std::span<Index const>(mesh.i2), stream_a_
+        one_triangle, gwn::tests::host_span(cuda::std::span<Real const>(mesh.vx)),
+        gwn::tests::host_span(cuda::std::span<Real const>(mesh.vy)),
+        gwn::tests::host_span(cuda::std::span<Real const>(mesh.vz)),
+        gwn::tests::host_span(cuda::std::span<Index const>(mesh.i0)),
+        gwn::tests::host_span(cuda::std::span<Index const>(mesh.i1)),
+        gwn::tests::host_span(cuda::std::span<Index const>(mesh.i2)), stream_a_
     );
     ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
 
@@ -415,9 +436,12 @@ TEST_F(GwnBvhStreamTest, refit_rejects_topology_change_without_mutating_bvh) {
     std::array<Index, 2> const i2{2, 2};
     gwn::gwn_geometry_object<Real, Index> two_triangles;
     status = gwn::gwn_upload_geometry(
-        two_triangles, cuda::std::span<Real const>(x), cuda::std::span<Real const>(y),
-        cuda::std::span<Real const>(z), cuda::std::span<Index const>(i0),
-        cuda::std::span<Index const>(i1), cuda::std::span<Index const>(i2), stream_b_
+        two_triangles, gwn::tests::host_span(cuda::std::span<Real const>(x)),
+        gwn::tests::host_span(cuda::std::span<Real const>(y)),
+        gwn::tests::host_span(cuda::std::span<Real const>(z)),
+        gwn::tests::host_span(cuda::std::span<Index const>(i0)),
+        gwn::tests::host_span(cuda::std::span<Index const>(i1)),
+        gwn::tests::host_span(cuda::std::span<Index const>(i2)), stream_b_
     );
     ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
 
@@ -447,7 +471,11 @@ TEST_F(GwnBvhStreamTest, failed_in_place_refit_retains_clear_and_rebuild_paths) 
             cuda::std::span<Index const> const i1, cuda::std::span<Index const> const i2,
             bool const clear_before_rebuild) {
         gwn::gwn_geometry_object<Real, Index> geometry;
-        gwn::gwn_status status = gwn::gwn_upload_geometry(geometry, x, y, z, i0, i1, i2, stream_a_);
+        gwn::gwn_status status = gwn::gwn_upload_geometry(
+            geometry, gwn::tests::host_span(x), gwn::tests::host_span(y), gwn::tests::host_span(z),
+            gwn::tests::host_span(i0), gwn::tests::host_span(i1), gwn::tests::host_span(i2),
+            stream_a_
+        );
         ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
 
         gwn::gwn_bvh4_object<Real, Index> bvh;
@@ -520,9 +548,12 @@ TEST_F(GwnBvhTest, public_build_rejects_primitive_count_above_native_counter_ran
     std::array<BigIndex, 1> const i2{2};
     gwn::gwn_geometry_object<Real, BigIndex> geometry;
     gwn::gwn_status status = gwn::gwn_upload_geometry(
-        geometry, cuda::std::span<Real const>(mesh.vx), cuda::std::span<Real const>(mesh.vy),
-        cuda::std::span<Real const>(mesh.vz), cuda::std::span<BigIndex const>(i0),
-        cuda::std::span<BigIndex const>(i1), cuda::std::span<BigIndex const>(i2)
+        geometry, gwn::tests::host_span(cuda::std::span<Real const>(mesh.vx)),
+        gwn::tests::host_span(cuda::std::span<Real const>(mesh.vy)),
+        gwn::tests::host_span(cuda::std::span<Real const>(mesh.vz)),
+        gwn::tests::host_span(cuda::std::span<BigIndex const>(i0)),
+        gwn::tests::host_span(cuda::std::span<BigIndex const>(i1)),
+        gwn::tests::host_span(cuda::std::span<BigIndex const>(i2))
     );
     ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
 

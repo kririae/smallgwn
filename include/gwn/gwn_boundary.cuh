@@ -112,26 +112,6 @@ private:
     accessor_type accessor_{};
 };
 
-/// \brief Build the algebraic boundary chain from host triangle-index arrays.
-///
-/// \param[in] mesh_vertex_count Number of vertices in the source mesh.
-/// \param[in] i0 First triangle-index array.
-/// \param[in] i1 Second triangle-index array.
-/// \param[in] i2 Third triangle-index array.
-/// \param[in,out] out Destination boundary-chain object.
-/// \param[in] stream CUDA stream used for allocation and preprocessing.
-///
-/// \return \c ok on success.  Returns \c invalid_argument for mismatched spans,
-///         missing storage, or out-of-range triangle indices.
-///
-/// A closed mesh produces a built object with zero boundary edges.
-template <gwn_index_type Index>
-[[nodiscard]] gwn_status gwn_build_boundary_chain(
-    std::size_t mesh_vertex_count, cuda::std::span<Index const> const i0,
-    cuda::std::span<Index const> const i1, cuda::std::span<Index const> const i2,
-    gwn_boundary_chain_object<Index> &out, cudaStream_t stream = gwn_default_stream()
-) noexcept;
-
 /// \brief Build the algebraic boundary chain from an uploaded geometry object.
 ///
 /// The output records the geometry vertex and triangle counts.  Use the chain

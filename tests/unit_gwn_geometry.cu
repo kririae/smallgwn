@@ -41,9 +41,12 @@ template <gwn::gwn_index_type Index> void expect_upload_and_update_contract() {
 
     gwn::gwn_geometry_object<Real, Index> geometry;
     gwn::gwn_status status = gwn::gwn_upload_geometry(
-        geometry, cuda::std::span<Real const>(x), cuda::std::span<Real const>(y),
-        cuda::std::span<Real const>(z), cuda::std::span<Index const>(i0),
-        cuda::std::span<Index const>(i1), cuda::std::span<Index const>(i2)
+        geometry, gwn::tests::host_span(cuda::std::span<Real const>(x)),
+        gwn::tests::host_span(cuda::std::span<Real const>(y)),
+        gwn::tests::host_span(cuda::std::span<Real const>(z)),
+        gwn::tests::host_span(cuda::std::span<Index const>(i0)),
+        gwn::tests::host_span(cuda::std::span<Index const>(i1)),
+        gwn::tests::host_span(cuda::std::span<Index const>(i2))
     );
     ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
     ASSERT_TRUE(geometry.accessor().is_valid());
@@ -58,8 +61,9 @@ template <gwn::gwn_index_type Index> void expect_upload_and_update_contract() {
     y = {6, 6, 7, 6};
     z = {8, 8, 8, 9};
     status = gwn::gwn_update_geometry(
-        geometry, cuda::std::span<Real const>(x), cuda::std::span<Real const>(y),
-        cuda::std::span<Real const>(z)
+        geometry, gwn::tests::host_span(cuda::std::span<Real const>(x)),
+        gwn::tests::host_span(cuda::std::span<Real const>(y)),
+        gwn::tests::host_span(cuda::std::span<Real const>(z))
     );
     ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
     EXPECT_EQ(copy_to_host(geometry.accessor().vertex_x), (std::vector<Real>{4, 5, 4, 4}));
@@ -102,18 +106,24 @@ TEST_F(GwnGeometryTest, failed_upload_preserves_previous_geometry) {
     gwn::gwn_geometry_object<Real, Index> geometry;
     ASSERT_TRUE(
         gwn::gwn_upload_geometry(
-            geometry, cuda::std::span<Real const>(x), cuda::std::span<Real const>(y),
-            cuda::std::span<Real const>(z), cuda::std::span<Index const>(i0),
-            cuda::std::span<Index const>(i1), cuda::std::span<Index const>(i2)
+            geometry, gwn::tests::host_span(cuda::std::span<Real const>(x)),
+            gwn::tests::host_span(cuda::std::span<Real const>(y)),
+            gwn::tests::host_span(cuda::std::span<Real const>(z)),
+            gwn::tests::host_span(cuda::std::span<Index const>(i0)),
+            gwn::tests::host_span(cuda::std::span<Index const>(i1)),
+            gwn::tests::host_span(cuda::std::span<Index const>(i2))
         )
             .is_ok()
     );
 
     std::array<Index, 1> const invalid_i2{3};
     gwn::gwn_status const status = gwn::gwn_upload_geometry(
-        geometry, cuda::std::span<Real const>(x), cuda::std::span<Real const>(y),
-        cuda::std::span<Real const>(z), cuda::std::span<Index const>(i0),
-        cuda::std::span<Index const>(i1), cuda::std::span<Index const>(invalid_i2)
+        geometry, gwn::tests::host_span(cuda::std::span<Real const>(x)),
+        gwn::tests::host_span(cuda::std::span<Real const>(y)),
+        gwn::tests::host_span(cuda::std::span<Real const>(z)),
+        gwn::tests::host_span(cuda::std::span<Index const>(i0)),
+        gwn::tests::host_span(cuda::std::span<Index const>(i1)),
+        gwn::tests::host_span(cuda::std::span<Index const>(invalid_i2))
     );
     EXPECT_EQ(status.error(), gwn::gwn_error::invalid_argument);
     EXPECT_TRUE(geometry.accessor().is_valid());
@@ -132,8 +142,10 @@ TEST_F(GwnGeometryTest, upload_and_update_reject_mismatched_spans) {
     gwn::gwn_geometry_object<Real, Index> geometry;
     EXPECT_EQ(
         gwn::gwn_upload_geometry(
-            geometry, vertices, cuda::std::span<Real const>(short_xyz), vertices, triangles,
-            triangles, triangles
+            geometry, gwn::tests::host_span(vertices),
+            gwn::tests::host_span(cuda::std::span<Real const>(short_xyz)),
+            gwn::tests::host_span(vertices), gwn::tests::host_span(triangles),
+            gwn::tests::host_span(triangles), gwn::tests::host_span(triangles)
         )
             .error(),
         gwn::gwn_error::invalid_argument
@@ -144,15 +156,19 @@ TEST_F(GwnGeometryTest, upload_and_update_reject_mismatched_spans) {
     std::array<Index, 1> const i2{2};
     ASSERT_TRUE(
         gwn::gwn_upload_geometry(
-            geometry, vertices, vertices, vertices, cuda::std::span<Index const>(i0),
-            cuda::std::span<Index const>(i1), cuda::std::span<Index const>(i2)
+            geometry, gwn::tests::host_span(vertices), gwn::tests::host_span(vertices),
+            gwn::tests::host_span(vertices),
+            gwn::tests::host_span(cuda::std::span<Index const>(i0)),
+            gwn::tests::host_span(cuda::std::span<Index const>(i1)),
+            gwn::tests::host_span(cuda::std::span<Index const>(i2))
         )
             .is_ok()
     );
     EXPECT_EQ(
         gwn::gwn_update_geometry(
-            geometry, cuda::std::span<Real const>(short_xyz),
-            cuda::std::span<Real const>(short_xyz), cuda::std::span<Real const>(short_xyz)
+            geometry, gwn::tests::host_span(cuda::std::span<Real const>(short_xyz)),
+            gwn::tests::host_span(cuda::std::span<Real const>(short_xyz)),
+            gwn::tests::host_span(cuda::std::span<Real const>(short_xyz))
         )
             .error(),
         gwn::gwn_error::invalid_argument
@@ -165,10 +181,12 @@ TEST_F(GwnGeometryTest, move_transfers_storage_and_clear_releases_it) {
     gwn::gwn_geometry_object<Real> source;
     ASSERT_TRUE(
         gwn::gwn_upload_geometry(
-            source, cuda::std::span<Real const>(mesh.vx), cuda::std::span<Real const>(mesh.vy),
-            cuda::std::span<Real const>(mesh.vz), cuda::std::span<gwn::tests::Index const>(mesh.i0),
-            cuda::std::span<gwn::tests::Index const>(mesh.i1),
-            cuda::std::span<gwn::tests::Index const>(mesh.i2)
+            source, gwn::tests::host_span(cuda::std::span<Real const>(mesh.vx)),
+            gwn::tests::host_span(cuda::std::span<Real const>(mesh.vy)),
+            gwn::tests::host_span(cuda::std::span<Real const>(mesh.vz)),
+            gwn::tests::host_span(cuda::std::span<gwn::tests::Index const>(mesh.i0)),
+            gwn::tests::host_span(cuda::std::span<gwn::tests::Index const>(mesh.i1)),
+            gwn::tests::host_span(cuda::std::span<gwn::tests::Index const>(mesh.i2))
         )
             .is_ok()
     );
@@ -193,9 +211,12 @@ TEST_F(GwnGeometryStreamTest, replacement_releases_old_storage_on_its_bound_stre
     gwn::gwn_geometry_object<Real, Index> geometry;
     ASSERT_TRUE(
         gwn::gwn_upload_geometry(
-            geometry, cuda::std::span<Real const>(x), cuda::std::span<Real const>(y),
-            cuda::std::span<Real const>(z), cuda::std::span<Index const>(i0),
-            cuda::std::span<Index const>(i1), cuda::std::span<Index const>(i2), stream_a_
+            geometry, gwn::tests::host_span(cuda::std::span<Real const>(x)),
+            gwn::tests::host_span(cuda::std::span<Real const>(y)),
+            gwn::tests::host_span(cuda::std::span<Real const>(z)),
+            gwn::tests::host_span(cuda::std::span<Index const>(i0)),
+            gwn::tests::host_span(cuda::std::span<Index const>(i1)),
+            gwn::tests::host_span(cuda::std::span<Index const>(i2)), stream_a_
         )
             .is_ok()
     );
@@ -215,9 +236,12 @@ TEST_F(GwnGeometryStreamTest, replacement_releases_old_storage_on_its_bound_stre
 
     std::array<Real, 3> const replacement_x{Real(10), Real(11), Real(12)};
     gwn::gwn_status const replacement_status = gwn::gwn_upload_geometry(
-        geometry, cuda::std::span<Real const>(replacement_x), cuda::std::span<Real const>(y),
-        cuda::std::span<Real const>(z), cuda::std::span<Index const>(i0),
-        cuda::std::span<Index const>(i1), cuda::std::span<Index const>(i2), stream_b_
+        geometry, gwn::tests::host_span(cuda::std::span<Real const>(replacement_x)),
+        gwn::tests::host_span(cuda::std::span<Real const>(y)),
+        gwn::tests::host_span(cuda::std::span<Real const>(z)),
+        gwn::tests::host_span(cuda::std::span<Index const>(i0)),
+        gwn::tests::host_span(cuda::std::span<Index const>(i1)),
+        gwn::tests::host_span(cuda::std::span<Index const>(i2)), stream_b_
     );
 
     std::array<Real, 3> actual{};

@@ -24,6 +24,10 @@ using Real = gwn::tests::Real;
 using Index = gwn::tests::Index;
 using gwn::tests::HostMesh;
 constexpr int k_stack_capacity = gwn::tests::k_test_stack_capacity;
+constexpr gwn::gwn_query_batch_config k_query_batch_config{
+    .block_size = gwn::k_gwn_default_query_batch_block_size,
+    .stack_capacity = k_stack_capacity,
+};
 
 // Query generation helpers.
 
@@ -164,12 +168,12 @@ TEST(gwn_e2e, taylor_orders_match_hdk_on_mesh_directory) {
 
         gwn::gwn_geometry_object<Real, Index> geometry;
         gwn::gwn_status const upload_status = gwn::gwn_upload_geometry(
-            geometry, cuda::std::span<Real const>(mesh.vertex_x.data(), mesh.vertex_x.size()),
-            cuda::std::span<Real const>(mesh.vertex_y.data(), mesh.vertex_y.size()),
-            cuda::std::span<Real const>(mesh.vertex_z.data(), mesh.vertex_z.size()),
-            cuda::std::span<Index const>(mesh.tri_i0.data(), mesh.tri_i0.size()),
-            cuda::std::span<Index const>(mesh.tri_i1.data(), mesh.tri_i1.size()),
-            cuda::std::span<Index const>(mesh.tri_i2.data(), mesh.tri_i2.size())
+            geometry, gwn::gwn_host_span<Real const>(mesh.vertex_x.data(), mesh.vertex_x.size()),
+            gwn::gwn_host_span<Real const>(mesh.vertex_y.data(), mesh.vertex_y.size()),
+            gwn::gwn_host_span<Real const>(mesh.vertex_z.data(), mesh.vertex_z.size()),
+            gwn::gwn_host_span<Index const>(mesh.tri_i0.data(), mesh.tri_i0.size()),
+            gwn::gwn_host_span<Index const>(mesh.tri_i1.data(), mesh.tri_i1.size()),
+            gwn::gwn_host_span<Index const>(mesh.tri_i2.data(), mesh.tri_i2.size())
         );
         SMALLGWN_SKIP_IF_STATUS_CUDA_UNAVAILABLE(upload_status);
         ASSERT_TRUE(upload_status.is_ok()) << gwn::tests::status_to_debug_string(upload_status);
@@ -193,8 +197,11 @@ TEST(gwn_e2e, taylor_orders_match_hdk_on_mesh_directory) {
         gwn::gwn_bvh4_moment_object<0, Real, Index> data_o0;
         ASSERT_TRUE(gwn::gwn_refit_bvh_moment<0>(bvh, data_o0).is_ok());
         ASSERT_TRUE(
-            (gwn::gwn_compute_winding_number_taylor_batch<0, 4, Real, Index, k_stack_capacity>(
-                 bvh, data_o0, d_qx.span(), d_qy.span(), d_qz.span(), d_out.span(), k_accuracy_scale
+            (gwn::gwn_compute_winding_number_taylor_batch<0, k_query_batch_config, 4, Real, Index>(
+                 bvh, data_o0, gwn::tests::device_input_span(d_qx.span()),
+                 gwn::tests::device_input_span(d_qy.span()),
+                 gwn::tests::device_input_span(d_qz.span()), gwn::tests::device_span(d_out.span()),
+                 k_accuracy_scale
             )
                  .is_ok())
         );
@@ -206,8 +213,11 @@ TEST(gwn_e2e, taylor_orders_match_hdk_on_mesh_directory) {
         gwn::gwn_bvh4_moment_object<1, Real, Index> data_o1;
         ASSERT_TRUE(gwn::gwn_refit_bvh_moment<1>(bvh, data_o1).is_ok());
         ASSERT_TRUE(
-            (gwn::gwn_compute_winding_number_taylor_batch<1, 4, Real, Index, k_stack_capacity>(
-                 bvh, data_o1, d_qx.span(), d_qy.span(), d_qz.span(), d_out.span(), k_accuracy_scale
+            (gwn::gwn_compute_winding_number_taylor_batch<1, k_query_batch_config, 4, Real, Index>(
+                 bvh, data_o1, gwn::tests::device_input_span(d_qx.span()),
+                 gwn::tests::device_input_span(d_qy.span()),
+                 gwn::tests::device_input_span(d_qz.span()), gwn::tests::device_span(d_out.span()),
+                 k_accuracy_scale
             )
                  .is_ok())
         );
@@ -219,8 +229,11 @@ TEST(gwn_e2e, taylor_orders_match_hdk_on_mesh_directory) {
         gwn::gwn_bvh4_moment_object<2, Real, Index> data_o2;
         ASSERT_TRUE(gwn::gwn_refit_bvh_moment<2>(bvh, data_o2).is_ok());
         ASSERT_TRUE(
-            (gwn::gwn_compute_winding_number_taylor_batch<2, 4, Real, Index, k_stack_capacity>(
-                 bvh, data_o2, d_qx.span(), d_qy.span(), d_qz.span(), d_out.span(), k_accuracy_scale
+            (gwn::gwn_compute_winding_number_taylor_batch<2, k_query_batch_config, 4, Real, Index>(
+                 bvh, data_o2, gwn::tests::device_input_span(d_qx.span()),
+                 gwn::tests::device_input_span(d_qy.span()),
+                 gwn::tests::device_input_span(d_qz.span()), gwn::tests::device_span(d_out.span()),
+                 k_accuracy_scale
             )
                  .is_ok())
         );

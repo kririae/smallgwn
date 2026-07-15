@@ -24,6 +24,10 @@ using Real = gwn::tests::Real;
 using Index = gwn::tests::Index;
 using HostMesh = gwn::tests::HostMesh;
 constexpr int k_stack_capacity = gwn::tests::k_test_stack_capacity;
+constexpr gwn::gwn_query_batch_config k_query_batch_config{
+    .block_size = gwn::k_gwn_default_query_batch_block_size,
+    .stack_capacity = k_stack_capacity,
+};
 
 struct dynamic_query_soa {
     std::array<std::vector<Real>, 3> origin{};
@@ -53,10 +57,12 @@ struct dynamic_query_results {
 [[nodiscard]] gwn::gwn_status
 upload_mesh(HostMesh const &mesh, gwn::gwn_geometry_object<Real, Index> &geometry) noexcept {
     return gwn::gwn_upload_geometry(
-        geometry, cuda::std::span<Real const>(mesh.vertex_x),
-        cuda::std::span<Real const>(mesh.vertex_y), cuda::std::span<Real const>(mesh.vertex_z),
-        cuda::std::span<Index const>(mesh.tri_i0), cuda::std::span<Index const>(mesh.tri_i1),
-        cuda::std::span<Index const>(mesh.tri_i2)
+        geometry, gwn::tests::host_span(cuda::std::span<Real const>(mesh.vertex_x)),
+        gwn::tests::host_span(cuda::std::span<Real const>(mesh.vertex_y)),
+        gwn::tests::host_span(cuda::std::span<Real const>(mesh.vertex_z)),
+        gwn::tests::host_span(cuda::std::span<Index const>(mesh.tri_i0)),
+        gwn::tests::host_span(cuda::std::span<Index const>(mesh.tri_i1)),
+        gwn::tests::host_span(cuda::std::span<Index const>(mesh.tri_i2))
     );
 }
 
@@ -169,39 +175,58 @@ upload_mesh(HostMesh const &mesh, gwn::gwn_geometry_object<Real, Index> &geometr
     device_antipodal_winding.resize(count);
     device_hit.resize(count);
 
-    GWN_RETURN_ON_ERROR((gwn::gwn_compute_unsigned_distance_batch<4, Real, Index, k_stack_capacity>(
-        bvh, device_origin[0].span(), device_origin[1].span(), device_origin[2].span(),
-        device_distance.span()
-    )));
     GWN_RETURN_ON_ERROR(
-        (gwn::gwn_compute_winding_number_taylor_batch<2, 4, Real, Index, k_stack_capacity>(
-            bvh, moment, device_origin[0].span(), device_origin[1].span(), device_origin[2].span(),
-            device_winding.span()
+        (gwn::gwn_compute_unsigned_distance_batch<k_query_batch_config, 4, Real, Index>(
+            bvh, gwn::tests::device_input_span(device_origin[0].span()),
+            gwn::tests::device_input_span(device_origin[1].span()),
+            gwn::tests::device_input_span(device_origin[2].span()),
+            gwn::tests::device_span(device_distance.span())
         ))
     );
     GWN_RETURN_ON_ERROR(
-        (gwn::gwn_compute_winding_gradient_taylor_batch<2, 4, Real, Index, k_stack_capacity>(
-            bvh, moment, device_origin[0].span(), device_origin[1].span(), device_origin[2].span(),
-            device_gradient[0].span(), device_gradient[1].span(), device_gradient[2].span()
+        (gwn::gwn_compute_winding_number_taylor_batch<2, k_query_batch_config, 4, Real, Index>(
+            bvh, moment, gwn::tests::device_input_span(device_origin[0].span()),
+            gwn::tests::device_input_span(device_origin[1].span()),
+            gwn::tests::device_input_span(device_origin[2].span()),
+            gwn::tests::device_span(device_winding.span())
         ))
     );
     GWN_RETURN_ON_ERROR(
-        (gwn::gwn_compute_winding_number_antipodal_batch<4, Real, Index, k_stack_capacity>(
-            geometry, bvh, boundary, device_origin[0].span(), device_origin[1].span(),
-            device_origin[2].span(), device_antipodal_winding.span()
+        (gwn::gwn_compute_winding_gradient_taylor_batch<2, k_query_batch_config, 4, Real, Index>(
+            bvh, moment, gwn::tests::device_input_span(device_origin[0].span()),
+            gwn::tests::device_input_span(device_origin[1].span()),
+            gwn::tests::device_input_span(device_origin[2].span()),
+            gwn::tests::device_span(device_gradient[0].span()),
+            gwn::tests::device_span(device_gradient[1].span()),
+            gwn::tests::device_span(device_gradient[2].span())
+        ))
+    );
+    GWN_RETURN_ON_ERROR(
+        (gwn::gwn_compute_winding_number_antipodal_batch<k_query_batch_config, 4, Real, Index>(
+            geometry, bvh, boundary, gwn::tests::device_input_span(device_origin[0].span()),
+            gwn::tests::device_input_span(device_origin[1].span()),
+            gwn::tests::device_input_span(device_origin[2].span()),
+            gwn::tests::device_span(device_antipodal_winding.span())
         ))
     );
     GWN_RETURN_ON_ERROR(
         gwn::gwn_compute_winding_gradient_antipodal_batch(
-            geometry, boundary, device_origin[0].span(), device_origin[1].span(),
-            device_origin[2].span(), device_antipodal_gradient[0].span(),
-            device_antipodal_gradient[1].span(), device_antipodal_gradient[2].span()
+            geometry, boundary, gwn::tests::device_input_span(device_origin[0].span()),
+            gwn::tests::device_input_span(device_origin[1].span()),
+            gwn::tests::device_input_span(device_origin[2].span()),
+            gwn::tests::device_span(device_antipodal_gradient[0].span()),
+            gwn::tests::device_span(device_antipodal_gradient[1].span()),
+            gwn::tests::device_span(device_antipodal_gradient[2].span())
         )
     );
-    GWN_RETURN_ON_ERROR((gwn::gwn_compute_ray_first_hit_batch<4, Real, Index, k_stack_capacity>(
-        bvh, device_ray_origin[0].span(), device_ray_origin[1].span(), device_ray_origin[2].span(),
-        device_direction[0].span(), device_direction[1].span(), device_direction[2].span(),
-        device_hit.span()
+    GWN_RETURN_ON_ERROR((gwn::gwn_compute_ray_first_hit_batch<k_query_batch_config, 4, Real, Index>(
+        bvh, gwn::tests::device_input_span(device_ray_origin[0].span()),
+        gwn::tests::device_input_span(device_ray_origin[1].span()),
+        gwn::tests::device_input_span(device_ray_origin[2].span()),
+        gwn::tests::device_input_span(device_direction[0].span()),
+        gwn::tests::device_input_span(device_direction[1].span()),
+        gwn::tests::device_input_span(device_direction[2].span()),
+        gwn::tests::device_span(device_hit.span())
     )));
 
     result.distance.resize(count);
@@ -275,9 +300,10 @@ TEST_P(GwnDynamicWorkflowTest, refit_matches_fresh_build_for_every_query_family)
         ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
 
         status = gwn::gwn_update_geometry(
-            dynamic_geometry, cuda::std::span<Real const>(mutated_mesh.vertex_x),
-            cuda::std::span<Real const>(mutated_mesh.vertex_y),
-            cuda::std::span<Real const>(mutated_mesh.vertex_z)
+            dynamic_geometry,
+            gwn::tests::host_span(cuda::std::span<Real const>(mutated_mesh.vertex_x)),
+            gwn::tests::host_span(cuda::std::span<Real const>(mutated_mesh.vertex_y)),
+            gwn::tests::host_span(cuda::std::span<Real const>(mutated_mesh.vertex_z))
         );
         ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
         ASSERT_TRUE(gwn::gwn_refit_bvh(dynamic_geometry, dynamic_bvh).is_ok());

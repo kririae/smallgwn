@@ -182,14 +182,22 @@ void gwn_update_geometry_impl(
 
 template <gwn_real_type Real, gwn_index_type Index>
 [[nodiscard]] gwn_status gwn_upload_geometry(
-    gwn_geometry_object<Real, Index> &object, cuda::std::span<Real const> const x,
-    cuda::std::span<Real const> const y, cuda::std::span<Real const> const z,
-    cuda::std::span<Index const> const i0, cuda::std::span<Index const> const i1,
-    cuda::std::span<Index const> const i2, cudaStream_t const stream
+    gwn_geometry_object<Real, Index> &object, gwn_host_span<Real const> const x,
+    gwn_host_span<Real const> const y, gwn_host_span<Real const> const z,
+    gwn_host_span<Index const> const i0, gwn_host_span<Index const> const i1,
+    gwn_host_span<Index const> const i2, cudaStream_t const stream
 ) noexcept {
+    auto const x_span = detail::gwn_cuda_span_view_impl(x);
+    auto const y_span = detail::gwn_cuda_span_view_impl(y);
+    auto const z_span = detail::gwn_cuda_span_view_impl(z);
+    auto const i0_span = detail::gwn_cuda_span_view_impl(i0);
+    auto const i1_span = detail::gwn_cuda_span_view_impl(i1);
+    auto const i2_span = detail::gwn_cuda_span_view_impl(i2);
     return detail::gwn_try_translate_status("gwn_upload_geometry", [&]() {
         gwn_geometry_object<Real, Index> staging;
-        detail::gwn_upload_accessor(staging.accessor(), x, y, z, i0, i1, i2, stream);
+        detail::gwn_upload_accessor(
+            staging.accessor(), x_span, y_span, z_span, i0_span, i1_span, i2_span, stream
+        );
         staging.set_stream(stream);
         swap(object, staging);
         // staging now owns the replaced buffers and their original stream binding. Destruction
@@ -199,12 +207,14 @@ template <gwn_real_type Real, gwn_index_type Index>
 
 template <gwn_real_type Real, gwn_index_type Index>
 [[nodiscard]] gwn_status gwn_update_geometry(
-    gwn_geometry_object<Real, Index> &object, cuda::std::span<Real const> const x,
-    cuda::std::span<Real const> const y, cuda::std::span<Real const> const z,
-    cudaStream_t const stream
+    gwn_geometry_object<Real, Index> &object, gwn_host_span<Real const> const x,
+    gwn_host_span<Real const> const y, gwn_host_span<Real const> const z, cudaStream_t const stream
 ) noexcept {
+    auto const x_span = detail::gwn_cuda_span_view_impl(x);
+    auto const y_span = detail::gwn_cuda_span_view_impl(y);
+    auto const z_span = detail::gwn_cuda_span_view_impl(z);
     return detail::gwn_try_translate_status("gwn_update_geometry", [&]() {
-        detail::gwn_update_geometry_impl(object, x, y, z, stream);
+        detail::gwn_update_geometry_impl(object, x_span, y_span, z_span, stream);
     });
 }
 

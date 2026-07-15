@@ -2,12 +2,14 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <iostream>
 #include <limits>
 #include <optional>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -25,6 +27,10 @@ using Real = gwn::tests::Real;
 using Index = gwn::tests::Index;
 using HostMesh = gwn::tests::HostMesh;
 constexpr int k_stack_capacity = gwn::tests::k_test_stack_capacity;
+constexpr gwn::gwn_query_batch_config k_query_batch_config{
+    .block_size = gwn::k_gwn_default_query_batch_block_size,
+    .stack_capacity = k_stack_capacity,
+};
 
 template <int Width, gwn::gwn_real_type TestReal, gwn::gwn_index_type TestIndex>
 void expect_internal_nodes_are_complete(
@@ -162,13 +168,14 @@ void expect_internal_nodes_are_complete(
     return query;
 }
 
+template <int Width>
 void expect_builder_queries_match_reference(
     gwn::gwn_bvh_build_method const method, HostMesh const &mesh,
     gwn::gwn_geometry_object<Real, Index> const &geometry,
     std::array<std::vector<Real>, 3> const &query, std::uint32_t const hploc_search_radius = 8
 ) {
     std::size_t const count = query[0].size();
-    gwn::gwn_bvh4_object<Real, Index> bvh{};
+    gwn::gwn_bvh_object<Width, Real, Index> bvh{};
     ASSERT_TRUE(
         gwn::gwn_build_bvh(
             geometry, bvh,
@@ -177,7 +184,7 @@ void expect_builder_queries_match_reference(
             .is_ok()
     );
     ASSERT_NO_FATAL_FAILURE(expect_internal_nodes_are_complete(bvh));
-    gwn::gwn_bvh4_moment_object<2, Real, Index> moment{};
+    gwn::gwn_bvh_moment_object<Width, 2, Real, Index> moment{};
     ASSERT_TRUE(gwn::gwn_refit_bvh_moment<2>(bvh, moment).is_ok());
 
     std::array<gwn::detail::gwn_device_array<Real>, 3> device_query{};
@@ -191,18 +198,24 @@ void expect_builder_queries_match_reference(
     descended.resize(count);
     ASSERT_TRUE(
         gwn::gwn_compute_winding_number_exact_batch(
-            bvh, device_query[0].span(), device_query[1].span(), device_query[2].span(),
-            exact.span()
+            bvh, gwn::tests::device_input_span(device_query[0].span()),
+            gwn::tests::device_input_span(device_query[1].span()),
+            gwn::tests::device_input_span(device_query[2].span()),
+            gwn::tests::device_span(exact.span())
         )
             .is_ok()
     );
     // A large accuracy scale forces every finite child to descend. Both GPU paths must visit the
     // same leaf-ordered records, and the independent CPU result below guards their shared input.
-    ASSERT_TRUE((gwn::gwn_compute_winding_number_taylor_batch<2, 4, Real, Index, k_stack_capacity>(
-                     bvh, moment, device_query[0].span(), device_query[1].span(),
-                     device_query[2].span(), descended.span(), Real(1e6)
-    )
-                     .is_ok()));
+    ASSERT_TRUE(
+        (gwn::gwn_compute_winding_number_taylor_batch<2, k_query_batch_config, Width, Real, Index>(
+             bvh, moment, gwn::tests::device_input_span(device_query[0].span()),
+             gwn::tests::device_input_span(device_query[1].span()),
+             gwn::tests::device_input_span(device_query[2].span()),
+             gwn::tests::device_span(descended.span()), Real(1e6)
+        )
+             .is_ok())
+    );
 
     std::vector<Real> host_exact(count);
     std::vector<Real> host_descended(count);
@@ -220,10 +233,25 @@ void expect_builder_queries_match_reference(
         )
              .is_ok())
     );
+    auto const winding_tolerance = [](Real const lhs, Real const rhs) {
+        if constexpr (std::is_same_v<Real, float>)
+            return Real(2e-5) + Real(2e-5) * std::max(std::abs(lhs), std::abs(rhs));
+        else
+            return Real(2e-6);
+    };
     for (std::size_t query_id = 0; query_id < count; ++query_id) {
-        EXPECT_NEAR(host_exact[query_id], reference[query_id], Real(2e-6));
-        EXPECT_NEAR(host_descended[query_id], reference[query_id], Real(2e-6));
-        EXPECT_NEAR(host_descended[query_id], host_exact[query_id], Real(2e-6));
+        EXPECT_NEAR(
+            host_exact[query_id], reference[query_id],
+            winding_tolerance(host_exact[query_id], reference[query_id])
+        );
+        EXPECT_NEAR(
+            host_descended[query_id], reference[query_id],
+            winding_tolerance(host_descended[query_id], reference[query_id])
+        );
+        EXPECT_NEAR(
+            host_descended[query_id], host_exact[query_id],
+            winding_tolerance(host_descended[query_id], host_exact[query_id])
+        );
     }
 }
 
@@ -241,17 +269,31 @@ TEST(gwn_builder_workflow, every_builder_reaches_the_complete_triangle_sequence)
         ++tested_model_count;
         gwn::gwn_geometry_object<Real, Index> geometry{};
         gwn::gwn_status const upload_status = gwn::gwn_upload_geometry(
-            geometry, cuda::std::span<Real const>(mesh->vertex_x),
-            cuda::std::span<Real const>(mesh->vertex_y),
-            cuda::std::span<Real const>(mesh->vertex_z), cuda::std::span<Index const>(mesh->tri_i0),
-            cuda::std::span<Index const>(mesh->tri_i1), cuda::std::span<Index const>(mesh->tri_i2)
+            geometry, gwn::tests::host_span(cuda::std::span<Real const>(mesh->vertex_x)),
+            gwn::tests::host_span(cuda::std::span<Real const>(mesh->vertex_y)),
+            gwn::tests::host_span(cuda::std::span<Real const>(mesh->vertex_z)),
+            gwn::tests::host_span(cuda::std::span<Index const>(mesh->tri_i0)),
+            gwn::tests::host_span(cuda::std::span<Index const>(mesh->tri_i1)),
+            gwn::tests::host_span(cuda::std::span<Index const>(mesh->tri_i2))
         );
         ASSERT_TRUE(upload_status.is_ok()) << gwn::tests::status_to_debug_string(upload_status);
         auto const query = make_builder_queries(*mesh);
-        expect_builder_queries_match_reference(
+        expect_builder_queries_match_reference<2>(
             gwn::gwn_bvh_build_method::k_lbvh, *mesh, geometry, query
         );
-        expect_builder_queries_match_reference(
+        expect_builder_queries_match_reference<3>(
+            gwn::gwn_bvh_build_method::k_lbvh, *mesh, geometry, query
+        );
+        expect_builder_queries_match_reference<4>(
+            gwn::gwn_bvh_build_method::k_lbvh, *mesh, geometry, query
+        );
+        expect_builder_queries_match_reference<2>(
+            gwn::gwn_bvh_build_method::k_hploc, *mesh, geometry, query
+        );
+        expect_builder_queries_match_reference<3>(
+            gwn::gwn_bvh_build_method::k_hploc, *mesh, geometry, query
+        );
+        expect_builder_queries_match_reference<4>(
             gwn::gwn_bvh_build_method::k_hploc, *mesh, geometry, query
         );
     }
@@ -283,18 +325,19 @@ TEST(gwn_builder_workflow, hploc_builds_repeated_equal_bounds) {
         gwn::gwn_geometry_object<Real, Index> geometry{};
         ASSERT_TRUE(
             gwn::gwn_upload_geometry(
-                geometry, cuda::std::span<Real const>(mesh.vertex_x),
-                cuda::std::span<Real const>(mesh.vertex_y),
-                cuda::std::span<Real const>(mesh.vertex_z),
-                cuda::std::span<Index const>(mesh.tri_i0),
-                cuda::std::span<Index const>(mesh.tri_i1), cuda::std::span<Index const>(mesh.tri_i2)
+                geometry, gwn::tests::host_span(cuda::std::span<Real const>(mesh.vertex_x)),
+                gwn::tests::host_span(cuda::std::span<Real const>(mesh.vertex_y)),
+                gwn::tests::host_span(cuda::std::span<Real const>(mesh.vertex_z)),
+                gwn::tests::host_span(cuda::std::span<Index const>(mesh.tri_i0)),
+                gwn::tests::host_span(cuda::std::span<Index const>(mesh.tri_i1)),
+                gwn::tests::host_span(cuda::std::span<Index const>(mesh.tri_i2))
             )
                 .is_ok()
         );
 
         for (std::uint32_t const search_radius : {1u, 4u, 8u}) {
             SCOPED_TRACE(search_radius);
-            expect_builder_queries_match_reference(
+            expect_builder_queries_match_reference<4>(
                 gwn::gwn_bvh_build_method::k_hploc, mesh, geometry, query, search_radius
             );
         }
@@ -317,10 +360,12 @@ TEST(gwn_builder_workflow, hploc_double_uint64_matches_exact_reference) {
     gwn::gwn_geometry_object<TestReal, TestIndex> geometry{};
     ASSERT_TRUE(
         gwn::gwn_upload_geometry(
-            geometry, cuda::std::span<TestReal const>(vertex_x),
-            cuda::std::span<TestReal const>(vertex_y), cuda::std::span<TestReal const>(vertex_z),
-            cuda::std::span<TestIndex const>(tri_i0), cuda::std::span<TestIndex const>(tri_i1),
-            cuda::std::span<TestIndex const>(tri_i2)
+            geometry, gwn::tests::host_span(cuda::std::span<TestReal const>(vertex_x)),
+            gwn::tests::host_span(cuda::std::span<TestReal const>(vertex_y)),
+            gwn::tests::host_span(cuda::std::span<TestReal const>(vertex_z)),
+            gwn::tests::host_span(cuda::std::span<TestIndex const>(tri_i0)),
+            gwn::tests::host_span(cuda::std::span<TestIndex const>(tri_i1)),
+            gwn::tests::host_span(cuda::std::span<TestIndex const>(tri_i2))
         )
             .is_ok()
     );
@@ -355,14 +400,18 @@ TEST(gwn_builder_workflow, hploc_double_uint64_matches_exact_reference) {
     descended.resize(query[0].size());
     ASSERT_TRUE(
         gwn::gwn_compute_winding_number_exact_batch(
-            bvh, device_query[0].span(), device_query[1].span(), device_query[2].span(),
-            exact.span()
+            bvh, gwn::tests::device_input_span(device_query[0].span()),
+            gwn::tests::device_input_span(device_query[1].span()),
+            gwn::tests::device_input_span(device_query[2].span()),
+            gwn::tests::device_span(exact.span())
         )
             .is_ok()
     );
     ASSERT_TRUE((gwn::gwn_compute_winding_number_taylor_batch<2>(
-                     bvh, moment, device_query[0].span(), device_query[1].span(),
-                     device_query[2].span(), descended.span(), TestReal(1e6)
+                     bvh, moment, gwn::tests::device_input_span(device_query[0].span()),
+                     gwn::tests::device_input_span(device_query[1].span()),
+                     gwn::tests::device_input_span(device_query[2].span()),
+                     gwn::tests::device_span(descended.span()), TestReal(1e6)
     )
                      .is_ok()));
 

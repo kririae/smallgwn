@@ -1,6 +1,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <type_traits>
 
 #include <gtest/gtest.h>
 
@@ -15,6 +16,29 @@ using Index = gwn::tests::Index;
 using GwnQueryStackTest = gwn::tests::CudaFixture;
 
 namespace {
+
+constexpr gwn::gwn_query_batch_config k_stack_capacity_one_config{
+    .block_size = gwn::k_gwn_default_query_batch_block_size,
+    .stack_capacity = 1,
+};
+constexpr gwn::gwn_query_batch_config k_invalid_block_size_config{
+    .block_size = 0,
+    .stack_capacity = gwn::k_gwn_default_traversal_stack_capacity,
+};
+constexpr gwn::gwn_query_batch_config k_non_traversal_config{
+    .block_size = gwn::k_gwn_default_query_batch_block_size,
+    .stack_capacity = 0,
+};
+
+static_assert(gwn::gwn_query_batch_config_value<gwn::gwn_query_batch_config{}>);
+static_assert(gwn::gwn_traversal_batch_config_value<gwn::gwn_query_batch_config{}>);
+static_assert(!gwn::gwn_query_batch_config_value<k_invalid_block_size_config>);
+static_assert(gwn::gwn_query_batch_config_value<k_non_traversal_config>);
+static_assert(!gwn::gwn_traversal_batch_config_value<k_non_traversal_config>);
+static_assert(!std::is_convertible_v<cuda::std::span<Real>, gwn::gwn_device_span<Real>>);
+static_assert(!std::is_convertible_v<cuda::std::span<Real>, gwn::gwn_host_span<Real>>);
+static_assert(!std::is_convertible_v<gwn::gwn_host_span<Real>, gwn::gwn_device_span<Real>>);
+static_assert(std::is_convertible_v<gwn::gwn_device_span<Real>, gwn::gwn_device_span<Real const>>);
 
 struct query_stack_context {
     gwn::gwn_geometry_object<Real, Index> geometry;
@@ -46,12 +70,12 @@ gwn::gwn_status setup_query_stack_context(query_stack_context &ctx) {
     std::array<Index, 8> const i2{4, 4, 4, 4, 5, 5, 5, 5};
 
     gwn::gwn_status status = gwn::gwn_upload_geometry(
-        ctx.geometry, cuda::std::span<Real const>(vx.data(), vx.size()),
-        cuda::std::span<Real const>(vy.data(), vy.size()),
-        cuda::std::span<Real const>(vz.data(), vz.size()),
-        cuda::std::span<Index const>(i0.data(), i0.size()),
-        cuda::std::span<Index const>(i1.data(), i1.size()),
-        cuda::std::span<Index const>(i2.data(), i2.size())
+        ctx.geometry, gwn::gwn_host_span<Real const>(vx.data(), vx.size()),
+        gwn::gwn_host_span<Real const>(vy.data(), vy.size()),
+        gwn::gwn_host_span<Real const>(vz.data(), vz.size()),
+        gwn::gwn_host_span<Index const>(i0.data(), i0.size()),
+        gwn::gwn_host_span<Index const>(i1.data(), i1.size()),
+        gwn::gwn_host_span<Index const>(i2.data(), i2.size())
     );
     if (!status.is_ok())
         return status;
@@ -92,31 +116,50 @@ TEST_F(GwnQueryStackTest, traversing_batch_queries_reject_capacity_below_interna
     ASSERT_TRUE(ctx.bvh.accessor().has_internal_root());
     ASSERT_GT(ctx.bvh.accessor().internal_stack_bound, 1u);
 
-    expect_stack_capacity_error((gwn::gwn_compute_unsigned_distance_batch<4, Real, Index, 1>(
-        ctx.bvh, ctx.qx.span(), ctx.qy.span(), ctx.qz.span(), ctx.out.span()
-    )));
-    expect_stack_capacity_error((gwn::gwn_compute_ray_first_hit_batch<4, Real, Index, 1>(
-        ctx.bvh, ctx.qx.span(), ctx.qy.span(), ctx.qz.span(), ctx.qx.span(), ctx.qy.span(),
-        ctx.qz.span(), ctx.out_hit.span()
-    )));
-    expect_stack_capacity_error((gwn::gwn_compute_winding_number_taylor_batch<1, 4, Real, Index, 1>(
-        ctx.bvh, ctx.moment, ctx.qx.span(), ctx.qy.span(), ctx.qz.span(), ctx.out.span()
-    )));
-    expect_stack_capacity_error((gwn::gwn_compute_winding_number_antipodal_batch<4, Real, Index, 1>(
-        ctx.geometry, ctx.bvh, ctx.boundary_chain, ctx.qx.span(), ctx.qy.span(), ctx.qz.span(),
-        ctx.out.span()
-    )));
     expect_stack_capacity_error(
-        (gwn::gwn_compute_winding_gradient_taylor_batch<1, 4, Real, Index, 1>(
-            ctx.bvh, ctx.moment, ctx.qx.span(), ctx.qy.span(), ctx.qz.span(), ctx.out.span(),
-            ctx.out_y.span(), ctx.out_z.span()
+        (gwn::gwn_compute_unsigned_distance_batch<k_stack_capacity_one_config, 4, Real, Index>(
+            ctx.bvh, gwn::tests::device_input_span(ctx.qx.span()),
+            gwn::tests::device_input_span(ctx.qy.span()),
+            gwn::tests::device_input_span(ctx.qz.span()), gwn::tests::device_span(ctx.out.span())
         ))
     );
+    expect_stack_capacity_error(
+        (gwn::gwn_compute_ray_first_hit_batch<k_stack_capacity_one_config, 4, Real, Index>(
+            ctx.bvh, gwn::tests::device_input_span(ctx.qx.span()),
+            gwn::tests::device_input_span(ctx.qy.span()),
+            gwn::tests::device_input_span(ctx.qz.span()),
+            gwn::tests::device_input_span(ctx.qx.span()),
+            gwn::tests::device_input_span(ctx.qy.span()),
+            gwn::tests::device_input_span(ctx.qz.span()),
+            gwn::tests::device_span(ctx.out_hit.span())
+        ))
+    );
+    expect_stack_capacity_error((gwn::gwn_compute_winding_number_taylor_batch<
+                                 1, k_stack_capacity_one_config, 4, Real, Index>(
+        ctx.bvh, ctx.moment, gwn::tests::device_input_span(ctx.qx.span()),
+        gwn::tests::device_input_span(ctx.qy.span()), gwn::tests::device_input_span(ctx.qz.span()),
+        gwn::tests::device_span(ctx.out.span())
+    )));
+    expect_stack_capacity_error((gwn::gwn_compute_winding_number_antipodal_batch<
+                                 k_stack_capacity_one_config, 4, Real, Index>(
+        ctx.geometry, ctx.bvh, ctx.boundary_chain, gwn::tests::device_input_span(ctx.qx.span()),
+        gwn::tests::device_input_span(ctx.qy.span()), gwn::tests::device_input_span(ctx.qz.span()),
+        gwn::tests::device_span(ctx.out.span())
+    )));
+    expect_stack_capacity_error((gwn::gwn_compute_winding_gradient_taylor_batch<
+                                 1, k_stack_capacity_one_config, 4, Real, Index>(
+        ctx.bvh, ctx.moment, gwn::tests::device_input_span(ctx.qx.span()),
+        gwn::tests::device_input_span(ctx.qy.span()), gwn::tests::device_input_span(ctx.qz.span()),
+        gwn::tests::device_span(ctx.out.span()), gwn::tests::device_span(ctx.out_y.span()),
+        gwn::tests::device_span(ctx.out_z.span())
+    )));
     // Exact winding scans the triangle sequence and therefore has no stack-capacity contract.
     EXPECT_TRUE(
-        gwn::gwn_compute_winding_number_exact_batch(
-            ctx.bvh, ctx.qx.span(), ctx.qy.span(), ctx.qz.span(), ctx.out.span()
-        )
+        (gwn::gwn_compute_winding_number_exact_batch<k_non_traversal_config, 4, Real, Index>(
+             ctx.bvh, gwn::tests::device_input_span(ctx.qx.span()),
+             gwn::tests::device_input_span(ctx.qy.span()),
+             gwn::tests::device_input_span(ctx.qz.span()), gwn::tests::device_span(ctx.out.span())
+         ))
             .is_ok()
     );
 }

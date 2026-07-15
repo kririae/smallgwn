@@ -65,10 +65,10 @@ void gwn_release_accessor(
 /// geometry accessor bound to \p stream.
 template <gwn_real_type Real, gwn_index_type Index>
 [[nodiscard]] gwn_status gwn_upload_geometry(
-    gwn_geometry_object<Real, Index> &object, cuda::std::span<Real const> const x,
-    cuda::std::span<Real const> const y, cuda::std::span<Real const> const z,
-    cuda::std::span<Index const> const i0, cuda::std::span<Index const> const i1,
-    cuda::std::span<Index const> const i2, cudaStream_t stream = gwn_default_stream()
+    gwn_geometry_object<Real, Index> &object, gwn_host_span<Real const> const x,
+    gwn_host_span<Real const> const y, gwn_host_span<Real const> const z,
+    gwn_host_span<Index const> const i0, gwn_host_span<Index const> const i1,
+    gwn_host_span<Index const> const i2, cudaStream_t stream = gwn_default_stream()
 ) noexcept;
 
 /// \brief Update vertex positions of an existing geometry object.
@@ -84,8 +84,8 @@ template <gwn_real_type Real, gwn_index_type Index>
 ///         so the caller can clear it or replace it with \c gwn_upload_geometry.
 template <gwn_real_type Real, gwn_index_type Index>
 [[nodiscard]] gwn_status gwn_update_geometry(
-    gwn_geometry_object<Real, Index> &object, cuda::std::span<Real const> const x,
-    cuda::std::span<Real const> const y, cuda::std::span<Real const> const z,
+    gwn_geometry_object<Real, Index> &object, gwn_host_span<Real const> const x,
+    gwn_host_span<Real const> const y, gwn_host_span<Real const> const z,
     cudaStream_t stream = gwn_default_stream()
 ) noexcept;
 

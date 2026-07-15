@@ -80,6 +80,95 @@ private:
     cudaStream_t stream_{gwn_default_stream()};
 };
 
+template <class T> class gwn_host_span;
+template <class T> class gwn_device_span;
+
+namespace detail {
+
+template <class T>
+[[nodiscard]] constexpr cuda::std::span<T>
+gwn_cuda_span_view_impl(gwn_host_span<T> const span) noexcept;
+
+template <class T>
+[[nodiscard]] constexpr cuda::std::span<T>
+gwn_cuda_span_view_impl(gwn_device_span<T> const span) noexcept;
+
+} // namespace detail
+
+/// \brief Non-owning host-memory view used by public upload APIs.
+template <class T> class gwn_host_span final {
+public:
+    constexpr gwn_host_span() noexcept = default;
+
+    /// \brief Construct a view from a pointer and element count.
+    constexpr gwn_host_span(T *const data, std::size_t const size) noexcept : span_(data, size) {}
+
+    /// \brief Explicitly mark an existing span as host memory.
+    explicit constexpr gwn_host_span(cuda::std::span<T> const span) noexcept : span_(span) {}
+
+    /// \brief Convert element cv-qualification within host memory.
+    template <class U>
+        requires std::is_convertible_v<U (*)[], T (*)[]>
+    constexpr gwn_host_span(gwn_host_span<U> const other) noexcept
+        : span_(other.data(), other.size()) {}
+
+    /// \brief Return the first element address.
+    [[nodiscard]] __host__ __device__ constexpr T *data() const noexcept { return span_.data(); }
+
+    /// \brief Return the element count.
+    [[nodiscard]] __host__ __device__ constexpr std::size_t size() const noexcept {
+        return span_.size();
+    }
+
+    /// \brief Return whether the view has no elements.
+    [[nodiscard]] __host__ __device__ constexpr bool empty() const noexcept {
+        return span_.empty();
+    }
+
+private:
+    cuda::std::span<T> span_{};
+
+    friend constexpr cuda::std::span<T>
+    detail::gwn_cuda_span_view_impl<T>(gwn_host_span<T> const span) noexcept;
+};
+
+/// \brief Non-owning device-accessible view used by public batch query APIs.
+template <class T> class gwn_device_span final {
+public:
+    constexpr gwn_device_span() noexcept = default;
+
+    /// \brief Construct a view from a pointer and element count.
+    constexpr gwn_device_span(T *const data, std::size_t const size) noexcept : span_(data, size) {}
+
+    /// \brief Explicitly mark an existing span as device-accessible memory.
+    explicit constexpr gwn_device_span(cuda::std::span<T> const span) noexcept : span_(span) {}
+
+    /// \brief Convert element cv-qualification within device-accessible memory.
+    template <class U>
+        requires std::is_convertible_v<U (*)[], T (*)[]>
+    constexpr gwn_device_span(gwn_device_span<U> const other) noexcept
+        : span_(other.data(), other.size()) {}
+
+    /// \brief Return the first element address.
+    [[nodiscard]] __host__ __device__ constexpr T *data() const noexcept { return span_.data(); }
+
+    /// \brief Return the element count.
+    [[nodiscard]] __host__ __device__ constexpr std::size_t size() const noexcept {
+        return span_.size();
+    }
+
+    /// \brief Return whether the view has no elements.
+    [[nodiscard]] __host__ __device__ constexpr bool empty() const noexcept {
+        return span_.empty();
+    }
+
+private:
+    cuda::std::span<T> span_{};
+
+    friend constexpr cuda::std::span<T>
+    detail::gwn_cuda_span_view_impl<T>(gwn_device_span<T> const span) noexcept;
+};
+
 /// \brief Check whether a span has storage for every element.
 template <class T>
 [[nodiscard]] __host__ __device__ constexpr bool
@@ -301,3 +390,5 @@ gwn_cuda_free(void *const ptr, cudaStream_t const stream = gwn_default_stream())
 }
 
 } // namespace gwn
+
+#include "detail/gwn_span_impl.cuh"
