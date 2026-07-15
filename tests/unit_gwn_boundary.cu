@@ -71,12 +71,12 @@ std::vector<BoundaryRow> copy_boundary_rows(gwn::gwn_boundary_chain_object<Index
 template <class Mesh>
 void upload_mesh(Mesh const &mesh, gwn::gwn_geometry_object<Real, Index> &geometry) {
     gwn::gwn_status const status = gwn::gwn_upload_geometry(
-        geometry, cuda::std::span<Real const>(mesh.vx.data(), mesh.vx.size()),
-        cuda::std::span<Real const>(mesh.vy.data(), mesh.vy.size()),
-        cuda::std::span<Real const>(mesh.vz.data(), mesh.vz.size()),
-        cuda::std::span<Index const>(mesh.i0.data(), mesh.i0.size()),
-        cuda::std::span<Index const>(mesh.i1.data(), mesh.i1.size()),
-        cuda::std::span<Index const>(mesh.i2.data(), mesh.i2.size())
+        geometry, gwn::gwn_host_span<Real const>(mesh.vx.data(), mesh.vx.size()),
+        gwn::gwn_host_span<Real const>(mesh.vy.data(), mesh.vy.size()),
+        gwn::gwn_host_span<Real const>(mesh.vz.data(), mesh.vz.size()),
+        gwn::gwn_host_span<Index const>(mesh.i0.data(), mesh.i0.size()),
+        gwn::gwn_host_span<Index const>(mesh.i1.data(), mesh.i1.size()),
+        gwn::gwn_host_span<Index const>(mesh.i2.data(), mesh.i2.size())
     );
     SMALLGWN_SKIP_IF_STATUS_CUDA_UNAVAILABLE(status);
     ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
@@ -150,16 +150,27 @@ TEST_F(GwnBoundaryTest, boundary_chain_open_cube_has_four_unit_edges) {
 }
 
 TEST_F(GwnBoundaryTest, boundary_chain_uses_net_orientation) {
+    std::array<Real, 4> const vertex_x{0, 1, 0, 1};
+    std::array<Real, 4> const vertex_y{0, 0, 1, 1};
+    std::array<Real, 4> const vertex_z{};
     std::array<Index, 4> const i0{0, 1, 0, 0};
     std::array<Index, 4> const i1{1, 0, 1, 1};
     std::array<Index, 4> const i2{2, 3, 2, 2};
 
-    gwn::gwn_boundary_chain_object<Index> boundary;
-    gwn::gwn_status const status = gwn::gwn_build_boundary_chain(
-        4, cuda::std::span<Index const>(i0.data(), i0.size()),
-        cuda::std::span<Index const>(i1.data(), i1.size()),
-        cuda::std::span<Index const>(i2.data(), i2.size()), boundary
+    gwn::gwn_geometry_object<Real, Index> geometry;
+    ASSERT_TRUE(
+        gwn::gwn_upload_geometry(
+            geometry, gwn::gwn_host_span<Real const>(vertex_x.data(), vertex_x.size()),
+            gwn::gwn_host_span<Real const>(vertex_y.data(), vertex_y.size()),
+            gwn::gwn_host_span<Real const>(vertex_z.data(), vertex_z.size()),
+            gwn::gwn_host_span<Index const>(i0.data(), i0.size()),
+            gwn::gwn_host_span<Index const>(i1.data(), i1.size()),
+            gwn::gwn_host_span<Index const>(i2.data(), i2.size())
+        )
+            .is_ok()
     );
+    gwn::gwn_boundary_chain_object<Index> boundary;
+    gwn::gwn_status const status = gwn::gwn_build_boundary_chain(geometry, boundary);
     ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
 
     std::vector<BoundaryRow> const rows = copy_boundary_rows(boundary);
@@ -173,60 +184,6 @@ TEST_F(GwnBoundaryTest, boundary_chain_uses_net_orientation) {
         return (row.start == 1 && row.end == 0);
     });
     EXPECT_EQ(cancelled, rows.end());
-}
-
-TEST_F(GwnBoundaryTest, boundary_chain_rejects_bad_inputs) {
-    std::array<Index, 1> const i0{0};
-    std::array<Index, 2> const i1{1, 1};
-    std::array<Index, 1> const i2{2};
-
-    gwn::gwn_boundary_chain_object<Index> boundary;
-    EXPECT_FALSE(
-        gwn::gwn_build_boundary_chain(
-            3, cuda::std::span<Index const>(i0.data(), i0.size()),
-            cuda::std::span<Index const>(i1.data(), i1.size()),
-            cuda::std::span<Index const>(i2.data(), i2.size()), boundary
-        )
-            .is_ok()
-    );
-
-    std::array<Index, 1> const bad_i0{0};
-    std::array<Index, 1> const bad_i1{1};
-    std::array<Index, 1> const bad_i2{4};
-    EXPECT_FALSE(
-        gwn::gwn_build_boundary_chain(
-            3, cuda::std::span<Index const>(bad_i0.data(), bad_i0.size()),
-            cuda::std::span<Index const>(bad_i1.data(), bad_i1.size()),
-            cuda::std::span<Index const>(bad_i2.data(), bad_i2.size()), boundary
-        )
-            .is_ok()
-    );
-}
-
-TEST_F(GwnBoundaryTest, boundary_chain_failed_rebuild_preserves_previous_chain) {
-    OpenCubeMesh mesh;
-    gwn::gwn_geometry_object<Real, Index> geometry;
-    upload_mesh(mesh, geometry);
-
-    gwn::gwn_boundary_chain_object<Index> boundary;
-    ASSERT_TRUE(gwn::gwn_build_boundary_chain(geometry, boundary).is_ok());
-    std::vector<BoundaryRow> const before = copy_boundary_rows(boundary);
-    ASSERT_EQ(before.size(), 4u);
-
-    std::array<Index, 1> const bad_i0{0};
-    std::array<Index, 1> const bad_i1{1};
-    std::array<Index, 1> const bad_i2{static_cast<Index>(mesh.Nv)};
-    EXPECT_FALSE(
-        gwn::gwn_build_boundary_chain(
-            mesh.Nv, cuda::std::span<Index const>(bad_i0.data(), bad_i0.size()),
-            cuda::std::span<Index const>(bad_i1.data(), bad_i1.size()),
-            cuda::std::span<Index const>(bad_i2.data(), bad_i2.size()), boundary
-        )
-            .is_ok()
-    );
-
-    EXPECT_TRUE(boundary.has_data());
-    EXPECT_EQ(copy_boundary_rows(boundary).size(), before.size());
 }
 
 TEST_F(GwnBoundaryTest, boundary_chain_move_transfers_accessors) {
@@ -258,9 +215,12 @@ TEST_F(GwnBoundaryStreamTest, replacement_releases_old_storage_on_its_bound_stre
     gwn::gwn_geometry_object<Real, Index> geometry;
     ASSERT_TRUE(
         gwn::gwn_upload_geometry(
-            geometry, cuda::std::span<Real const>(mesh.vx), cuda::std::span<Real const>(mesh.vy),
-            cuda::std::span<Real const>(mesh.vz), cuda::std::span<Index const>(mesh.i0),
-            cuda::std::span<Index const>(mesh.i1), cuda::std::span<Index const>(mesh.i2), stream_a_
+            geometry, gwn::tests::host_span(cuda::std::span<Real const>(mesh.vx)),
+            gwn::tests::host_span(cuda::std::span<Real const>(mesh.vy)),
+            gwn::tests::host_span(cuda::std::span<Real const>(mesh.vz)),
+            gwn::tests::host_span(cuda::std::span<Index const>(mesh.i0)),
+            gwn::tests::host_span(cuda::std::span<Index const>(mesh.i1)),
+            gwn::tests::host_span(cuda::std::span<Index const>(mesh.i2)), stream_a_
         )
             .is_ok()
     );

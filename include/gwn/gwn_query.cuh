@@ -11,6 +11,10 @@
 /// without synchronizing that stream. Device point APIs accept accessors and return values
 /// directly. Traversal queries invoke their overflow callback before returning an overflow value;
 /// the default callback traps.
+/// Batch launchers use \c gwn_query_batch_config as a structural non-type template parameter. The
+/// default block size is 256 threads; traversal batch launchers also use its stack capacity.
+/// Their input and output spans must refer to device-accessible storage that remains valid until
+/// the supplied stream completes.
 ///
 /// Every query family provides both point and batch variants.
 /// Implementation details live in `include/gwn/detail/gwn_query_*_impl.cuh`.
@@ -33,6 +37,28 @@ namespace gwn {
 
 /// \brief 3-component column vector parameterised on scalar type \p Real.
 template <gwn_real_type Real> using gwn_vec3 = detail::gwn_query_vec3<Real>;
+
+/// \brief Default number of threads per query batch block.
+inline constexpr int k_gwn_default_query_batch_block_size = 256;
+
+/// \brief Default capacity of the per-thread BVH traversal stack.
+inline constexpr int k_gwn_default_traversal_stack_capacity = 64;
+
+/// \brief Compile-time launch configuration shared by query batch APIs.
+struct gwn_query_batch_config {
+    int block_size = k_gwn_default_query_batch_block_size; ///< Threads per CUDA block.
+    int stack_capacity =
+        k_gwn_default_traversal_stack_capacity; ///< Per-thread traversal stack, if applicable.
+};
+
+/// \brief Query batch configuration with a CUDA-supported compile-time block size.
+template <gwn_query_batch_config Config>
+concept gwn_query_batch_config_value = Config.block_size > 0 && Config.block_size <= 1024;
+
+/// \brief Query batch configuration with a positive traversal stack capacity.
+template <gwn_query_batch_config Config>
+concept gwn_traversal_batch_config_value =
+    gwn_query_batch_config_value<Config> && Config.stack_capacity > 0;
 
 /// \brief Completion state of a ray first-hit query.
 enum class gwn_ray_first_hit_status : std::uint8_t {
@@ -67,9 +93,6 @@ private:
     static constexpr std::size_t k_storage_padding_size = sizeof(Index) == 4 ? 3 : 7;
     std::uint8_t storage_padding_[k_storage_padding_size]{};
 };
-
-/// \brief Default capacity of the per-thread BVH traversal stack.
-inline constexpr int k_gwn_default_traversal_stack_capacity = 64;
 
 } // namespace gwn
 
@@ -107,25 +130,31 @@ template <
 ///
 /// Queries read bounds and leaf-ordered triangle records from \p bvh. \p culling_band limits the
 /// returned distance as described by \ref gwn_unsigned_distance. Each overflowed query writes NaN
-/// when its callback returns.
+/// when its callback returns. \c Config controls the launch block size and traversal stack
+/// capacity.
 template <
-    int Width, gwn_real_type Real, gwn_index_type Index = std::uint32_t,
-    int StackCapacity = k_gwn_default_traversal_stack_capacity,
+    gwn_query_batch_config Config = gwn_query_batch_config{}, int Width, gwn_real_type Real,
+    gwn_index_type Index = std::uint32_t,
     typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
+    requires gwn_traversal_batch_config_value<Config>
 [[nodiscard]] gwn_status gwn_compute_unsigned_distance_batch(
     gwn_bvh_object<Width, Real, Index> const &bvh,
-    cuda::std::span<std::type_identity_t<Real> const> const query_x,
-    cuda::std::span<std::type_identity_t<Real> const> const query_y,
-    cuda::std::span<std::type_identity_t<Real> const> const query_z,
-    cuda::std::span<Real> const output,
+    gwn_device_span<std::type_identity_t<Real> const> const device_query_x,
+    gwn_device_span<std::type_identity_t<Real> const> const device_query_y,
+    gwn_device_span<std::type_identity_t<Real> const> const device_query_z,
+    gwn_device_span<Real> const device_output,
     Real const culling_band = std::numeric_limits<Real>::infinity(),
     cudaStream_t const stream = gwn_default_stream(), OverflowCallback const &overflow_callback = {}
 ) noexcept {
+    auto const query_x = detail::gwn_cuda_span_view_impl(device_query_x);
+    auto const query_y = detail::gwn_cuda_span_view_impl(device_query_y);
+    auto const query_z = detail::gwn_cuda_span_view_impl(device_query_z);
+    auto const output = detail::gwn_cuda_span_view_impl(device_output);
     auto const &accessor = bvh.accessor();
     if (!accessor.is_valid())
         return gwn_status::invalid_argument("BVH object contains no queryable data.");
     GWN_RETURN_ON_ERROR(
-        (detail::gwn_validate_traversal_stack_capacity_impl<StackCapacity>(accessor))
+        (detail::gwn_validate_traversal_stack_capacity_impl<Config.stack_capacity>(accessor))
     );
     if (query_x.size() != query_y.size() || query_x.size() != query_z.size())
         return gwn_status::invalid_argument("Query SoA spans must have identical lengths.");
@@ -140,10 +169,10 @@ template <
     if (output.empty())
         return gwn_status::ok();
 
-    return detail::gwn_launch_linear_kernel<detail::k_gwn_default_block_size>(
+    return detail::gwn_launch_linear_kernel<Config.block_size>(
         output.size(),
         detail::gwn_unsigned_distance_batch_functor<
-            Width, Real, Index, StackCapacity, OverflowCallback>{
+            Width, Real, Index, Config.stack_capacity, OverflowCallback>{
             accessor, query_x, query_y, query_z, output, culling_band, overflow_callback
         },
         stream
@@ -180,29 +209,37 @@ template <
 /// same fields and status semantics as \ref gwn_ray_first_hit. The launch is asynchronous with
 /// respect to the host. For width-4 float BVHs with uint32 indices, the launcher selects packed
 /// traversal when the root is internal, node references fit the packed encoding, and
-/// \c packed_stack_bound does not exceed \p StackCapacity. Otherwise it selects canonical
-/// traversal with identical result semantics.
+/// \c packed_stack_bound does not exceed \c Config.stack_capacity. Otherwise it selects canonical
+/// traversal with identical result semantics. \c Config also controls the launch block size.
 template <
-    int Width, gwn_real_type Real, gwn_index_type Index = std::uint32_t,
-    int StackCapacity = k_gwn_default_traversal_stack_capacity,
+    gwn_query_batch_config Config = gwn_query_batch_config{}, int Width, gwn_real_type Real,
+    gwn_index_type Index = std::uint32_t,
     typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
+    requires gwn_traversal_batch_config_value<Config>
 [[nodiscard]] gwn_status gwn_compute_ray_first_hit_batch(
     gwn_bvh_object<Width, Real, Index> const &bvh,
-    cuda::std::span<std::type_identity_t<Real> const> const ray_origin_x,
-    cuda::std::span<std::type_identity_t<Real> const> const ray_origin_y,
-    cuda::std::span<std::type_identity_t<Real> const> const ray_origin_z,
-    cuda::std::span<std::type_identity_t<Real> const> const ray_dir_x,
-    cuda::std::span<std::type_identity_t<Real> const> const ray_dir_y,
-    cuda::std::span<std::type_identity_t<Real> const> const ray_dir_z,
-    cuda::std::span<gwn_ray_first_hit_result<Real, Index>> const output, Real const t_min = Real(0),
-    Real const t_max = std::numeric_limits<Real>::infinity(),
+    gwn_device_span<std::type_identity_t<Real> const> const device_ray_origin_x,
+    gwn_device_span<std::type_identity_t<Real> const> const device_ray_origin_y,
+    gwn_device_span<std::type_identity_t<Real> const> const device_ray_origin_z,
+    gwn_device_span<std::type_identity_t<Real> const> const device_ray_dir_x,
+    gwn_device_span<std::type_identity_t<Real> const> const device_ray_dir_y,
+    gwn_device_span<std::type_identity_t<Real> const> const device_ray_dir_z,
+    gwn_device_span<gwn_ray_first_hit_result<Real, Index>> const device_output,
+    Real const t_min = Real(0), Real const t_max = std::numeric_limits<Real>::infinity(),
     cudaStream_t const stream = gwn_default_stream(), OverflowCallback const &overflow_callback = {}
 ) noexcept {
+    auto const ray_origin_x = detail::gwn_cuda_span_view_impl(device_ray_origin_x);
+    auto const ray_origin_y = detail::gwn_cuda_span_view_impl(device_ray_origin_y);
+    auto const ray_origin_z = detail::gwn_cuda_span_view_impl(device_ray_origin_z);
+    auto const ray_dir_x = detail::gwn_cuda_span_view_impl(device_ray_dir_x);
+    auto const ray_dir_y = detail::gwn_cuda_span_view_impl(device_ray_dir_y);
+    auto const ray_dir_z = detail::gwn_cuda_span_view_impl(device_ray_dir_z);
+    auto const output = detail::gwn_cuda_span_view_impl(device_output);
     auto const &accessor = bvh.accessor();
     if (!accessor.is_valid())
         return gwn_status::invalid_argument("BVH object contains no queryable data.");
     GWN_RETURN_ON_ERROR(
-        (detail::gwn_validate_traversal_stack_capacity_impl<StackCapacity>(accessor))
+        (detail::gwn_validate_traversal_stack_capacity_impl<Config.stack_capacity>(accessor))
     );
 
     gwn_status const span_status = detail::gwn_validate_ray_first_hit_batch_spans<Real, Index>(
@@ -216,10 +253,10 @@ template <
         return gwn_status::ok();
 
     auto const launch = [&]<bool UsePackedTraversal>() noexcept {
-        return detail::gwn_launch_linear_kernel<detail::k_gwn_ray_first_hit_block_size>(
+        return detail::gwn_launch_linear_kernel<Config.block_size>(
             ray_origin_x.size(),
             detail::gwn_ray_first_hit_batch_functor<
-                Width, Real, Index, StackCapacity, OverflowCallback, UsePackedTraversal>{
+                Width, Real, Index, Config.stack_capacity, OverflowCallback, UsePackedTraversal>{
                 accessor,
                 ray_origin_x,
                 ray_origin_y,
@@ -244,7 +281,7 @@ template <
         constexpr std::uint64_t k_leaf_parent_limit = std::uint64_t(1) << 29;
         // Dispatch before launch so the common kernel owns only its 32-bit pending-child stack.
         if (accessor.has_internal_root() && accessor.nodes.size() < k_leaf_parent_limit &&
-            accessor.packed_stack_bound <= StackCapacity) {
+            accessor.packed_stack_bound <= Config.stack_capacity) {
             return launch.template operator()<true>();
         }
     }
@@ -267,14 +304,22 @@ template <int Width, gwn_real_type Real, gwn_index_type Index>
 /// \brief Compute exact winding numbers for a batch.
 ///
 /// Each thread scans the complete canonical triangle sequence without hierarchy traversal.
-template <int Width, gwn_real_type Real, gwn_index_type Index = std::uint32_t>
+/// \c Config controls the launch block size; its stack capacity is not applicable.
+template <
+    gwn_query_batch_config Config = gwn_query_batch_config{}, int Width, gwn_real_type Real,
+    gwn_index_type Index = std::uint32_t>
+    requires gwn_query_batch_config_value<Config>
 [[nodiscard]] gwn_status gwn_compute_winding_number_exact_batch(
     gwn_bvh_object<Width, Real, Index> const &bvh,
-    cuda::std::span<std::type_identity_t<Real> const> const query_x,
-    cuda::std::span<std::type_identity_t<Real> const> const query_y,
-    cuda::std::span<std::type_identity_t<Real> const> const query_z,
-    cuda::std::span<Real> const output, cudaStream_t const stream = gwn_default_stream()
+    gwn_device_span<std::type_identity_t<Real> const> const device_query_x,
+    gwn_device_span<std::type_identity_t<Real> const> const device_query_y,
+    gwn_device_span<std::type_identity_t<Real> const> const device_query_z,
+    gwn_device_span<Real> const device_output, cudaStream_t const stream = gwn_default_stream()
 ) noexcept {
+    auto const query_x = detail::gwn_cuda_span_view_impl(device_query_x);
+    auto const query_y = detail::gwn_cuda_span_view_impl(device_query_y);
+    auto const query_z = detail::gwn_cuda_span_view_impl(device_query_z);
+    auto const output = detail::gwn_cuda_span_view_impl(device_output);
     auto const &accessor = bvh.accessor();
     if (!accessor.is_valid())
         return gwn_status::invalid_argument("BVH object contains no queryable data.");
@@ -291,7 +336,7 @@ template <int Width, gwn_real_type Real, gwn_index_type Index = std::uint32_t>
     if (output.empty())
         return gwn_status::ok();
 
-    return detail::gwn_launch_linear_kernel<detail::k_gwn_default_block_size>(
+    return detail::gwn_launch_linear_kernel<Config.block_size>(
         output.size(),
         detail::gwn_winding_number_exact_batch_functor<Width, Real, Index>{
             accessor, query_x, query_y, query_z, output
@@ -335,20 +380,25 @@ template <
 /// \brief Compute Taylor-approximated winding numbers for a batch.
 ///
 /// \p accuracy_scale must be nonnegative. Each overflowed query writes NaN when its callback
-/// returns.
+/// returns. \c Config controls the launch block size and traversal stack capacity.
 template <
-    int Order, int Width, gwn_real_type Real, gwn_index_type Index = std::uint32_t,
-    int StackCapacity = k_gwn_default_traversal_stack_capacity,
+    int Order, gwn_query_batch_config Config = gwn_query_batch_config{}, int Width,
+    gwn_real_type Real, gwn_index_type Index = std::uint32_t,
     typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
+    requires gwn_traversal_batch_config_value<Config>
 [[nodiscard]] gwn_status gwn_compute_winding_number_taylor_batch(
     gwn_bvh_object<Width, Real, Index> const &bvh,
     gwn_bvh_moment_object<Width, Order, Real, Index> const &moment,
-    cuda::std::span<std::type_identity_t<Real> const> const query_x,
-    cuda::std::span<std::type_identity_t<Real> const> const query_y,
-    cuda::std::span<std::type_identity_t<Real> const> const query_z,
-    cuda::std::span<Real> const output, Real const accuracy_scale = Real(2),
+    gwn_device_span<std::type_identity_t<Real> const> const device_query_x,
+    gwn_device_span<std::type_identity_t<Real> const> const device_query_y,
+    gwn_device_span<std::type_identity_t<Real> const> const device_query_z,
+    gwn_device_span<Real> const device_output, Real const accuracy_scale = Real(2),
     cudaStream_t const stream = gwn_default_stream(), OverflowCallback const &overflow_callback = {}
 ) noexcept {
+    auto const query_x = detail::gwn_cuda_span_view_impl(device_query_x);
+    auto const query_y = detail::gwn_cuda_span_view_impl(device_query_y);
+    auto const query_z = detail::gwn_cuda_span_view_impl(device_query_z);
+    auto const output = detail::gwn_cuda_span_view_impl(device_output);
     static_assert(
         Order == 0 || Order == 1 || Order == 2,
         "gwn_compute_winding_number_taylor_batch supports Order 0, 1, and 2."
@@ -358,7 +408,7 @@ template <
     if (!bvh_accessor.is_valid())
         return gwn_status::invalid_argument("BVH object contains no queryable data.");
     GWN_RETURN_ON_ERROR(
-        (detail::gwn_validate_traversal_stack_capacity_impl<StackCapacity>(bvh_accessor))
+        (detail::gwn_validate_traversal_stack_capacity_impl<Config.stack_capacity>(bvh_accessor))
     );
     if (!moment_accessor.is_valid_for(bvh_accessor))
         return gwn_status::invalid_argument("Moment object is not aligned with the BVH.");
@@ -377,10 +427,10 @@ template <
     if (output.empty())
         return gwn_status::ok();
 
-    return detail::gwn_launch_linear_kernel<detail::k_gwn_default_block_size>(
+    return detail::gwn_launch_linear_kernel<Config.block_size>(
         output.size(),
         detail::gwn_winding_number_taylor_batch_functor<
-            Order, Width, Real, Index, StackCapacity, OverflowCallback>{
+            Order, Width, Real, Index, Config.stack_capacity, OverflowCallback>{
             bvh_accessor,
             moment_accessor,
             query_x,
@@ -438,24 +488,30 @@ template <
 /// area term from Martens et al. Retry order is `+Z`, `+X`, `+Y`. Queries with
 /// three singular axes write NaN. Overflowed queries also write NaN when their
 /// callbacks return. The boundary chain must come from the geometry's topology, and the BVH must
-/// represent the same geometry state; structural counts are validated before launch.
+/// represent the same geometry state; structural counts are validated before launch. \c Config
+/// controls the launch block size and traversal stack capacity.
 ///
 /// Reference: Martens, Trettner, and Bessmeltsev, "The Antipodal Method:
 /// Fast, Accurate, and Robust 3D Generalized Winding Numbers," ACM TOG 45(4),
 /// 2026. https://doi.org/10.1145/3811323
 template <
-    int Width, gwn_real_type Real, gwn_index_type Index = std::uint32_t,
-    int StackCapacity = k_gwn_default_traversal_stack_capacity,
+    gwn_query_batch_config Config = gwn_query_batch_config{}, int Width, gwn_real_type Real,
+    gwn_index_type Index = std::uint32_t,
     typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
+    requires gwn_traversal_batch_config_value<Config>
 [[nodiscard]] gwn_status gwn_compute_winding_number_antipodal_batch(
     gwn_geometry_object<Real, Index> const &geometry, gwn_bvh_object<Width, Real, Index> const &bvh,
     gwn_boundary_chain_object<Index> const &boundary_chain,
-    cuda::std::span<std::type_identity_t<Real> const> const query_x,
-    cuda::std::span<std::type_identity_t<Real> const> const query_y,
-    cuda::std::span<std::type_identity_t<Real> const> const query_z,
-    cuda::std::span<Real> const output, cudaStream_t const stream = gwn_default_stream(),
+    gwn_device_span<std::type_identity_t<Real> const> const device_query_x,
+    gwn_device_span<std::type_identity_t<Real> const> const device_query_y,
+    gwn_device_span<std::type_identity_t<Real> const> const device_query_z,
+    gwn_device_span<Real> const device_output, cudaStream_t const stream = gwn_default_stream(),
     OverflowCallback const &overflow_callback = {}
 ) noexcept {
+    auto const query_x = detail::gwn_cuda_span_view_impl(device_query_x);
+    auto const query_y = detail::gwn_cuda_span_view_impl(device_query_y);
+    auto const query_z = detail::gwn_cuda_span_view_impl(device_query_z);
+    auto const output = detail::gwn_cuda_span_view_impl(device_output);
     auto const &geometry_accessor = geometry.accessor();
     auto const &bvh_accessor = bvh.accessor();
     auto const &boundary_accessor = boundary_chain.accessor();
@@ -466,7 +522,7 @@ template <
     if (bvh_accessor.triangles.size() != geometry_accessor.triangle_count())
         return gwn_status::invalid_argument("Geometry and BVH triangle counts differ.");
     GWN_RETURN_ON_ERROR(
-        (detail::gwn_validate_traversal_stack_capacity_impl<StackCapacity>(bvh_accessor))
+        (detail::gwn_validate_traversal_stack_capacity_impl<Config.stack_capacity>(bvh_accessor))
     );
     if (!boundary_accessor.is_valid())
         return gwn_status::invalid_argument("Boundary chain object is unbuilt or invalid.");
@@ -487,10 +543,10 @@ template <
     if (output.empty())
         return gwn_status::ok();
 
-    return detail::gwn_launch_linear_kernel<detail::k_gwn_default_block_size>(
+    return detail::gwn_launch_linear_kernel<Config.block_size>(
         output.size(),
         detail::gwn_winding_number_antipodal_batch_functor<
-            Width, Real, Index, StackCapacity, OverflowCallback>{
+            Width, Real, Index, Config.stack_capacity, OverflowCallback>{
             geometry_accessor, bvh_accessor, boundary_accessor, query_x, query_y, query_z, output,
             overflow_callback
         },
@@ -532,20 +588,30 @@ template <gwn_real_type Real, gwn_index_type Index>
 /// The query differentiates the boundary spherical-area term from Martens et
 /// al. Retry order is `+Z`, `+X`, `+Y`. Queries with three singular axes write
 /// `(NaN, NaN, NaN)`. The boundary chain must come from the geometry's topology; structural counts
-/// are validated before launch.
+/// are validated before launch. \c Config controls the launch block size; its stack capacity is not
+/// applicable.
 ///
 /// Reference: The Antipodal Method: Fast, Accurate, and Robust 3D Generalized
 /// Winding Numbers. https://doi.org/10.1145/3811323
-template <gwn_real_type Real, gwn_index_type Index = std::uint32_t>
+template <
+    gwn_query_batch_config Config = gwn_query_batch_config{}, gwn_real_type Real,
+    gwn_index_type Index = std::uint32_t>
+    requires gwn_query_batch_config_value<Config>
 [[nodiscard]] gwn_status gwn_compute_winding_gradient_antipodal_batch(
     gwn_geometry_object<Real, Index> const &geometry,
     gwn_boundary_chain_object<Index> const &boundary_chain,
-    cuda::std::span<std::type_identity_t<Real> const> const query_x,
-    cuda::std::span<std::type_identity_t<Real> const> const query_y,
-    cuda::std::span<std::type_identity_t<Real> const> const query_z,
-    cuda::std::span<Real> const output_x, cuda::std::span<Real> const output_y,
-    cuda::std::span<Real> const output_z, cudaStream_t const stream = gwn_default_stream()
+    gwn_device_span<std::type_identity_t<Real> const> const device_query_x,
+    gwn_device_span<std::type_identity_t<Real> const> const device_query_y,
+    gwn_device_span<std::type_identity_t<Real> const> const device_query_z,
+    gwn_device_span<Real> const device_output_x, gwn_device_span<Real> const device_output_y,
+    gwn_device_span<Real> const device_output_z, cudaStream_t const stream = gwn_default_stream()
 ) noexcept {
+    auto const query_x = detail::gwn_cuda_span_view_impl(device_query_x);
+    auto const query_y = detail::gwn_cuda_span_view_impl(device_query_y);
+    auto const query_z = detail::gwn_cuda_span_view_impl(device_query_z);
+    auto const output_x = detail::gwn_cuda_span_view_impl(device_output_x);
+    auto const output_y = detail::gwn_cuda_span_view_impl(device_output_y);
+    auto const output_z = detail::gwn_cuda_span_view_impl(device_output_z);
     auto const &geometry_accessor = geometry.accessor();
     auto const &boundary_accessor = boundary_chain.accessor();
     if (!geometry_accessor.is_valid())
@@ -571,7 +637,7 @@ template <gwn_real_type Real, gwn_index_type Index = std::uint32_t>
     if (output_x.empty())
         return gwn_status::ok();
 
-    return detail::gwn_launch_linear_kernel<detail::k_gwn_default_block_size>(
+    return detail::gwn_launch_linear_kernel<Config.block_size>(
         output_x.size(),
         detail::gwn_winding_gradient_antipodal_batch_functor<Real, Index>{
             geometry_accessor, boundary_accessor, query_x, query_y, query_z, output_x, output_y,
@@ -618,21 +684,28 @@ template <
 /// \brief Compute Taylor-approximated winding gradients for a batch.
 ///
 /// \p accuracy_scale must be nonnegative. Each overflowed query writes an all-NaN vector when its
-/// callback returns.
+/// callback returns. \c Config controls the launch block size and traversal stack capacity.
 template <
-    int Order, int Width, gwn_real_type Real, gwn_index_type Index = std::uint32_t,
-    int StackCapacity = k_gwn_default_traversal_stack_capacity,
+    int Order, gwn_query_batch_config Config = gwn_query_batch_config{}, int Width,
+    gwn_real_type Real, gwn_index_type Index = std::uint32_t,
     typename OverflowCallback = detail::gwn_traversal_overflow_trap_callback>
+    requires gwn_traversal_batch_config_value<Config>
 [[nodiscard]] gwn_status gwn_compute_winding_gradient_taylor_batch(
     gwn_bvh_object<Width, Real, Index> const &bvh,
     gwn_bvh_moment_object<Width, Order, Real, Index> const &moment,
-    cuda::std::span<std::type_identity_t<Real> const> const query_x,
-    cuda::std::span<std::type_identity_t<Real> const> const query_y,
-    cuda::std::span<std::type_identity_t<Real> const> const query_z,
-    cuda::std::span<Real> const output_x, cuda::std::span<Real> const output_y,
-    cuda::std::span<Real> const output_z, Real const accuracy_scale = Real(2),
+    gwn_device_span<std::type_identity_t<Real> const> const device_query_x,
+    gwn_device_span<std::type_identity_t<Real> const> const device_query_y,
+    gwn_device_span<std::type_identity_t<Real> const> const device_query_z,
+    gwn_device_span<Real> const device_output_x, gwn_device_span<Real> const device_output_y,
+    gwn_device_span<Real> const device_output_z, Real const accuracy_scale = Real(2),
     cudaStream_t const stream = gwn_default_stream(), OverflowCallback const &overflow_callback = {}
 ) noexcept {
+    auto const query_x = detail::gwn_cuda_span_view_impl(device_query_x);
+    auto const query_y = detail::gwn_cuda_span_view_impl(device_query_y);
+    auto const query_z = detail::gwn_cuda_span_view_impl(device_query_z);
+    auto const output_x = detail::gwn_cuda_span_view_impl(device_output_x);
+    auto const output_y = detail::gwn_cuda_span_view_impl(device_output_y);
+    auto const output_z = detail::gwn_cuda_span_view_impl(device_output_z);
     static_assert(
         Order == 0 || Order == 1 || Order == 2,
         "gwn_compute_winding_gradient_taylor_batch supports Order 0, 1, and 2."
@@ -642,7 +715,7 @@ template <
     if (!bvh_accessor.is_valid())
         return gwn_status::invalid_argument("BVH object contains no queryable data.");
     GWN_RETURN_ON_ERROR(
-        (detail::gwn_validate_traversal_stack_capacity_impl<StackCapacity>(bvh_accessor))
+        (detail::gwn_validate_traversal_stack_capacity_impl<Config.stack_capacity>(bvh_accessor))
     );
     if (!moment_accessor.is_valid_for(bvh_accessor))
         return gwn_status::invalid_argument("Moment object is not aligned with the BVH.");
@@ -663,10 +736,10 @@ template <
     if (output_x.empty())
         return gwn_status::ok();
 
-    return detail::gwn_launch_linear_kernel<detail::k_gwn_default_block_size>(
+    return detail::gwn_launch_linear_kernel<Config.block_size>(
         output_x.size(),
         detail::gwn_winding_gradient_taylor_batch_functor<
-            Order, Width, Real, Index, StackCapacity, OverflowCallback>{
+            Order, Width, Real, Index, Config.stack_capacity, OverflowCallback>{
             bvh_accessor,
             moment_accessor,
             query_x,

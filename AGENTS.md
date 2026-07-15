@@ -98,7 +98,11 @@ rule below, derive the answer from these four decisions.
   singular.
 - Taylor batch queries reject negative and NaN `accuracy_scale` values. Increasing a valid scale
   descends more children.
-- Traversal stack capacity: template `StackCapacity` (default `k_gwn_default_traversal_stack_capacity = 64`).
+- Query batch launch configuration is the structural NTTP `gwn_query_batch_config`. Its default
+  `block_size` is `k_gwn_default_query_batch_block_size = 256`; traversal batch APIs additionally
+  validate `stack_capacity` against the exact BVH bounds, with default
+  `k_gwn_default_traversal_stack_capacity = 64`. The stack field is not applicable to exact winding
+  or Antipodal gradient batches. Device point APIs retain an independent `StackCapacity` template.
   Query APIs accept an optional device-side overflow callback; default callback traps via `gwn_trap()`.
   For library-built BVHs with intact stack-bound metadata, host validation makes stack overflow
   unreachable in batch launches; the overflow-callback contract is exercised through device point
@@ -133,14 +137,21 @@ rule below, derive the answer from these four decisions.
   operations (`clear(stream)`, `resize(count, stream)`) release or replace on the supplied stream;
   the caller establishes ordering before supplying a different stream. Deallocation and lifetime
   operations are `noexcept`; allocation, copy, and memset operations report failure by exception.
-- Public interfaces accept spans and never expose `detail::gwn_device_array`.
+- Public interfaces accept non-owning spans and never expose `detail::gwn_device_array`.
 
 ### Span Rules
-- Always use `cuda::std::span`, never bare `std::span`.
+- Host-source public parameters use `gwn_host_span`; query batch parameters use `gwn_device_span`.
+  These nominal views state caller intent but do not inspect pointer attributes. They have no
+  implicit conversion from `cuda::std::span` or across memory spaces. The detail friend adapter
+  extracts their backing `cuda::std::span` at the public seam.
+- Detail functions, accessors, functors, and owning-object state always use `cuda::std::span`, never
+  bare `std::span` or the public memory-space views.
 - East const on element type: `span<T const>`, never `span<const T>`.
 - Pass spans **by value** with top-level `const`:
-  - Input: `cuda::std::span<T const> const`
-  - Output: `cuda::std::span<T> const`
+  - Public host input: `gwn_host_span<T const> const`
+  - Public device input: `gwn_device_span<T const> const`
+  - Public device output: `gwn_device_span<T> const`
+  - Detail input/output: `cuda::std::span<T const> const` / `cuda::std::span<T> const`
   - Exception: `gwn_allocate_span` / `gwn_free_span` take `cuda::std::span<T> &` (must mutate the span itself).
 - Accessor struct members store mutable spans (`span<T>`). Functor members distinguish
   `span<T const>` (input) vs `span<T>` (output).

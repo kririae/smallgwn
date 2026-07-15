@@ -389,42 +389,6 @@ void gwn_replace_boundary_chain_accessor(
 
 } // namespace detail
 
-template <gwn_index_type Index>
-[[nodiscard]] gwn_status gwn_build_boundary_chain(
-    std::size_t const mesh_vertex_count, cuda::std::span<Index const> const i0,
-    cuda::std::span<Index const> const i1, cuda::std::span<Index const> const i2,
-    gwn_boundary_chain_object<Index> &out, cudaStream_t const stream
-) noexcept {
-    return detail::gwn_try_translate_status("gwn_build_boundary_chain", [&]() -> gwn_status {
-        std::size_t const triangle_count = i0.size();
-        if (i1.size() != triangle_count || i2.size() != triangle_count)
-            return gwn_status::invalid_argument("Boundary chain triangle spans must match.");
-        if (!gwn_span_has_storage(i0) || !gwn_span_has_storage(i1) || !gwn_span_has_storage(i2)) {
-            return gwn_status::invalid_argument(
-                "Boundary chain triangle spans must use non-null storage when non-empty."
-            );
-        }
-
-        detail::gwn_device_array<Index> d_i0(stream);
-        detail::gwn_device_array<Index> d_i1(stream);
-        detail::gwn_device_array<Index> d_i2(stream);
-        gwn_boundary_chain_object<Index> staging;
-        d_i0.copy_from_host(i0, stream);
-        d_i1.copy_from_host(i1, stream);
-        d_i2.copy_from_host(i2, stream);
-        detail::gwn_replace_boundary_chain_accessor(
-            staging.accessor(), mesh_vertex_count,
-            cuda::std::span<Index const>(d_i0.data(), d_i0.size()),
-            cuda::std::span<Index const>(d_i1.data(), d_i1.size()),
-            cuda::std::span<Index const>(d_i2.data(), d_i2.size()), stream
-        );
-        staging.set_stream(stream);
-        swap(out, staging);
-        // The replaced chain stays bound to its old stream until staging destroys it.
-        return gwn_status::ok();
-    });
-}
-
 template <gwn_real_type Real, gwn_index_type Index>
 [[nodiscard]] gwn_status gwn_build_boundary_chain(
     gwn_geometry_object<Real, Index> const &geometry, gwn_boundary_chain_object<Index> &out,

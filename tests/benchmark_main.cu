@@ -300,8 +300,13 @@ template <int StackCapacity, int Order>
     cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output,
     float const accuracy_scale, cudaStream_t const stream
 ) noexcept {
-    return gwn::gwn_compute_winding_number_taylor_batch<Order, 4, Real, Index, StackCapacity>(
-        bvh, moment, query_x, query_y, query_z, output, accuracy_scale, stream
+    constexpr gwn::gwn_query_batch_config config{
+        .block_size = gwn::k_gwn_default_query_batch_block_size,
+        .stack_capacity = StackCapacity,
+    };
+    return gwn::gwn_compute_winding_number_taylor_batch<Order, config, 4, Real, Index>(
+        bvh, moment, gwn::tests::device_span(query_x), gwn::tests::device_span(query_y),
+        gwn::tests::device_span(query_z), gwn::tests::device_span(output), accuracy_scale, stream
     );
 }
 
@@ -311,7 +316,8 @@ template <int StackCapacity, int Order>
     cuda::std::span<Real> const output, cudaStream_t const stream
 ) noexcept {
     return gwn::gwn_compute_winding_number_exact_batch(
-        bvh, query_x, query_y, query_z, output, stream
+        bvh, gwn::tests::device_span(query_x), gwn::tests::device_span(query_y),
+        gwn::tests::device_span(query_z), gwn::tests::device_span(output), stream
     );
 }
 
@@ -428,7 +434,10 @@ gwn::gwn_status run_antipodal_gradient_query(
     cudaStream_t const stream
 ) noexcept {
     return gwn::gwn_compute_winding_gradient_antipodal_batch(
-        geometry, boundary_chain, query_x, query_y, query_z, output_x, output_y, output_z, stream
+        geometry, boundary_chain, gwn::tests::device_span(query_x),
+        gwn::tests::device_span(query_y), gwn::tests::device_span(query_z),
+        gwn::tests::device_span(output_x), gwn::tests::device_span(output_y),
+        gwn::tests::device_span(output_z), stream
     );
 }
 
@@ -441,8 +450,14 @@ gwn::gwn_status run_antipodal_query(
     cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output,
     cudaStream_t const stream
 ) noexcept {
-    return gwn::gwn_compute_winding_number_antipodal_batch<4, Real, Index, StackCapacity>(
-        geometry, bvh, boundary_chain, query_x, query_y, query_z, output, stream
+    constexpr gwn::gwn_query_batch_config config{
+        .block_size = gwn::k_gwn_default_query_batch_block_size,
+        .stack_capacity = StackCapacity,
+    };
+    return gwn::gwn_compute_winding_number_antipodal_batch<config, 4, Real, Index>(
+        geometry, bvh, boundary_chain, gwn::tests::device_span(query_x),
+        gwn::tests::device_span(query_y), gwn::tests::device_span(query_z),
+        gwn::tests::device_span(output), stream
     );
 }
 
@@ -455,9 +470,15 @@ gwn::gwn_status run_ray_first_hit(
     cuda::std::span<gwn::gwn_ray_first_hit_result<Real, Index>> const output,
     cudaStream_t const stream
 ) noexcept {
-    return gwn::gwn_compute_ray_first_hit_batch<4, Real, Index, StackCapacity>(
-        bvh, ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x, ray_dir_y, ray_dir_z, output,
-        Real(0), std::numeric_limits<Real>::infinity(), stream
+    constexpr gwn::gwn_query_batch_config config{
+        .block_size = gwn::k_gwn_default_query_batch_block_size,
+        .stack_capacity = StackCapacity,
+    };
+    return gwn::gwn_compute_ray_first_hit_batch<config, 4, Real, Index>(
+        bvh, gwn::tests::device_span(ray_origin_x), gwn::tests::device_span(ray_origin_y),
+        gwn::tests::device_span(ray_origin_z), gwn::tests::device_span(ray_dir_x),
+        gwn::tests::device_span(ray_dir_y), gwn::tests::device_span(ray_dir_z),
+        gwn::tests::device_span(output), Real(0), std::numeric_limits<Real>::infinity(), stream
     );
 }
 
@@ -592,12 +613,12 @@ int run_benchmark(
 
         gwn::gwn_geometry_object<Real, Index> geometry;
         gwn::gwn_status const upload_status = gwn::gwn_upload_geometry(
-            geometry, cuda::std::span<Real const>(mesh.vertex_x.data(), mesh.vertex_x.size()),
-            cuda::std::span<Real const>(mesh.vertex_y.data(), mesh.vertex_y.size()),
-            cuda::std::span<Real const>(mesh.vertex_z.data(), mesh.vertex_z.size()),
-            cuda::std::span<Index const>(mesh.tri_i0.data(), mesh.tri_i0.size()),
-            cuda::std::span<Index const>(mesh.tri_i1.data(), mesh.tri_i1.size()),
-            cuda::std::span<Index const>(mesh.tri_i2.data(), mesh.tri_i2.size()), stream
+            geometry, gwn::gwn_host_span<Real const>(mesh.vertex_x.data(), mesh.vertex_x.size()),
+            gwn::gwn_host_span<Real const>(mesh.vertex_y.data(), mesh.vertex_y.size()),
+            gwn::gwn_host_span<Real const>(mesh.vertex_z.data(), mesh.vertex_z.size()),
+            gwn::gwn_host_span<Index const>(mesh.tri_i0.data(), mesh.tri_i0.size()),
+            gwn::gwn_host_span<Index const>(mesh.tri_i1.data(), mesh.tri_i1.size()),
+            gwn::gwn_host_span<Index const>(mesh.tri_i2.data(), mesh.tri_i2.size()), stream
         );
         if (!upload_status.is_ok()) {
             std::cerr << "Geometry upload failed for model " << model_path.string() << ": "
@@ -979,9 +1000,9 @@ int run_benchmark(
             [&]() noexcept {
             GWN_RETURN_ON_ERROR(
                 gwn::gwn_update_geometry(
-                    geometry, cuda::std::span<Real const>(dynamic_x.data(), dynamic_x.size()),
-                    cuda::std::span<Real const>(dynamic_y.data(), dynamic_y.size()),
-                    cuda::std::span<Real const>(dynamic_z.data(), dynamic_z.size()), stream
+                    geometry, gwn::gwn_host_span<Real const>(dynamic_x.data(), dynamic_x.size()),
+                    gwn::gwn_host_span<Real const>(dynamic_y.data(), dynamic_y.size()),
+                    gwn::gwn_host_span<Real const>(dynamic_z.data(), dynamic_z.size()), stream
                 )
             );
             GWN_RETURN_ON_ERROR(gwn::gwn_refit_bvh(geometry, bvh, stream));

@@ -300,9 +300,16 @@ template <class Bvh>
     gwn::detail::gwn_device_array<Real> const &ray_dz, gwn::detail::gwn_device_array<Hit> &output,
     cudaStream_t const stream
 ) noexcept {
-    return gwn::gwn_compute_ray_first_hit_batch<k_bvh_width, Real, Index, k_stack_capacity>(
-        bvh, ray_ox.span(), ray_oy.span(), ray_oz.span(), ray_dx.span(), ray_dy.span(),
-        ray_dz.span(), output.span(), Real(0), std::numeric_limits<Real>::infinity(), stream
+    constexpr gwn::gwn_query_batch_config config{
+        .block_size = gwn::k_gwn_default_query_batch_block_size,
+        .stack_capacity = k_stack_capacity,
+    };
+    return gwn::gwn_compute_ray_first_hit_batch<config, k_bvh_width, Real, Index>(
+        bvh, gwn::tests::device_input_span(ray_ox.span()),
+        gwn::tests::device_input_span(ray_oy.span()), gwn::tests::device_input_span(ray_oz.span()),
+        gwn::tests::device_input_span(ray_dx.span()), gwn::tests::device_input_span(ray_dy.span()),
+        gwn::tests::device_input_span(ray_dz.span()), gwn::tests::device_span(output.span()),
+        Real(0), std::numeric_limits<Real>::infinity(), stream
     );
 }
 
@@ -519,12 +526,12 @@ int run_model(
 
     gwn::gwn_geometry_object<Real, Index> geometry;
     gwn::gwn_status const geometry_status = gwn::gwn_upload_geometry(
-        geometry, cuda::std::span<Real const>(mesh.vertex_x.data(), mesh.vertex_x.size()),
-        cuda::std::span<Real const>(mesh.vertex_y.data(), mesh.vertex_y.size()),
-        cuda::std::span<Real const>(mesh.vertex_z.data(), mesh.vertex_z.size()),
-        cuda::std::span<Index const>(mesh.tri_i0.data(), mesh.tri_i0.size()),
-        cuda::std::span<Index const>(mesh.tri_i1.data(), mesh.tri_i1.size()),
-        cuda::std::span<Index const>(mesh.tri_i2.data(), mesh.tri_i2.size()), stream
+        geometry, gwn::gwn_host_span<Real const>(mesh.vertex_x.data(), mesh.vertex_x.size()),
+        gwn::gwn_host_span<Real const>(mesh.vertex_y.data(), mesh.vertex_y.size()),
+        gwn::gwn_host_span<Real const>(mesh.vertex_z.data(), mesh.vertex_z.size()),
+        gwn::gwn_host_span<Index const>(mesh.tri_i0.data(), mesh.tri_i0.size()),
+        gwn::gwn_host_span<Index const>(mesh.tri_i1.data(), mesh.tri_i1.size()),
+        gwn::gwn_host_span<Index const>(mesh.tri_i2.data(), mesh.tri_i2.size()), stream
     );
     if (!geometry_status.is_ok() || !synchronize(stream).is_ok()) {
         std::cerr << "smallgwn geometry upload failed.\n";

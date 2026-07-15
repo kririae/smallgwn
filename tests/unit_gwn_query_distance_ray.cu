@@ -20,6 +20,11 @@ using GwnQueryDistanceRayTest = gwn::tests::CudaFixture;
 
 namespace {
 
+constexpr gwn::gwn_query_batch_config k_stack_capacity_one_config{
+    .block_size = gwn::k_gwn_default_query_batch_block_size,
+    .stack_capacity = 1,
+};
+
 template <gwn::gwn_index_type Index> struct HostMesh {
     std::vector<Real> x;
     std::vector<Real> y;
@@ -57,12 +62,12 @@ void upload_and_build(
     gwn::gwn_bvh4_object<Real, Index> &bvh, gwn::gwn_bvh_build_method const method
 ) {
     gwn::gwn_status status = gwn::gwn_upload_geometry(
-        geometry, cuda::std::span<Real const>(mesh.x.data(), mesh.x.size()),
-        cuda::std::span<Real const>(mesh.y.data(), mesh.y.size()),
-        cuda::std::span<Real const>(mesh.z.data(), mesh.z.size()),
-        cuda::std::span<Index const>(mesh.i0.data(), mesh.i0.size()),
-        cuda::std::span<Index const>(mesh.i1.data(), mesh.i1.size()),
-        cuda::std::span<Index const>(mesh.i2.data(), mesh.i2.size())
+        geometry, gwn::tests::host_span(cuda::std::span<Real const>(mesh.x.data(), mesh.x.size())),
+        gwn::tests::host_span(cuda::std::span<Real const>(mesh.y.data(), mesh.y.size())),
+        gwn::tests::host_span(cuda::std::span<Real const>(mesh.z.data(), mesh.z.size())),
+        gwn::tests::host_span(cuda::std::span<Index const>(mesh.i0.data(), mesh.i0.size())),
+        gwn::tests::host_span(cuda::std::span<Index const>(mesh.i1.data(), mesh.i1.size())),
+        gwn::tests::host_span(cuda::std::span<Index const>(mesh.i2.data(), mesh.i2.size()))
     );
     ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
     status = gwn::gwn_build_bvh(geometry, bvh, gwn::gwn_bvh_build_options{.method = method});
@@ -136,7 +141,8 @@ template <gwn::gwn_index_type Index> struct BatchResults {
     std::vector<Real> distance;
 };
 
-template <gwn::gwn_index_type Index, int StackCapacity = 64>
+template <
+    gwn::gwn_index_type Index, int StackCapacity = gwn::k_gwn_default_traversal_stack_capacity>
 [[nodiscard]] bool run_batch_queries(
     gwn::gwn_bvh4_object<Real, Index> const &bvh, std::vector<Real> const &ray_ox,
     std::vector<Real> const &ray_oy, std::vector<Real> const &ray_oz,
@@ -146,6 +152,10 @@ template <gwn::gwn_index_type Index, int StackCapacity = 64>
     Real const culling_band = std::numeric_limits<Real>::infinity(), Real const ray_t_min = Real(0),
     Real const ray_t_max = std::numeric_limits<Real>::infinity()
 ) {
+    constexpr gwn::gwn_query_batch_config config{
+        .block_size = gwn::k_gwn_default_query_batch_block_size,
+        .stack_capacity = StackCapacity,
+    };
     std::size_t const count = ray_ox.size();
     if (ray_oy.size() != count || ray_oz.size() != count || ray_dx.size() != count ||
         ray_dy.size() != count || ray_dz.size() != count || query_x.size() != count ||
@@ -182,19 +192,20 @@ template <gwn::gwn_index_type Index, int StackCapacity = 64>
     upload(d_qy, query_y);
     upload(d_qz, query_z);
     auto as_input = [](gwn::detail::gwn_device_array<Real> const &array) {
-        return cuda::std::span<Real const>(array.data(), array.size());
+        return gwn::gwn_device_span<Real const>(array.data(), array.size());
     };
 
-    gwn::gwn_status status = gwn::gwn_compute_ray_first_hit_batch<4, Real, Index, StackCapacity>(
+    gwn::gwn_status status = gwn::gwn_compute_ray_first_hit_batch<config, 4, Real, Index>(
         bvh, as_input(d_ox), as_input(d_oy), as_input(d_oz), as_input(d_dx), as_input(d_dy),
-        as_input(d_dz), d_hits.span(), ray_t_min, ray_t_max
+        as_input(d_dz), gwn::tests::device_span(d_hits.span()), ray_t_min, ray_t_max
     );
     if (!status.is_ok()) {
         ADD_FAILURE() << gwn::tests::status_to_debug_string(status);
         return false;
     }
-    status = gwn::gwn_compute_unsigned_distance_batch<4, Real, Index, StackCapacity>(
-        bvh, as_input(d_qx), as_input(d_qy), as_input(d_qz), d_distance.span(), culling_band
+    status = gwn::gwn_compute_unsigned_distance_batch<config, 4, Real, Index>(
+        bvh, as_input(d_qx), as_input(d_qy), as_input(d_qz),
+        gwn::tests::device_span(d_distance.span()), culling_band
     );
     if (!status.is_ok()) {
         ADD_FAILURE() << gwn::tests::status_to_debug_string(status);
@@ -473,9 +484,9 @@ TEST_F(GwnQueryDistanceRayTest, packed_batch_orders_negative_child_entry_distanc
 TEST_F(GwnQueryDistanceRayTest, canonical_batch_queries_reject_invalid_contracts_before_launch) {
     using Index = std::uint32_t;
     gwn::gwn_bvh4_object<Real, Index> empty_bvh;
-    cuda::std::span<Real const> empty_input{};
-    cuda::std::span<Real> empty_real_output{};
-    cuda::std::span<gwn::gwn_ray_first_hit_result<Real, Index>> empty_hit_output{};
+    gwn::gwn_device_span<Real const> empty_input{};
+    gwn::gwn_device_span<Real> empty_real_output{};
+    gwn::gwn_device_span<gwn::gwn_ray_first_hit_result<Real, Index>> empty_hit_output{};
     EXPECT_EQ(
         gwn::gwn_compute_ray_first_hit_batch(
             empty_bvh, empty_input, empty_input, empty_input, empty_input, empty_input, empty_input,
@@ -498,7 +509,7 @@ TEST_F(GwnQueryDistanceRayTest, canonical_batch_queries_reject_invalid_contracts
     upload_and_build(mesh, geometry, bvh, gwn::gwn_bvh_build_method::k_hploc);
     ASSERT_GT(bvh.accessor().internal_stack_bound, 1u);
     EXPECT_EQ(
-        (gwn::gwn_compute_ray_first_hit_batch<4, Real, Index, 1>(
+        (gwn::gwn_compute_ray_first_hit_batch<k_stack_capacity_one_config, 4, Real, Index>(
              bvh, empty_input, empty_input, empty_input, empty_input, empty_input, empty_input,
              empty_hit_output
         )
@@ -506,7 +517,7 @@ TEST_F(GwnQueryDistanceRayTest, canonical_batch_queries_reject_invalid_contracts
         gwn::gwn_error::invalid_argument
     );
     EXPECT_EQ(
-        (gwn::gwn_compute_unsigned_distance_batch<4, Real, Index, 1>(
+        (gwn::gwn_compute_unsigned_distance_batch<k_stack_capacity_one_config, 4, Real, Index>(
              bvh, empty_input, empty_input, empty_input, empty_real_output
         )
              .error()),
@@ -523,7 +534,7 @@ TEST_F(GwnQueryDistanceRayTest, canonical_batch_queries_reject_invalid_contracts
 
     gwn::detail::gwn_device_array<Real> one_real;
     one_real.resize(1);
-    auto const one_input = cuda::std::span<Real const>(one_real.data(), one_real.size());
+    auto const one_input = gwn::gwn_device_span<Real const>(one_real.data(), one_real.size());
     EXPECT_EQ(
         gwn::gwn_compute_ray_first_hit_batch(
             bvh, one_input, empty_input, empty_input, empty_input, empty_input, empty_input,
@@ -551,18 +562,20 @@ TEST_F(GwnQueryDistanceRayTest, leaf_children_do_not_consume_traversal_stack_cap
     ASSERT_EQ(bvh.accessor().internal_stack_bound, 0u);
     ASSERT_EQ(bvh.accessor().packed_stack_bound, 3u);
 
-    cuda::std::span<Real const> empty_input{};
-    cuda::std::span<Real> empty_real_output{};
-    cuda::std::span<gwn::gwn_ray_first_hit_result<Real, Index>> empty_hit_output{};
-    EXPECT_TRUE((gwn::gwn_compute_ray_first_hit_batch<4, Real, Index, 1>(
+    gwn::gwn_device_span<Real const> empty_input{};
+    gwn::gwn_device_span<Real> empty_real_output{};
+    gwn::gwn_device_span<gwn::gwn_ray_first_hit_result<Real, Index>> empty_hit_output{};
+    EXPECT_TRUE((gwn::gwn_compute_ray_first_hit_batch<k_stack_capacity_one_config, 4, Real, Index>(
                      bvh, empty_input, empty_input, empty_input, empty_input, empty_input,
                      empty_input, empty_hit_output
                  ))
                     .is_ok());
-    EXPECT_TRUE((gwn::gwn_compute_unsigned_distance_batch<4, Real, Index, 1>(
-                     bvh, empty_input, empty_input, empty_input, empty_real_output
-                 ))
-                    .is_ok());
+    EXPECT_TRUE(
+        (gwn::gwn_compute_unsigned_distance_batch<k_stack_capacity_one_config, 4, Real, Index>(
+             bvh, empty_input, empty_input, empty_input, empty_real_output
+         ))
+            .is_ok()
+    );
 
     BatchResults<Index> batch;
     ASSERT_TRUE((run_batch_queries<Index, 1>(

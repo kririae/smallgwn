@@ -33,9 +33,12 @@ template <class Mesh>
 [[nodiscard]] gwn::gwn_status
 upload_mesh(Mesh const &mesh, gwn::gwn_geometry_object<Real, Index> &geometry) {
     return gwn::gwn_upload_geometry(
-        geometry, cuda::std::span<Real const>(mesh.x), cuda::std::span<Real const>(mesh.y),
-        cuda::std::span<Real const>(mesh.z), cuda::std::span<Index const>(mesh.i0),
-        cuda::std::span<Index const>(mesh.i1), cuda::std::span<Index const>(mesh.i2)
+        geometry, gwn::tests::host_span(cuda::std::span<Real const>(mesh.x)),
+        gwn::tests::host_span(cuda::std::span<Real const>(mesh.y)),
+        gwn::tests::host_span(cuda::std::span<Real const>(mesh.z)),
+        gwn::tests::host_span(cuda::std::span<Index const>(mesh.i0)),
+        gwn::tests::host_span(cuda::std::span<Index const>(mesh.i1)),
+        gwn::tests::host_span(cuda::std::span<Index const>(mesh.i2))
     );
 }
 
@@ -82,6 +85,25 @@ struct gradient_buffers {
         y.copy_from_host(host_y);
         z.copy_from_host(host_z);
     }
+
+    [[nodiscard]] gwn::gwn_device_span<Real const> x_device() const {
+        return gwn::tests::device_span(x.span());
+    }
+    [[nodiscard]] gwn::gwn_device_span<Real const> y_device() const {
+        return gwn::tests::device_span(y.span());
+    }
+    [[nodiscard]] gwn::gwn_device_span<Real const> z_device() const {
+        return gwn::tests::device_span(z.span());
+    }
+    [[nodiscard]] gwn::gwn_device_span<Real> gradient_x_device() {
+        return gwn::tests::device_span(gradient_x.span());
+    }
+    [[nodiscard]] gwn::gwn_device_span<Real> gradient_y_device() {
+        return gwn::tests::device_span(gradient_y.span());
+    }
+    [[nodiscard]] gwn::gwn_device_span<Real> gradient_z_device() {
+        return gwn::tests::device_span(gradient_z.span());
+    }
 };
 
 struct host_gradients {
@@ -97,8 +119,8 @@ template <int Order>
     Real const accuracy_scale
 ) {
     gwn::gwn_status const status = gwn::gwn_compute_winding_gradient_taylor_batch<Order>(
-        bvh, moment, queries.x.span(), queries.y.span(), queries.z.span(),
-        queries.gradient_x.span(), queries.gradient_y.span(), queries.gradient_z.span(),
+        bvh, moment, queries.x_device(), queries.y_device(), queries.z_device(),
+        queries.gradient_x_device(), queries.gradient_y_device(), queries.gradient_z_device(),
         accuracy_scale
     );
     EXPECT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
@@ -268,8 +290,8 @@ TEST_F(GwnQueryGradientTest, nan_query_coordinate_propagates_to_every_gradient_c
 TEST_F(GwnQueryGradientTest, batch_contract_rejects_invalid_state_and_output_mismatch) {
     gwn::gwn_bvh4_object<Real, Index> empty_bvh{};
     gwn::gwn_bvh4_moment_object<0, Real, Index> empty_moment{};
-    cuda::std::span<Real const> const empty_input{};
-    cuda::std::span<Real> const empty_output{};
+    gwn::gwn_device_span<Real const> const empty_input{};
+    gwn::gwn_device_span<Real> const empty_output{};
     EXPECT_EQ(
         gwn::gwn_compute_winding_gradient_taylor_batch<0>(
             empty_bvh, empty_moment, empty_input, empty_input, empty_input, empty_output,
@@ -305,7 +327,9 @@ TEST_F(GwnQueryGradientTest, batch_contract_rejects_invalid_state_and_output_mis
         );
     }
     std::array<Real, 1> output_storage{};
-    cuda::std::span<Real> const mismatched_output(output_storage);
+    gwn::gwn_device_span<Real> const mismatched_output(
+        output_storage.data(), output_storage.size()
+    );
     EXPECT_EQ(
         gwn::gwn_compute_winding_gradient_taylor_batch<0>(
             bvh, moment, empty_input, empty_input, empty_input, mismatched_output, empty_output,

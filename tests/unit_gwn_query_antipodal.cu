@@ -36,12 +36,12 @@ void setup_context(
     gwn::gwn_bvh_build_method const method = gwn::gwn_bvh_build_method::k_lbvh
 ) {
     gwn::gwn_status status = gwn::gwn_upload_geometry(
-        ctx.geometry, cuda::std::span<Real const>(mesh.vx.data(), mesh.vx.size()),
-        cuda::std::span<Real const>(mesh.vy.data(), mesh.vy.size()),
-        cuda::std::span<Real const>(mesh.vz.data(), mesh.vz.size()),
-        cuda::std::span<Index const>(mesh.i0.data(), mesh.i0.size()),
-        cuda::std::span<Index const>(mesh.i1.data(), mesh.i1.size()),
-        cuda::std::span<Index const>(mesh.i2.data(), mesh.i2.size())
+        ctx.geometry, gwn::gwn_host_span<Real const>(mesh.vx.data(), mesh.vx.size()),
+        gwn::gwn_host_span<Real const>(mesh.vy.data(), mesh.vy.size()),
+        gwn::gwn_host_span<Real const>(mesh.vz.data(), mesh.vz.size()),
+        gwn::gwn_host_span<Index const>(mesh.i0.data(), mesh.i0.size()),
+        gwn::gwn_host_span<Index const>(mesh.i1.data(), mesh.i1.size()),
+        gwn::gwn_host_span<Index const>(mesh.i2.data(), mesh.i2.size())
     );
     SMALLGWN_SKIP_IF_STATUS_CUDA_UNAVAILABLE(status);
     ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
@@ -69,7 +69,8 @@ std::vector<Real> run_exact(
     d_out.resize(qx.size());
 
     gwn::gwn_status const status = gwn::gwn_compute_winding_number_exact_batch(
-        bvh, d_qx.span(), d_qy.span(), d_qz.span(), d_out.span()
+        bvh, gwn::tests::device_input_span(d_qx.span()), gwn::tests::device_input_span(d_qy.span()),
+        gwn::tests::device_input_span(d_qz.span()), gwn::tests::device_span(d_out.span())
     );
     EXPECT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
     EXPECT_EQ(cudaSuccess, cudaDeviceSynchronize());
@@ -96,7 +97,9 @@ std::vector<Real> run_antipodal(
     d_out.resize(qx.size());
 
     gwn::gwn_status const status = gwn::gwn_compute_winding_number_antipodal_batch(
-        geometry, bvh, boundary, d_qx.span(), d_qy.span(), d_qz.span(), d_out.span()
+        geometry, bvh, boundary, gwn::tests::device_input_span(d_qx.span()),
+        gwn::tests::device_input_span(d_qy.span()), gwn::tests::device_input_span(d_qz.span()),
+        gwn::tests::device_span(d_out.span())
     );
     EXPECT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
     EXPECT_EQ(cudaSuccess, cudaDeviceSynchronize());
@@ -126,8 +129,10 @@ std::array<std::vector<Real>, 3> run_antipodal_gradient(
     d_gz.resize(qx.size());
 
     gwn::gwn_status const status = gwn::gwn_compute_winding_gradient_antipodal_batch(
-        geometry, boundary, d_qx.span(), d_qy.span(), d_qz.span(), d_gx.span(), d_gy.span(),
-        d_gz.span()
+        geometry, boundary, gwn::tests::device_input_span(d_qx.span()),
+        gwn::tests::device_input_span(d_qy.span()), gwn::tests::device_input_span(d_qz.span()),
+        gwn::tests::device_span(d_gx.span()), gwn::tests::device_span(d_gy.span()),
+        gwn::tests::device_span(d_gz.span())
     );
     EXPECT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
     EXPECT_EQ(cudaSuccess, cudaDeviceSynchronize());
@@ -495,12 +500,12 @@ TEST_F(GwnQueryAntipodalTest, antipodal_device_query_reports_stack_overflow) {
     gwn::gwn_geometry_object<Real, Index> geometry;
     ASSERT_TRUE(
         gwn::gwn_upload_geometry(
-            geometry, cuda::std::span<Real const>(vx.data(), vx.size()),
-            cuda::std::span<Real const>(vy.data(), vy.size()),
-            cuda::std::span<Real const>(vz.data(), vz.size()),
-            cuda::std::span<Index const>(i0.data(), i0.size()),
-            cuda::std::span<Index const>(i1.data(), i1.size()),
-            cuda::std::span<Index const>(i2.data(), i2.size())
+            geometry, gwn::gwn_host_span<Real const>(vx.data(), vx.size()),
+            gwn::gwn_host_span<Real const>(vy.data(), vy.size()),
+            gwn::gwn_host_span<Real const>(vz.data(), vz.size()),
+            gwn::gwn_host_span<Index const>(i0.data(), i0.size()),
+            gwn::gwn_host_span<Index const>(i1.data(), i1.size()),
+            gwn::gwn_host_span<Index const>(i2.data(), i2.size())
         )
             .is_ok()
     );
@@ -574,23 +579,21 @@ TEST_F(GwnQueryAntipodalTest, antipodal_rejects_missing_or_mismatched_boundary) 
     gwn::gwn_boundary_chain_object<Index> missing;
     EXPECT_FALSE(
         gwn::gwn_compute_winding_number_antipodal_batch(
-            ctx.geometry, ctx.bvh, missing, d_qx.span(), d_qy.span(), d_qz.span(), d_out.span()
+            ctx.geometry, ctx.bvh, missing, gwn::tests::device_input_span(d_qx.span()),
+            gwn::tests::device_input_span(d_qy.span()), gwn::tests::device_input_span(d_qz.span()),
+            gwn::tests::device_span(d_out.span())
         )
             .is_ok()
     );
 
     gwn::gwn_boundary_chain_object<Index> mismatched;
-    ASSERT_TRUE(
-        gwn::gwn_build_boundary_chain(
-            mesh.vx.size() + 1, cuda::std::span<Index const>(mesh.i0.data(), mesh.i0.size()),
-            cuda::std::span<Index const>(mesh.i1.data(), mesh.i1.size()),
-            cuda::std::span<Index const>(mesh.i2.data(), mesh.i2.size()), mismatched
-        )
-            .is_ok()
-    );
+    ASSERT_TRUE(gwn::gwn_build_boundary_chain(ctx.geometry, mismatched).is_ok());
+    ++mismatched.accessor().mesh_vertex_count;
     EXPECT_FALSE(
         gwn::gwn_compute_winding_number_antipodal_batch(
-            ctx.geometry, ctx.bvh, mismatched, d_qx.span(), d_qy.span(), d_qz.span(), d_out.span()
+            ctx.geometry, ctx.bvh, mismatched, gwn::tests::device_input_span(d_qx.span()),
+            gwn::tests::device_input_span(d_qy.span()), gwn::tests::device_input_span(d_qz.span()),
+            gwn::tests::device_span(d_out.span())
         )
             .is_ok()
     );
@@ -620,34 +623,33 @@ TEST_F(GwnQueryAntipodalTest, antipodal_gradient_rejects_bad_inputs) {
     gwn::gwn_boundary_chain_object<Index> missing;
     EXPECT_FALSE(
         gwn::gwn_compute_winding_gradient_antipodal_batch(
-            ctx.geometry, missing, d_qx.span(), d_qy.span(), d_qz.span(), d_gx.span(), d_gy.span(),
-            d_gz.span()
+            ctx.geometry, missing, gwn::tests::device_input_span(d_qx.span()),
+            gwn::tests::device_input_span(d_qy.span()), gwn::tests::device_input_span(d_qz.span()),
+            gwn::tests::device_span(d_gx.span()), gwn::tests::device_span(d_gy.span()),
+            gwn::tests::device_span(d_gz.span())
         )
             .is_ok()
     );
 
     gwn::gwn_boundary_chain_object<Index> mismatched;
-    ASSERT_TRUE(
-        gwn::gwn_build_boundary_chain(
-            mesh.vx.size() + 1, cuda::std::span<Index const>(mesh.i0.data(), mesh.i0.size()),
-            cuda::std::span<Index const>(mesh.i1.data(), mesh.i1.size()),
-            cuda::std::span<Index const>(mesh.i2.data(), mesh.i2.size()), mismatched
-        )
-            .is_ok()
-    );
+    ASSERT_TRUE(gwn::gwn_build_boundary_chain(ctx.geometry, mismatched).is_ok());
+    ++mismatched.accessor().mesh_vertex_count;
     EXPECT_FALSE(
         gwn::gwn_compute_winding_gradient_antipodal_batch(
-            ctx.geometry, mismatched, d_qx.span(), d_qy.span(), d_qz.span(), d_gx.span(),
-            d_gy.span(), d_gz.span()
+            ctx.geometry, mismatched, gwn::tests::device_input_span(d_qx.span()),
+            gwn::tests::device_input_span(d_qy.span()), gwn::tests::device_input_span(d_qz.span()),
+            gwn::tests::device_span(d_gx.span()), gwn::tests::device_span(d_gy.span()),
+            gwn::tests::device_span(d_gz.span())
         )
             .is_ok()
     );
 
-    cuda::std::span<Real> const bad_output{};
+    gwn::gwn_device_span<Real> const bad_output{};
     EXPECT_FALSE(
         gwn::gwn_compute_winding_gradient_antipodal_batch(
-            ctx.geometry, ctx.boundary, d_qx.span(), d_qy.span(), d_qz.span(), bad_output,
-            d_gy.span(), d_gz.span()
+            ctx.geometry, ctx.boundary, gwn::tests::device_input_span(d_qx.span()),
+            gwn::tests::device_input_span(d_qy.span()), gwn::tests::device_input_span(d_qz.span()),
+            bad_output, gwn::tests::device_span(d_gy.span()), gwn::tests::device_span(d_gz.span())
         )
             .is_ok()
     );

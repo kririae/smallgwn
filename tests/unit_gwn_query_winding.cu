@@ -32,9 +32,12 @@ struct asymmetric_octahedron {
 [[nodiscard]] gwn::gwn_status
 upload_mesh(asymmetric_octahedron const &mesh, gwn::gwn_geometry_object<Real, Index> &geometry) {
     return gwn::gwn_upload_geometry(
-        geometry, cuda::std::span<Real const>(mesh.x), cuda::std::span<Real const>(mesh.y),
-        cuda::std::span<Real const>(mesh.z), cuda::std::span<Index const>(mesh.i0),
-        cuda::std::span<Index const>(mesh.i1), cuda::std::span<Index const>(mesh.i2)
+        geometry, gwn::tests::host_span(cuda::std::span<Real const>(mesh.x)),
+        gwn::tests::host_span(cuda::std::span<Real const>(mesh.y)),
+        gwn::tests::host_span(cuda::std::span<Real const>(mesh.z)),
+        gwn::tests::host_span(cuda::std::span<Index const>(mesh.i0)),
+        gwn::tests::host_span(cuda::std::span<Index const>(mesh.i1)),
+        gwn::tests::host_span(cuda::std::span<Index const>(mesh.i2))
     );
 }
 
@@ -65,6 +68,19 @@ struct query_buffers {
         EXPECT_EQ(cudaSuccess, cudaDeviceSynchronize());
         return host;
     }
+
+    [[nodiscard]] gwn::gwn_device_span<Real const> x_device() const {
+        return gwn::tests::device_span(x.span());
+    }
+    [[nodiscard]] gwn::gwn_device_span<Real const> y_device() const {
+        return gwn::tests::device_span(y.span());
+    }
+    [[nodiscard]] gwn::gwn_device_span<Real const> z_device() const {
+        return gwn::tests::device_span(z.span());
+    }
+    [[nodiscard]] gwn::gwn_device_span<Real> output_device() {
+        return gwn::tests::device_span(output.span());
+    }
 };
 
 template <int Order>
@@ -74,8 +90,8 @@ template <int Order>
     Real const accuracy_scale
 ) {
     gwn::gwn_status const status = gwn::gwn_compute_winding_number_taylor_batch<Order>(
-        bvh, moment, queries.x.span(), queries.y.span(), queries.z.span(), queries.output.span(),
-        accuracy_scale
+        bvh, moment, queries.x_device(), queries.y_device(), queries.z_device(),
+        queries.output_device(), accuracy_scale
     );
     EXPECT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
     EXPECT_EQ(cudaSuccess, cudaDeviceSynchronize());
@@ -85,7 +101,7 @@ template <int Order>
 [[nodiscard]] std::vector<Real>
 compute_exact(gwn::gwn_bvh4_object<Real, Index> const &bvh, query_buffers &queries) {
     gwn::gwn_status const status = gwn::gwn_compute_winding_number_exact_batch(
-        bvh, queries.x.span(), queries.y.span(), queries.z.span(), queries.output.span()
+        bvh, queries.x_device(), queries.y_device(), queries.z_device(), queries.output_device()
     );
     EXPECT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
     EXPECT_EQ(cudaSuccess, cudaDeviceSynchronize());
@@ -229,8 +245,8 @@ TEST_F(GwnQueryWindingTest, nan_query_coordinate_propagates_through_exact_and_ta
 TEST_F(GwnQueryWindingTest, batch_contract_rejects_invalid_state_and_span_mismatch) {
     gwn::gwn_bvh4_object<Real, Index> empty_bvh{};
     gwn::gwn_bvh4_moment_object<0, Real, Index> empty_moment{};
-    cuda::std::span<Real const> const empty_input{};
-    cuda::std::span<Real> const empty_output{};
+    gwn::gwn_device_span<Real const> const empty_input{};
+    gwn::gwn_device_span<Real> const empty_output{};
     EXPECT_EQ(
         gwn::gwn_compute_winding_number_taylor_batch<0>(
             empty_bvh, empty_moment, empty_input, empty_input, empty_input, empty_output
@@ -277,7 +293,9 @@ TEST_F(GwnQueryWindingTest, batch_contract_rejects_invalid_state_and_span_mismat
     );
 
     std::array<Real, 1> output_storage{};
-    cuda::std::span<Real> const mismatched_output(output_storage);
+    gwn::gwn_device_span<Real> const mismatched_output(
+        output_storage.data(), output_storage.size()
+    );
     EXPECT_EQ(
         gwn::gwn_compute_winding_number_taylor_batch<0>(
             bvh, moment, empty_input, empty_input, empty_input, mismatched_output

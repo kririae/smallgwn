@@ -24,6 +24,22 @@ namespace gwn::tests {
 using Real = float;
 using Index = std::uint32_t;
 
+template <class T>
+[[nodiscard]] inline gwn_host_span<T> host_span(cuda::std::span<T> const span) noexcept {
+    return gwn_host_span<T>(span);
+}
+
+template <class T>
+[[nodiscard]] inline gwn_device_span<T> device_span(cuda::std::span<T> const span) noexcept {
+    return gwn_device_span<T>(span);
+}
+
+template <class T>
+[[nodiscard]] inline gwn_device_span<T const>
+device_input_span(cuda::std::span<T> const span) noexcept {
+    return gwn_device_span<T const>(span.data(), span.size());
+}
+
 #if defined(SMALLGWN_TEST_STACK_CAPACITY)
 inline constexpr int k_test_stack_capacity = SMALLGWN_TEST_STACK_CAPACITY;
 #else

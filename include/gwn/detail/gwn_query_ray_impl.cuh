@@ -16,8 +16,6 @@
 namespace gwn {
 namespace detail {
 
-inline constexpr int k_gwn_ray_first_hit_block_size = 256;
-
 /// \brief Validate the shared ray SoA and hit-record output contract of a first-hit batch.
 template <gwn_real_type Real, gwn_index_type Index>
 [[nodiscard]] inline gwn_status gwn_validate_ray_first_hit_batch_spans(

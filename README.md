@@ -21,12 +21,15 @@ The core API is declared by:
 - CUDA Toolkit 12 or newer
 - A host compiler with C++20 support
 - CMake 3.24 or newer
+- Eigen3 and Intel TBB when using the Eigen bridge
+- libigl when using the mesh-loading code in the example
 
 ## Use from CMake
 
 ```cmake
 include(FetchContent)
 set(SMALLGWN_BUILD_EIGEN_BRIDGE ON CACHE BOOL "")
+find_package(LIBIGL REQUIRED)
 FetchContent_Declare(
     smallgwn
     GIT_REPOSITORY https://github.com/kririae/smallgwn.git
@@ -34,6 +37,7 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(smallgwn)
 target_link_libraries(my_cuda_target PRIVATE gwn::smallgwn_eigen_bridge)
+target_link_libraries(my_cuda_target PRIVATE igl::core)
 ```
 
 ## Usage
@@ -65,7 +69,8 @@ cudaStream_t const stream = gwn::gwn_default_stream();
 
 Eigen::MatrixXd V;
 Eigen::MatrixXi F;
-igl::read_triangle_mesh(/* filename */ "", V, F);
+if (!igl::read_triangle_mesh(/* filename */ "mesh.obj", V, F))
+    throw std::runtime_error("Could not read mesh.");
 
 gwn::gwn_geometry_object<Real, Index> geometry;
 check(gwn::gwn_upload_geometry_from_eigen(geometry, V, F, stream));
@@ -81,9 +86,11 @@ gwn::gwn_bvh_build_options const build_options{
 check(gwn::gwn_build_bvh(geometry, bvh, build_options, stream));
 check(gwn::gwn_refit_bvh_moment</* Taylor order */ 1>(bvh, moments, stream));
 
-/* Bind these spans to application-owned device storage. */
-cuda::std::span<Real const> d_qx, d_qy, d_qz;
-cuda::std::span<Real> d_wn;
+/* Bind these spans to non-empty, application-owned device storage. */
+gwn::gwn_device_span<Real const> d_qx{device_qx, query_count};
+gwn::gwn_device_span<Real const> d_qy{device_qy, query_count};
+gwn::gwn_device_span<Real const> d_qz{device_qz, query_count};
+gwn::gwn_device_span<Real> d_wn{device_wn, query_count};
 
 check(gwn::gwn_compute_winding_number_taylor_batch</* Taylor order */ 1>(
     bvh,
@@ -99,6 +106,10 @@ check(gwn::gwn_compute_winding_number_taylor_batch</* Taylor order */ 1>(
 For dynamic vertex positions, update geometry and refit the BVH and moments:
 
 ```cpp
+/* x/y/z are application-owned host spans with geometry.vertex_count() elements. */
+gwn::gwn_host_span<Real const> x = /* updated host x */;
+gwn::gwn_host_span<Real const> y = /* updated host y */;
+gwn::gwn_host_span<Real const> z = /* updated host z */;
 check(gwn::gwn_update_geometry(geometry, x, y, z, stream));
 // Host x/y/z must stay alive until this stream reaches the update.
 check(gwn::gwn_refit_bvh(geometry, bvh, stream));
@@ -118,8 +129,7 @@ gwn::gwn_boundary_chain_object<Index> boundary_chain;
 check(gwn::gwn_build_boundary_chain(geometry, boundary_chain, stream));
 
 check(gwn::gwn_compute_winding_number_antipodal_batch(
-    geometry, bvh, boundary_chain, d_qx.span(), d_qy.span(), d_qz.span(),
-    d_wn.span(), stream));
+    geometry, bvh, boundary_chain, d_qx, d_qy, d_qz, d_wn, stream));
 ```
 
 `gwn_compute_winding_gradient_antipodal_batch` uses the same geometry and boundary chain and does
