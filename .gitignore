@@ -45,6 +45,11 @@ build/
 Build/
 build-*/
 
+# Editor configurations
+.idea/
+.vs/
+.vscode/
+
 # CMake generated files
 CMakeFiles/
 CMakeCache.txt
