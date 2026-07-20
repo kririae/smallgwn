@@ -134,31 +134,6 @@ check(gwn::gwn_compute_winding_number_antipodal_batch(
 `gwn_compute_winding_gradient_antipodal_batch` uses the same geometry and boundary chain and does
 not require the BVH.
 
-## Tests and benchmarks
-
-Dataset runners consume directories of indexed PLY triangle meshes. Mesh I/O belongs to the test
-and benchmark tooling and uses libigl; it is not part of the header-only library interface.
-
-```bash
-cmake -S . -B build -DSMALLGWN_BUILD_TESTS=ON -DSMALLGWN_BUILD_BENCHMARKS=ON
-cmake --build build -j
-ctest --test-dir build --output-on-failure
-build/tests/smallgwn_e2e --mesh-dir /path/to/ply-directory
-build/tests/smallgwn_benchmark --model-dir /path/to/ply-directory --skip-exact
-```
-
-Benchmark CSV rows contain raw mesh and run facts, including vertex, triangle, boundary-edge, and
-query counts. Backend selection and feature fitting belong to the calling application rather than
-the smallgwn library. Use `--winding-query-only` to record only order-1 Taylor and complete
-Antipodal query rows for an external comparison.
-
-The crossing and boundary stages are independently retried component microbenchmarks. Their times
-do not add up to the complete Antipodal query, whose crossing and boundary terms share each retry.
-
-For heterogeneous datasets whose BVHs exceed the default traversal stack bound, select a supported
-capacity explicitly, up to `--stack-capacity 96`. Host validation rejects an insufficient
-capacity before launching a traversal query.
-
 ## References
 
 - [The Antipodal Method: Fast, Accurate, and Robust 3D Generalized Winding Numbers](https://doi.org/10.1145/3811323)
