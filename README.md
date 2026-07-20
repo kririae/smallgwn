@@ -152,6 +152,9 @@ query counts. Backend selection and feature fitting belong to the calling applic
 the smallgwn library. Use `--winding-query-only` to record only order-1 Taylor and complete
 Antipodal query rows for an external comparison.
 
+The crossing and boundary stages are independently retried component microbenchmarks. Their times
+do not add up to the complete Antipodal query, whose crossing and boundary terms share each retry.
+
 For heterogeneous datasets whose BVHs exceed the default traversal stack bound, select a supported
 capacity explicitly, up to `--stack-capacity 96`. Host validation rejects an insufficient
 capacity before launching a traversal query.

@@ -49,6 +49,7 @@ template <gwn_real_type Real> struct gwn_antipodal_gradient_result {
 template <gwn_real_type Real> struct gwn_antipodal_projected_edge_classification {
     gwn_antipodal_projected_edge_sign sign{gwn_antipodal_projected_edge_sign::k_zero};
     gwn_antipodal_axis_result status{gwn_antipodal_axis_result::k_done};
+    Real projected_determinant{};
 };
 
 /// \brief Project a vector onto the coordinate plane orthogonal to the ray axis.
@@ -73,8 +74,8 @@ template <gwn_real_type Real>
 /// \param edge_start First endpoint relative to the query point.
 /// \param edge_end Second endpoint relative to the query point.
 /// \param ray_axis Coordinate ray axis used by the Antipodal query.
-/// \return The perturbed projected-edge sign plus the singular retry status
-///         for the current axis.
+/// \return The projected determinant, its perturbed sign, and the singular retry status for the
+///         current axis.
 template <gwn_real_type Real>
 [[nodiscard]] __device__ inline gwn_antipodal_projected_edge_classification<Real>
 gwn_antipodal_projected_edge_classify_impl(
@@ -91,8 +92,8 @@ gwn_antipodal_projected_edge_classify_impl(
         return gwn_antipodal_projected_edge_sign::k_zero;
     };
 
-    Real const real_part = a.x * b.y - a.y * b.x;
-    gwn_antipodal_projected_edge_sign sign = sign_from_scalar(real_part);
+    Real const projected_determinant = a.x * b.y - a.y * b.x;
+    gwn_antipodal_projected_edge_sign sign = sign_from_scalar(projected_determinant);
     if (sign == gwn_antipodal_projected_edge_sign::k_zero) {
         // Lexicographic epsilon coefficients reproduce the paper's symbolic perturbation without
         // choosing a scale-dependent floating-point epsilon.
@@ -106,19 +107,11 @@ gwn_antipodal_projected_edge_classify_impl(
 
     // A collinear segment whose endpoints face opposite directions contains the projected query.
     // Its crossing assignment depends on the ray axis, so the complete query retries another axis.
-    bool const contains_origin = real_part == Real(0) && (a.x * b.x + a.y * b.y <= Real(0));
+    bool const contains_origin =
+        projected_determinant == Real(0) && (a.x * b.x + a.y * b.y <= Real(0));
     gwn_antipodal_axis_result const status =
         contains_origin ? gwn_antipodal_axis_result::k_singular : gwn_antipodal_axis_result::k_done;
-    return {sign, status};
-}
-
-[[nodiscard]] __device__ inline gwn_antipodal_ray_axis
-gwn_antipodal_ray_axis_for_retry_impl(int const retry_id) noexcept {
-    if (retry_id == 1)
-        return gwn_antipodal_ray_axis::k_x;
-    if (retry_id == 2)
-        return gwn_antipodal_ray_axis::k_y;
-    return gwn_antipodal_ray_axis::k_z;
+    return {sign, status, projected_determinant};
 }
 
 template <gwn_real_type Real>
@@ -189,7 +182,7 @@ template <gwn_real_type Real>
 template <gwn_real_type Real>
 [[nodiscard]] __device__ inline Real gwn_antipodal_signed_spherical_area_impl(
     gwn_query_vec3<Real> const &minus_ray_dir, gwn_query_vec3<Real> const &edge_start,
-    gwn_query_vec3<Real> const &edge_end
+    gwn_query_vec3<Real> const &edge_end, Real const projected_determinant
 ) noexcept {
     using Calc = Real;
 
@@ -200,7 +193,11 @@ template <gwn_real_type Real>
 
     // Antipodal mesh term from Martens et al. 2026: signed spherical area of
     // triangle (-ray, edge_start, edge_end), evaluated with atan2.
-    Calc const numerator = gwn_query_dot(minus_ray_dir, gwn_query_cross(edge_start, edge_end));
+    // The negative coordinate ray selects the negated projected determinant as the atan2
+    // numerator. Preserve the original signed zero at the branch cut.
+    Calc numerator = -projected_determinant;
+    if (projected_determinant == Real(0))
+        numerator = gwn_query_dot(minus_ray_dir, gwn_query_cross(edge_start, edge_end));
     Calc const denominator =
         start_norm * end_norm + gwn_query_dot(minus_ray_dir, edge_start) * end_norm +
         gwn_query_dot(edge_start, edge_end) + gwn_query_dot(edge_end, minus_ray_dir) * start_norm;
@@ -240,7 +237,9 @@ gwn_antipodal_boundary_contribution_impl(
             gwn_antipodal_projected_edge_classify_impl(edge_start, edge_end, ray_axis);
         if (edge_class.status == gwn_antipodal_axis_result::k_singular)
             return {};
-        Real area = gwn_antipodal_signed_spherical_area_impl(minus_ray_dir, edge_start, edge_end);
+        Real area = gwn_antipodal_signed_spherical_area_impl(
+            minus_ray_dir, edge_start, edge_end, edge_class.projected_determinant
+        );
         if (ray_axis != gwn_antipodal_ray_axis::k_z &&
             edge_class.sign == gwn_antipodal_projected_edge_sign::k_positive && area < Real(0)) {
             // atan2 returns the principal spherical area. For the retried X and Y projections,
@@ -270,7 +269,7 @@ template <gwn_real_type Real>
 [[nodiscard]] __device__ inline gwn_query_vec3<Real>
 gwn_antipodal_signed_spherical_area_gradient_impl(
     gwn_query_vec3<Real> const &minus_ray_dir, gwn_query_vec3<Real> const &edge_start,
-    gwn_query_vec3<Real> const &edge_end
+    gwn_query_vec3<Real> const &edge_end, Real const projected_determinant
 ) noexcept {
     Real const start_norm = gwn_query_norm(edge_start);
     Real const end_norm = gwn_query_norm(edge_end);
@@ -282,7 +281,9 @@ gwn_antipodal_signed_spherical_area_gradient_impl(
     gwn_query_vec3<Real> const start_unit = edge_start * inv_start_norm;
     gwn_query_vec3<Real> const end_unit = edge_end * inv_end_norm;
 
-    Real const numerator = gwn_query_dot(minus_ray_dir, gwn_query_cross(edge_start, edge_end));
+    Real numerator = -projected_determinant;
+    if (projected_determinant == Real(0))
+        numerator = gwn_query_dot(minus_ray_dir, gwn_query_cross(edge_start, edge_end));
     Real const denominator =
         start_norm * end_norm + gwn_query_dot(minus_ray_dir, edge_start) * end_norm +
         gwn_query_dot(minus_ray_dir, edge_end) * start_norm + gwn_query_dot(edge_start, edge_end);
@@ -340,7 +341,9 @@ gwn_antipodal_boundary_gradient_impl(
             return {};
 
         gwn_query_vec3<Real> const edge_gradient =
-            gwn_antipodal_signed_spherical_area_gradient_impl(minus_ray_dir, edge_start, edge_end);
+            gwn_antipodal_signed_spherical_area_gradient_impl(
+                minus_ray_dir, edge_start, edge_end, edge_class.projected_determinant
+            );
 
         gwn_query_vec3<Real> const term =
             static_cast<Real>(boundary_chain.multiplicity[edge_id]) * edge_gradient;
@@ -362,13 +365,24 @@ template <gwn_real_type Real, gwn_index_type Index>
 ) noexcept {
     // Retry the full boundary derivative because its branch choice and singularity test share one
     // projected coordinate plane.
-    for (int retry_id = 0; retry_id < 3; ++retry_id) {
-        gwn_antipodal_ray_axis const ray_axis = gwn_antipodal_ray_axis_for_retry_impl(retry_id);
-        auto const gradient =
-            gwn_antipodal_boundary_gradient_impl(geometry, boundary_chain, query, ray_axis);
-        if (gradient.status == gwn_antipodal_axis_result::k_done)
-            return gradient.value;
-    }
+    // Keep the axis in the template argument so NVCC folds coordinate-axis branches in the edge
+    // loop instead of evaluating them for every boundary edge.
+    auto const evaluate_axis = [&]<gwn_antipodal_ray_axis RayAxis>() noexcept {
+        return gwn_antipodal_boundary_gradient_impl(geometry, boundary_chain, query, RayAxis);
+    };
+
+    auto const z_axis = evaluate_axis.template operator()<gwn_antipodal_ray_axis::k_z>();
+    if (z_axis.status == gwn_antipodal_axis_result::k_done)
+        return z_axis.value;
+
+    auto const x_axis = evaluate_axis.template operator()<gwn_antipodal_ray_axis::k_x>();
+    if (x_axis.status == gwn_antipodal_axis_result::k_done)
+        return x_axis.value;
+
+    auto const y_axis = evaluate_axis.template operator()<gwn_antipodal_ray_axis::k_y>();
+    if (y_axis.status == gwn_antipodal_axis_result::k_done)
+        return y_axis.value;
+
     return gwn_antipodal_gradient_nan_impl<Real>();
 }
 
@@ -491,21 +505,36 @@ template <
     gwn_query_vec3<Real> const query(qx, qy, qz);
     // Crossing and boundary terms must use the same axis. If either term is singular, discard the
     // partial result and restart both terms on the next coordinate axis.
-    for (int retry_id = 0; retry_id < 3; ++retry_id) {
-        gwn_antipodal_ray_axis const ray_axis = gwn_antipodal_ray_axis_for_retry_impl(retry_id);
+    // Keep the axis in the template argument so NVCC folds coordinate-axis branches in both hot
+    // loops instead of evaluating them for every BVH child, triangle, and boundary edge.
+    auto const evaluate_axis = [&]<gwn_antipodal_ray_axis RayAxis>() noexcept {
         auto const crossings = gwn_signed_ray_crossing_count_impl<
             Width, Real, Index, StackCapacity, OverflowCallback, false>(
-            bvh, query, ray_axis, overflow_callback
+            bvh, query, RayAxis, overflow_callback
         );
         if (crossings.status == gwn_antipodal_axis_result::k_singular)
-            continue;
+            return gwn_antipodal_value_result<Real>{};
 
         auto const boundary =
-            gwn_antipodal_boundary_contribution_impl(geometry, boundary_chain, query, ray_axis);
+            gwn_antipodal_boundary_contribution_impl(geometry, boundary_chain, query, RayAxis);
         if (boundary.status == gwn_antipodal_axis_result::k_singular)
-            continue;
-        return crossings.value + boundary.value;
-    }
+            return gwn_antipodal_value_result<Real>{};
+        return gwn_antipodal_value_result<Real>{
+            crossings.value + boundary.value, gwn_antipodal_axis_result::k_done
+        };
+    };
+
+    auto const z_axis = evaluate_axis.template operator()<gwn_antipodal_ray_axis::k_z>();
+    if (z_axis.status == gwn_antipodal_axis_result::k_done)
+        return z_axis.value;
+
+    auto const x_axis = evaluate_axis.template operator()<gwn_antipodal_ray_axis::k_x>();
+    if (x_axis.status == gwn_antipodal_axis_result::k_done)
+        return x_axis.value;
+
+    auto const y_axis = evaluate_axis.template operator()<gwn_antipodal_ray_axis::k_y>();
+    if (y_axis.status == gwn_antipodal_axis_result::k_done)
+        return y_axis.value;
 
     return std::numeric_limits<Real>::quiet_NaN();
 }

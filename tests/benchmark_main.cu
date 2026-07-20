@@ -128,18 +128,20 @@ template <int StackCapacity> struct antipodal_crossing_functor {
         gwn::detail::gwn_query_vec3<Real> const query(
             query_x[query_id], query_y[query_id], query_z[query_id]
         );
-        Real value = std::numeric_limits<Real>::quiet_NaN();
-        for (int retry_id = 0; retry_id < 3; ++retry_id) {
-            auto const result =
-                gwn::detail::gwn_signed_ray_crossing_count_impl<4, Real, Index, StackCapacity>(
-                    bvh, query, gwn::detail::gwn_antipodal_ray_axis_for_retry_impl(retry_id)
-                );
-            if (result.status == gwn::detail::gwn_antipodal_axis_result::k_singular)
-                continue;
-            value = result.value;
-            break;
-        }
-        output[query_id] = value;
+        auto const evaluate_axis = [&]<gwn::detail::gwn_antipodal_ray_axis RayAxis>() noexcept {
+            return gwn::detail::gwn_signed_ray_crossing_count_impl<4, Real, Index, StackCapacity>(
+                bvh, query, RayAxis
+            );
+        };
+
+        auto result = evaluate_axis.template operator()<gwn::detail::gwn_antipodal_ray_axis::k_z>();
+        if (result.status == gwn::detail::gwn_antipodal_axis_result::k_singular)
+            result = evaluate_axis.template operator()<gwn::detail::gwn_antipodal_ray_axis::k_x>();
+        if (result.status == gwn::detail::gwn_antipodal_axis_result::k_singular)
+            result = evaluate_axis.template operator()<gwn::detail::gwn_antipodal_ray_axis::k_y>();
+        output[query_id] = result.status == gwn::detail::gwn_antipodal_axis_result::k_done
+                               ? result.value
+                               : std::numeric_limits<Real>::quiet_NaN();
     }
 };
 
@@ -149,7 +151,7 @@ gwn::gwn_status run_antipodal_crossing_query(
     cuda::std::span<Real const> const query_y, cuda::std::span<Real const> const query_z,
     cuda::std::span<Real> const output, cudaStream_t const stream
 ) noexcept {
-    return gwn::detail::gwn_launch_linear_kernel<gwn::detail::k_gwn_default_block_size>(
+    return gwn::detail::gwn_launch_linear_kernel<gwn::k_gwn_default_query_batch_block_size>(
         output.size(),
         antipodal_crossing_functor<StackCapacity>{
             bvh,
@@ -185,18 +187,20 @@ struct antipodal_boundary_functor {
         gwn::detail::gwn_query_vec3<Real> const query(
             query_x[query_id], query_y[query_id], query_z[query_id]
         );
-        Real value = std::numeric_limits<Real>::quiet_NaN();
-        for (int retry_id = 0; retry_id < 3; ++retry_id) {
-            auto const result = gwn::detail::gwn_antipodal_boundary_contribution_impl(
-                geometry, boundary_chain, query,
-                gwn::detail::gwn_antipodal_ray_axis_for_retry_impl(retry_id)
+        auto const evaluate_axis = [&]<gwn::detail::gwn_antipodal_ray_axis RayAxis>() noexcept {
+            return gwn::detail::gwn_antipodal_boundary_contribution_impl(
+                geometry, boundary_chain, query, RayAxis
             );
-            if (result.status == gwn::detail::gwn_antipodal_axis_result::k_singular)
-                continue;
-            value = result.value;
-            break;
-        }
-        output[query_id] = value;
+        };
+
+        auto result = evaluate_axis.template operator()<gwn::detail::gwn_antipodal_ray_axis::k_z>();
+        if (result.status == gwn::detail::gwn_antipodal_axis_result::k_singular)
+            result = evaluate_axis.template operator()<gwn::detail::gwn_antipodal_ray_axis::k_x>();
+        if (result.status == gwn::detail::gwn_antipodal_axis_result::k_singular)
+            result = evaluate_axis.template operator()<gwn::detail::gwn_antipodal_ray_axis::k_y>();
+        output[query_id] = result.status == gwn::detail::gwn_antipodal_axis_result::k_done
+                               ? result.value
+                               : std::numeric_limits<Real>::quiet_NaN();
     }
 };
 
@@ -207,7 +211,7 @@ gwn::gwn_status run_antipodal_boundary_query(
     cuda::std::span<Real const> const query_z, cuda::std::span<Real> const output,
     cudaStream_t const stream
 ) noexcept {
-    return gwn::detail::gwn_launch_linear_kernel<gwn::detail::k_gwn_default_block_size>(
+    return gwn::detail::gwn_launch_linear_kernel<gwn::k_gwn_default_query_batch_block_size>(
         output.size(),
         antipodal_boundary_functor{
             geometry,
@@ -820,7 +824,7 @@ int run_benchmark(
             query_antipodal_crossing_stage.latency_mean_ms > 0.0) {
             double const boundary_to_crossing = query_antipodal_boundary_stage.latency_mean_ms /
                                                 query_antipodal_crossing_stage.latency_mean_ms;
-            std::cout << "    antipodal_boundary_vs_crossing_time=" << std::fixed
+            std::cout << "    antipodal_component_boundary_vs_crossing_time=" << std::fixed
                       << std::setprecision(3) << boundary_to_crossing << std::defaultfloat << "\n";
         }
 

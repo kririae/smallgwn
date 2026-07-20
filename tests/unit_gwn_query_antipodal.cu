@@ -380,6 +380,21 @@ TEST_F(GwnQueryAntipodalTest, antipodal_open_mesh_matches_existing_winding) {
     );
 }
 
+TEST_F(GwnQueryAntipodalTest, antipodal_open_mesh_matches_on_collinear_boundary_projections) {
+    OpenCubeMesh mesh;
+    AntipodalContext<OpenCubeMesh> ctx;
+    setup_context(mesh, ctx);
+
+    std::array<Real, 4> const qx{Real(2), Real(2), Real(-2), Real(-2)};
+    std::array<Real, 4> const qy{Real(-1), Real(1), Real(-1), Real(1)};
+    std::array<Real, 4> const qz{Real(2), Real(2), Real(2), Real(2)};
+
+    expect_near_vector(
+        run_antipodal(ctx.geometry, ctx.bvh, ctx.boundary, qx, qy, qz),
+        run_exact(ctx.bvh, qx, qy, qz)
+    );
+}
+
 TEST_F(GwnQueryAntipodalTest, antipodal_gradient_matches_finite_difference) {
     OpenCubeMesh mesh;
     AntipodalContext<OpenCubeMesh> ctx;
