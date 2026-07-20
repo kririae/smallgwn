@@ -104,10 +104,8 @@ void expect_internal_nodes_are_complete(
         }
 
         stack_bounds result{};
-        if (internal_child_count != 0) {
-            result.internal =
-                std::max(internal_child_count, internal_child_count - 1u + max_child.internal);
-        }
+        if (internal_child_count != 0)
+            result.internal = internal_child_count - 1u + max_child.internal;
         result.packed = valid_child_count - 1u + max_child.packed;
         return result;
     };

@@ -267,15 +267,17 @@ __global__ __launch_bounds__(BlockSize) void gwn_bvh_collapse_binary_wide_kernel
         for (int candidate_slot = 0; candidate_slot < candidate_count; ++candidate_slot)
             internal_child_count += output_node.child(candidate_slot).is_internal() ? 1u : 0u;
 
-        // With P pending references on entry, canonical traversal peaks at P + k after pushing
-        // its k internal children, then enters one child with P + k - 1. Packed ray traversal
-        // pushes m - 1 of its m valid children and enters the remaining child directly. Carrying
-        // those child prefixes top-down turns both exact recurrences into one maximum reduction.
+        // With P pending references on entry, canonical traversal pushes k - 1 of its k internal
+        // children and enters the remaining child directly. Packed ray traversal does the same
+        // with m valid children. Carrying those child prefixes top-down turns both exact
+        // recurrences into one maximum reduction.
         // Every pending item owns a disjoint non-empty primitive range, so both values remain
         // within the UINT32 primitive-count limit checked before launch.
         auto const stack_prefix = params.stack_bound[output_node_index];
+        unsigned int const internal_push_count =
+            internal_child_count == 0u ? 0u : internal_child_count - 1u;
         gwn_bvh_collapse_stack_bound const node_stack_bound{
-            stack_prefix.internal_bound + internal_child_count,
+            stack_prefix.internal_bound + internal_push_count,
             stack_prefix.packed_bound + static_cast<unsigned int>(candidate_count - 1),
         };
         params.stack_bound[output_node_index] = node_stack_bound;
@@ -288,7 +290,7 @@ __global__ __launch_bounds__(BlockSize) void gwn_bvh_collapse_binary_wide_kernel
                 return;
             }
             params.stack_bound[static_cast<std::size_t>(child_index)] = {
-                node_stack_bound.internal_bound - 1u,
+                node_stack_bound.internal_bound,
                 node_stack_bound.packed_bound,
             };
         }

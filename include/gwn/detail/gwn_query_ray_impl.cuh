@@ -466,6 +466,7 @@ template <
     int stack_size = 0;
     std::uint64_t reference = bvh.root.reference;
     while (true) {
+        std::uint64_t next_reference = 0u;
         gwn_bvh_child<Real> current{};
         current.reference = reference;
         if (current.is_leaf()) {
@@ -530,22 +531,30 @@ template <
                 if (child.is_leaf() && child_entry_t[child_slot] <= best.t)
                     visit_leaf(child);
             }
-            // Reverse insertion makes the closest remaining internal child the next LIFO entry.
+            // Scan from far to near, queue each previous candidate, and enter the closest internal
+            // child directly. The remaining references retain the same near-first LIFO order.
             for (int child_slot = child_count - 1; child_slot >= 0; --child_slot) {
                 gwn_bvh_child<Real> child{};
                 child.reference = child_reference[child_slot];
                 if (!child.is_internal() || child_entry_t[child_slot] > best.t)
                     continue;
-                if (stack_size >= StackCapacity) {
-                    overflow_callback();
-                    publish_best();
-                    result.status = gwn_ray_first_hit_status::k_overflow;
-                    return result;
+                if (next_reference != 0u) {
+                    if (stack_size >= StackCapacity) {
+                        overflow_callback();
+                        publish_best();
+                        result.status = gwn_ray_first_hit_status::k_overflow;
+                        return result;
+                    }
+                    stack[stack_size++] = next_reference;
                 }
-                stack[stack_size++] = child.reference;
+                next_reference = child.reference;
             }
         }
 
+        if (next_reference != 0u) {
+            reference = next_reference;
+            continue;
+        }
         if (stack_size == 0)
             break;
         reference = stack[--stack_size];

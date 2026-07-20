@@ -456,6 +456,7 @@ template <
     int stack_size = 0;
     auto node_index = static_cast<Index>(bvh.root.offset());
     while (true) {
+        Index next_node = gwn_invalid_index<Index>();
         if (gwn_index_in_bounds(node_index, bvh.nodes.size())) {
             auto const &node = bvh.nodes[static_cast<std::size_t>(node_index)];
             GWN_DETAIL_PRAGMA_UNROLL
@@ -475,16 +476,26 @@ template <
                 }
                 if (!child.is_internal())
                     continue;
-                if (stack_size >= StackCapacity) {
-                    overflow_callback();
-                    return {
-                        std::numeric_limits<Real>::quiet_NaN(), gwn_antipodal_axis_result::k_done
-                    };
+                if (!gwn_is_invalid_index(next_node)) {
+                    if (stack_size >= StackCapacity) {
+                        overflow_callback();
+                        return {
+                            std::numeric_limits<Real>::quiet_NaN(),
+                            gwn_antipodal_axis_result::k_done
+                        };
+                    }
+                    // Keep the previously selected child pending so the final internal child can
+                    // be entered directly without a matching stack store and load.
+                    stack[stack_size++] = next_node;
                 }
-                stack[stack_size++] = static_cast<Index>(child.offset());
+                next_node = static_cast<Index>(child.offset());
             }
         }
 
+        if (!gwn_is_invalid_index(next_node)) {
+            node_index = next_node;
+            continue;
+        }
         if (stack_size == 0)
             break;
         node_index = stack[--stack_size];

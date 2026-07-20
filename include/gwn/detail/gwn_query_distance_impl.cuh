@@ -69,6 +69,7 @@ template <
     int stack_size = 0;
     std::uint64_t reference = bvh.root.reference;
     while (true) {
+        std::uint64_t next_reference = 0u;
         gwn_bvh_child<Real> current{};
         current.reference = reference;
         if (current.is_leaf()) {
@@ -136,20 +137,28 @@ template <
                     return Real(0);
                 }
             }
-            // Push internal children from far to near so the nearest lower bound is popped first.
+            // Scan from far to near, queue each previous candidate, and enter the closest internal
+            // child directly. The remaining references retain the same near-first LIFO order.
             for (int child_slot = child_count - 1; child_slot >= 0; --child_slot) {
                 gwn_bvh_child<Real> child{};
                 child.reference = child_reference[child_slot];
                 if (!child.is_internal() || child_distance2[child_slot] >= best_dist2)
                     continue;
-                if (stack_size >= StackCapacity) {
-                    overflow_callback();
-                    return std::numeric_limits<Real>::quiet_NaN();
+                if (next_reference != 0u) {
+                    if (stack_size >= StackCapacity) {
+                        overflow_callback();
+                        return std::numeric_limits<Real>::quiet_NaN();
+                    }
+                    stack[stack_size++] = next_reference;
                 }
-                stack[stack_size++] = child.reference;
+                next_reference = child.reference;
             }
         }
 
+        if (next_reference != 0u) {
+            reference = next_reference;
+            continue;
+        }
         if (stack_size == 0)
             break;
         reference = stack[--stack_size];

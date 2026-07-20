@@ -173,6 +173,7 @@ template <
         auto const node_offset = static_cast<std::size_t>(node_index);
         auto const &node = bvh.nodes[node_offset];
         auto const &taylor = taylor_nodes[node_offset];
+        Index next_node = gwn_invalid_index<Index>();
 
         GWN_DETAIL_PRAGMA_UNROLL
         for (int child_slot = 0; child_slot < Width; ++child_slot) {
@@ -339,14 +340,17 @@ template <
             }
 
             if (child.is_internal()) {
-                if (stack_size >= StackCapacity) {
-                    overflow_callback();
-                    set_overflow_nan_result();
-                    return result;
+                if (!gwn_is_invalid_index(next_node)) {
+                    if (stack_size >= StackCapacity) {
+                        overflow_callback();
+                        set_overflow_nan_result();
+                        return result;
+                    }
+                    // Keep the previously selected child pending so the final internal child can
+                    // be entered directly without a matching stack store and load.
+                    stack[stack_size++] = next_node;
                 }
-                // Traversal only needs the internal node offset. The topology's Index-sized
-                // offset keeps the default uint32_t stack compact across divergent warps.
-                stack[stack_size++] = static_cast<Index>(child.offset());
+                next_node = static_cast<Index>(child.offset());
                 continue;
             }
 
@@ -356,6 +360,10 @@ template <
                 accumulate_leaf(child);
         }
 
+        if (!gwn_is_invalid_index(next_node)) {
+            node_index = next_node;
+            continue;
+        }
         if (stack_size == 0)
             break;
         node_index = stack[--stack_size];
