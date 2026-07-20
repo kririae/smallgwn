@@ -142,11 +142,6 @@ template <gwn_real_type Real>
     if (normal_axis == Real(0))
         return gwn_antipodal_axis_result::k_done;
 
-    // The axis component of the oriented normal determines both the intersection parameter and
-    // the signed crossing contribution. Keeping this computation orientation-aware avoids a
-    // separate ray-triangle hit followed by a second orientation test.
-    Real const numer_t = gwn_query_dot(normal, pa);
-    Real const t = numer_t / normal_axis;
     auto const edge_ab = gwn_antipodal_projected_edge_classify_impl(pa, pb, ray_axis);
     auto const edge_bc = gwn_antipodal_projected_edge_classify_impl(pb, pc, ray_axis);
     auto const edge_ca = gwn_antipodal_projected_edge_classify_impl(pc, pa, ray_axis);
@@ -168,6 +163,12 @@ template <gwn_real_type Real>
     int const i_ca = static_cast<int>(edge_ca.sign);
     if (!((i_ab >= 0 && i_bc >= 0 && i_ca >= 0) || (i_ab <= 0 && i_bc <= 0 && i_ca <= 0)))
         return gwn_antipodal_axis_result::k_done;
+
+    // The axis component of the oriented normal determines both the intersection parameter and
+    // the signed crossing contribution. Delay the division until the projected query lies inside
+    // the triangle because rejected candidates do not consume an intersection parameter.
+    Real const numer_t = gwn_query_dot(normal, pa);
+    Real const t = numer_t / normal_axis;
     // A triangle through the query cannot be assigned consistently to either ray half-line.
     if (t == Real(0))
         return gwn_antipodal_axis_result::k_singular;
