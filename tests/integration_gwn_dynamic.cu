@@ -267,7 +267,7 @@ TEST_P(GwnDynamicWorkflowTest, refit_matches_fresh_build_for_every_query_family)
     std::size_t tested_model_count = 0;
     for (std::filesystem::path const &mesh_path : mesh_paths) {
         SCOPED_TRACE(mesh_path.string());
-        std::optional<HostMesh> const loaded = gwn::tests::load_obj_mesh(mesh_path);
+        std::optional<HostMesh> const loaded = gwn::tests::load_ply_mesh(mesh_path);
         if (!loaded.has_value()) {
             std::cerr << "smallgwn input skip: failed to parse " << mesh_path << '\n';
             continue;

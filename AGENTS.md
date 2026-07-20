@@ -273,22 +273,25 @@ may omit doxygen for trivial forwarding wrappers.
 - `tests/reference_hdk.cuh`: HDK Taylor reference adapter.
 - `tests/reference_hdk/*`: vendored HDK sources, compiled only for E2E validation.
 - `tests/test_fixtures.cuh`, `tests/test_meshes.hpp`, `tests/test_utils.cuh`: shared fixtures and
-  explicit mesh-directory loading.
+  test utilities.
+- `tests/test_mesh_io.hpp`, `tests/test_mesh_io.cpp`: libigl-backed indexed PLY loading and
+  explicit mesh-directory discovery.
 - `smallgwn_unit`: aggregate `unit_gwn_*` executable for local semantic choke points.
 - `smallgwn_integration`: aggregate builder/static/dynamic workflow executable. CTest passes
   `tests/data/` through `--mesh-dir`.
 - `smallgwn_e2e`: explicit dataset runner, absent from default CTest and requiring `--mesh-dir`.
-- Dataset integration and E2E targets accept `SMALLGWN_TEST_STACK_CAPACITY=64|128` (default `64`).
 - Mesh parse failures are reported and skipped. Every dataset run must still test at least one
   successfully parsed model.
 
 ### Benchmark
 - Executable: `smallgwn_benchmark` from `tests/benchmark_main.cu`.
-- The benchmark is built with the test tooling but remains a manual runner, not a CTest entry.
-- Output: console summary + CSV via `--csv <path>`.
+- Benchmarks are enabled by `SMALLGWN_BUILD_BENCHMARKS` and remain manual runners, not CTest
+  entries.
+- Output: console summary + CSV via `--csv <path>`. CSV rows include the raw boundary-edge count;
+  derived features and backend selection remain external to smallgwn.
 - `--skip-exact` excludes the O(queries * triangles) exact stage from large traversal runs.
-- `smallgwn_benchmark_cubql` is opt-in through `tests/CMakeLists.txt`. It requires
-  `SMALLGWN_CUBQL_SOURCE` to name a local checkout and must not download or vendor cuBQL.
+- `smallgwn_benchmark_cubql` compares against a commit-pinned cuBQL fetched by the top-level
+  dependency configuration.
 - `tests/run_cubql_comparison.sh` sequentially configures, builds, and runs the comparison.
 
 ## Validation Workflow
@@ -307,7 +310,7 @@ ctest --test-dir smallgwn/build -L fixtures --output-on-failure
 For explicit dataset validation:
 
 ```bash
-smallgwn/build/tests/smallgwn_e2e --mesh-dir /path/to/obj-directory
+smallgwn/build/tests/smallgwn_e2e --mesh-dir /path/to/ply-directory
 ```
 
 ## Contribution Workflow

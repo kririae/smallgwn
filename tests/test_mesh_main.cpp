@@ -33,7 +33,7 @@ int main(int argc, char **argv) try {
         throw std::invalid_argument("--mesh-dir must name an existing directory");
     gwn::tests::set_mesh_directory(std::move(mesh_directory));
     if (gwn::tests::collect_mesh_paths().empty())
-        throw std::invalid_argument("--mesh-dir must contain at least one .obj mesh");
+        throw std::invalid_argument("--mesh-dir must contain at least one .ply mesh");
 
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

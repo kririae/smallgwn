@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <array>
-#include <charconv>
 #include <cmath>
 #include <exception>
 #include <filesystem>
@@ -11,8 +10,9 @@
 #include <optional>
 #include <string>
 #include <string_view>
-#include <type_traits>
 #include <vector>
+
+#include <CLI/CLI.hpp>
 
 #include <gwn/detail/gwn_device_array.cuh>
 #include <gwn/gwn.cuh>
@@ -32,7 +32,7 @@ constexpr int k_default_warmup = 5;
 constexpr int k_default_iters = 20;
 constexpr std::size_t k_default_query_count = 1'000'000;
 constexpr float k_default_accuracy_scale = 2.0f;
-constexpr int k_default_stack_capacity = gwn::k_gwn_default_traversal_stack_capacity;
+constexpr int k_default_stack_capacity = 96;
 constexpr bool k_default_stream_sync_per_iter = true;
 constexpr std::uint64_t k_default_seed = 0xB3A9E5D4ULL;
 
@@ -60,214 +60,10 @@ struct benchmark_cli_options {
     bool stream_sync_per_iter{k_default_stream_sync_per_iter};
     std::filesystem::path csv_path{"smallgwn_bench.csv"};
     std::uint64_t seed{k_default_seed};
-    benchmark_bvh_builder builder{benchmark_bvh_builder::k_lbvh};
+    benchmark_bvh_builder builder{benchmark_bvh_builder::k_hploc};
     bool skip_exact{false};
+    bool winding_query_only{false};
 };
-
-void print_usage(char const *argv0) {
-    std::cout << "Usage:\n"
-              << "  " << argv0 << " --model <mesh.obj> [options]\n"
-              << "  " << argv0 << " --model-dir <dir> [options]\n\n"
-              << "Options:\n"
-              << "  --queries <N>                 Query count (default: " << k_default_query_count
-              << ")\n"
-              << "  --warmup <N>                  Warmup iterations (default: " << k_default_warmup
-              << ")\n"
-              << "  --iters <N>                   Measured iterations (default: " << k_default_iters
-              << ")\n"
-              << "  --accuracy-scale <x>          Taylor accuracy scale (default: "
-              << k_default_accuracy_scale << ")\n"
-              << "  --stack-capacity <N>          Traversal stack capacity dispatch (default: "
-              << k_default_stack_capacity << ")\n"
-              << "  --stream-sync-per-iter <0|1>  Sync stream every iteration (default: "
-              << (k_default_stream_sync_per_iter ? 1 : 0) << ")\n"
-              << "  --builder <lbvh|hploc>        BVH builder (default: lbvh)\n"
-              << "  --csv <path>                  CSV output path (default: smallgwn_bench.csv)\n"
-              << "  --seed <u64>                  RNG seed (default: " << k_default_seed << ")\n"
-              << "  --skip-exact                  Skip the O(queries * triangles) exact stage\n"
-              << "  --help                        Show this message\n";
-}
-
-template <class T> [[nodiscard]] bool parse_positive_integral(std::string_view const text, T &out) {
-    static_assert(std::is_integral_v<T>);
-    if (text.empty())
-        return false;
-    T parsed{};
-    char const *begin = text.data();
-    char const *end = text.data() + text.size();
-    auto const [ptr, ec] = std::from_chars(begin, end, parsed);
-    if (ec != std::errc() || ptr != end || parsed <= 0)
-        return false;
-    out = parsed;
-    return true;
-}
-
-template <class T>
-[[nodiscard]] bool parse_non_negative_integral(std::string_view const text, T &out) {
-    static_assert(std::is_integral_v<T>);
-    if (text.empty())
-        return false;
-    T parsed{};
-    char const *begin = text.data();
-    char const *end = text.data() + text.size();
-    auto const [ptr, ec] = std::from_chars(begin, end, parsed);
-    if (ec != std::errc() || ptr != end || parsed < 0)
-        return false;
-    out = parsed;
-    return true;
-}
-
-[[nodiscard]] bool parse_float_value(std::string_view const text, float &out) {
-    if (text.empty())
-        return false;
-    try {
-        std::size_t offset = 0;
-        float const parsed = std::stof(std::string(text), &offset);
-        if (offset != text.size() || !(parsed > 0.0f))
-            return false;
-        out = parsed;
-        return true;
-    } catch (...) { return false; }
-}
-
-enum class parse_cli_result {
-    k_ok,
-    k_help,
-    k_error,
-};
-
-[[nodiscard]] parse_cli_result
-parse_cli(int const argc, char const *const *argv, benchmark_cli_options &options) {
-    for (int i = 1; i < argc; ++i) {
-        std::string_view const arg(argv[i]);
-        auto require_value = [&](std::string_view const name) -> std::optional<std::string_view> {
-            if (i + 1 >= argc) {
-                std::cerr << "Missing value for " << name << ".\n";
-                return std::nullopt;
-            }
-            return std::string_view(argv[++i]);
-        };
-
-        if (arg == "--help") {
-            print_usage(argv[0]);
-            return parse_cli_result::k_help;
-        }
-        if (arg == "--model") {
-            auto const value = require_value(arg);
-            if (!value.has_value())
-                return parse_cli_result::k_error;
-            options.model_path = std::filesystem::path(*value);
-            continue;
-        }
-        if (arg == "--model-dir") {
-            auto const value = require_value(arg);
-            if (!value.has_value())
-                return parse_cli_result::k_error;
-            options.model_dir = std::filesystem::path(*value);
-            continue;
-        }
-        if (arg == "--queries") {
-            auto const value = require_value(arg);
-            if (!value.has_value() ||
-                !parse_positive_integral<std::size_t>(*value, options.query_count)) {
-                std::cerr << "Invalid --queries value.\n";
-                return parse_cli_result::k_error;
-            }
-            continue;
-        }
-        if (arg == "--warmup") {
-            auto const value = require_value(arg);
-            if (!value.has_value() ||
-                !parse_non_negative_integral<int>(*value, options.warmup_iters)) {
-                std::cerr << "Invalid --warmup value.\n";
-                return parse_cli_result::k_error;
-            }
-            continue;
-        }
-        if (arg == "--iters") {
-            auto const value = require_value(arg);
-            if (!value.has_value() ||
-                !parse_positive_integral<int>(*value, options.measure_iters)) {
-                std::cerr << "Invalid --iters value.\n";
-                return parse_cli_result::k_error;
-            }
-            continue;
-        }
-        if (arg == "--accuracy-scale") {
-            auto const value = require_value(arg);
-            if (!value.has_value() || !parse_float_value(*value, options.accuracy_scale)) {
-                std::cerr << "Invalid --accuracy-scale value.\n";
-                return parse_cli_result::k_error;
-            }
-            continue;
-        }
-        if (arg == "--stack-capacity") {
-            auto const value = require_value(arg);
-            if (!value.has_value() ||
-                !parse_positive_integral<int>(*value, options.stack_capacity)) {
-                std::cerr << "Invalid --stack-capacity value.\n";
-                return parse_cli_result::k_error;
-            }
-            continue;
-        }
-        if (arg == "--stream-sync-per-iter") {
-            auto const value = require_value(arg);
-            if (!value.has_value() || (*value != "0" && *value != "1")) {
-                std::cerr << "Invalid --stream-sync-per-iter value (must be 0 or 1).\n";
-                return parse_cli_result::k_error;
-            }
-            options.stream_sync_per_iter = (*value == "1");
-            continue;
-        }
-        if (arg == "--builder") {
-            auto const value = require_value(arg);
-            if (!value.has_value()) {
-                std::cerr << "Invalid --builder value.\n";
-                return parse_cli_result::k_error;
-            }
-            if (*value == "lbvh")
-                options.builder = benchmark_bvh_builder::k_lbvh;
-            else if (*value == "hploc")
-                options.builder = benchmark_bvh_builder::k_hploc;
-            else {
-                std::cerr << "Invalid --builder value (must be lbvh or hploc).\n";
-                return parse_cli_result::k_error;
-            }
-            continue;
-        }
-        if (arg == "--csv") {
-            auto const value = require_value(arg);
-            if (!value.has_value()) {
-                std::cerr << "Invalid --csv value.\n";
-                return parse_cli_result::k_error;
-            }
-            options.csv_path = std::filesystem::path(*value);
-            continue;
-        }
-        if (arg == "--seed") {
-            auto const value = require_value(arg);
-            if (!value.has_value() ||
-                !parse_positive_integral<std::uint64_t>(*value, options.seed)) {
-                std::cerr << "Invalid --seed value.\n";
-                return parse_cli_result::k_error;
-            }
-            continue;
-        }
-        if (arg == "--skip-exact") {
-            options.skip_exact = true;
-            continue;
-        }
-
-        std::cerr << "Unknown argument: " << arg << "\n";
-        return parse_cli_result::k_error;
-    }
-
-    if (options.model_path.has_value() == options.model_dir.has_value()) {
-        std::cerr << "Exactly one of --model or --model-dir must be provided.\n";
-        return parse_cli_result::k_error;
-    }
-    return parse_cli_result::k_ok;
-}
 
 [[nodiscard]] std::vector<std::filesystem::path>
 collect_models(benchmark_cli_options const &options) {
@@ -286,9 +82,9 @@ collect_models(benchmark_cli_options const &options) {
         std::cerr << "Model directory missing: " << options.model_dir->string() << "\n";
         return {};
     }
-    models = gwn::tests::collect_obj_model_paths(*options.model_dir);
+    models = gwn::tests::collect_ply_model_paths(*options.model_dir);
     if (models.empty())
-        std::cerr << "No OBJ files found under: " << options.model_dir->string() << "\n";
+        std::cerr << "No PLY files found under: " << options.model_dir->string() << "\n";
     return models;
 }
 
@@ -580,6 +376,7 @@ int run_benchmark(
     csv_context.builder = std::string(to_string(options.builder));
     csv_context.accuracy_scale = options.accuracy_scale;
     csv_context.stack_capacity = StackCapacity;
+    csv_context.stream_sync_per_iter = options.stream_sync_per_iter;
     csv_context.seed = options.seed;
 
     std::cout << "smallgwn benchmark\n";
@@ -593,7 +390,7 @@ int run_benchmark(
 
     std::size_t successful_models = 0;
     for (std::filesystem::path const &model_path : models) {
-        std::optional<HostMesh> const loaded = gwn::tests::load_obj_mesh(model_path);
+        std::optional<HostMesh> const loaded = gwn::tests::load_ply_mesh(model_path);
         if (!loaded.has_value()) {
             std::cerr << "Skipping unreadable model: " << model_path.string() << "\n";
             continue;
@@ -612,6 +409,7 @@ int run_benchmark(
             gwn::gwn_make_scope_exit([&]() noexcept { (void)cudaStreamDestroy(stream); });
 
         gwn::gwn_geometry_object<Real, Index> geometry;
+        gwn::gwn_boundary_chain_object<Index> boundary_chain;
         gwn::gwn_status const upload_status = gwn::gwn_upload_geometry(
             geometry, gwn::gwn_host_span<Real const>(mesh.vertex_x.data(), mesh.vertex_x.size()),
             gwn::gwn_host_span<Real const>(mesh.vertex_y.data(), mesh.vertex_y.size()),
@@ -632,6 +430,22 @@ int run_benchmark(
                       << gwn::bench::gwn_status_to_string(upload_sync_status) << "\n";
             continue;
         }
+
+        gwn::gwn_status const boundary_status =
+            gwn::gwn_build_boundary_chain(geometry, boundary_chain, stream);
+        if (!boundary_status.is_ok()) {
+            std::cerr << "Boundary build failed for model " << model_path.string() << ": "
+                      << gwn::bench::gwn_status_to_string(boundary_status) << "\n";
+            continue;
+        }
+        gwn::gwn_status const boundary_sync_status =
+            gwn::gwn_cuda_to_status(cudaStreamSynchronize(stream));
+        if (!boundary_sync_status.is_ok()) {
+            std::cerr << "Boundary build sync failed for model " << model_path.string() << ": "
+                      << gwn::bench::gwn_status_to_string(boundary_sync_status) << "\n";
+            continue;
+        }
+        csv_context.boundary_edge_count = boundary_chain.accessor().edge_count();
 
         std::vector<Real> dynamic_x = mesh.vertex_x;
         std::vector<Real> dynamic_y = mesh.vertex_y;
@@ -712,7 +526,6 @@ int run_benchmark(
         gwn::gwn_bvh4_moment_object<0, Real, Index> moment_tree_o0;
         gwn::gwn_bvh4_moment_object<1, Real, Index> moment_tree_o1;
         gwn::gwn_bvh4_moment_object<2, Real, Index> moment_tree_o2;
-        gwn::gwn_boundary_chain_object<Index> boundary_chain;
         std::string const builder_name{to_string(options.builder)};
 
         auto build_bvh = [&]() noexcept -> gwn::gwn_status {
@@ -741,12 +554,61 @@ int run_benchmark(
         };
 
         std::cout << "Model: " << model_path.string() << " (V=" << mesh.vertex_x.size()
-                  << ", F=" << mesh.tri_i0.size() << ", Q=" << options.query_count << ")\n";
+                  << ", F=" << mesh.tri_i0.size() << ", BE=" << csv_context.boundary_edge_count
+                  << ", Q=" << options.query_count << ")\n";
 
         auto emit_result = [&](gwn::bench::gwn_benchmark_stage_result const &result) {
             print_stage_result(model_path, result);
             csv_writer.append_row(csv_context, model_path.string(), result);
         };
+
+        auto setup_bvh_and_boundary = [&]() noexcept {
+            gwn::gwn_status const setup_status = build_bvh();
+            if (!setup_status.is_ok())
+                return setup_status;
+            return gwn::gwn_build_boundary_chain(geometry, boundary_chain, stream);
+        };
+
+        auto measure_query_o1 = [&]() {
+            return run_stage(
+                "query_taylor_o1", "queries/s", options.query_count, options, mesh.vertex_x.size(),
+                mesh.tri_i0.size(), options.query_count, stream, build_bvh_moment_o1,
+                [&]() noexcept {
+                return run_taylor_query<StackCapacity, 1>(
+                    bvh, moment_tree_o1, d_qx.span(), d_qy.span(), d_qz.span(), d_out.span(),
+                    options.accuracy_scale, stream
+                );
+            }
+            );
+        };
+        auto measure_query_antipodal = [&]() {
+            return run_stage(
+                "query_antipodal", "queries/s", options.query_count, options, mesh.vertex_x.size(),
+                mesh.tri_i0.size(), options.query_count, stream, setup_bvh_and_boundary,
+                [&]() noexcept {
+                return run_antipodal_query<StackCapacity>(
+                    geometry, bvh, boundary_chain, d_qx.span(), d_qy.span(), d_qz.span(),
+                    d_out.span(), stream
+                );
+            }
+            );
+        };
+
+        if (options.winding_query_only) {
+            auto const query_o1_stage = measure_query_o1();
+            emit_result(query_o1_stage);
+            auto const query_antipodal_stage = measure_query_antipodal();
+            emit_result(query_antipodal_stage);
+            if (query_o1_stage.success && query_antipodal_stage.success) {
+                double const speedup =
+                    query_o1_stage.latency_mean_ms / query_antipodal_stage.latency_mean_ms;
+                std::cout << "    taylor_o1_vs_antipodal_speedup=" << std::fixed
+                          << std::setprecision(3) << speedup << std::defaultfloat << "\n";
+                ++successful_models;
+            }
+            std::cout << "\n";
+            continue;
+        }
 
         auto const bvh_stage = run_stage(
             std::string("bvh_build_") + builder_name, "triangles/s", mesh.tri_i0.size(), options,
@@ -762,12 +624,6 @@ int run_benchmark(
         );
         emit_result(refit_bvh_stage);
 
-        auto setup_bvh_and_boundary = [&]() noexcept {
-            gwn::gwn_status const setup_status = build_bvh();
-            if (!setup_status.is_ok())
-                return setup_status;
-            return gwn::gwn_build_boundary_chain(geometry, boundary_chain, stream);
-        };
         auto setup_boundary = [&]() noexcept {
             return gwn::gwn_build_boundary_chain(geometry, boundary_chain, stream);
         };
@@ -875,15 +731,7 @@ int run_benchmark(
         );
         emit_result(query_o0_stage);
 
-        auto const query_o1_stage = run_stage(
-            "query_taylor_o1", "queries/s", options.query_count, options, mesh.vertex_x.size(),
-            mesh.tri_i0.size(), options.query_count, stream, build_bvh_moment_o1, [&]() noexcept {
-            return run_taylor_query<StackCapacity, 1>(
-                bvh, moment_tree_o1, d_qx.span(), d_qy.span(), d_qz.span(), d_out.span(),
-                options.accuracy_scale, stream
-            );
-        }
-        );
+        auto const query_o1_stage = measure_query_o1();
         emit_result(query_o1_stage);
 
         auto const query_o2_stage = run_stage(
@@ -945,17 +793,15 @@ int run_benchmark(
         );
         emit_result(query_antipodal_gradient_stage);
 
-        auto const query_antipodal_stage = run_stage(
-            "query_antipodal", "queries/s", options.query_count, options, mesh.vertex_x.size(),
-            mesh.tri_i0.size(), options.query_count, stream, setup_bvh_and_boundary,
-            [&]() noexcept {
-            return run_antipodal_query<StackCapacity>(
-                geometry, bvh, boundary_chain, d_qx.span(), d_qy.span(), d_qz.span(), d_out.span(),
-                stream
-            );
-        }
-        );
+        auto const query_antipodal_stage = measure_query_antipodal();
         emit_result(query_antipodal_stage);
+        if (query_o1_stage.success && query_antipodal_stage.success &&
+            query_antipodal_stage.latency_mean_ms > 0.0) {
+            double const speedup =
+                query_o1_stage.latency_mean_ms / query_antipodal_stage.latency_mean_ms;
+            std::cout << "    taylor_o1_vs_antipodal_speedup=" << std::fixed << std::setprecision(3)
+                      << speedup << std::defaultfloat << "\n";
+        }
         if (query_o2_stage.success && query_antipodal_stage.success &&
             query_antipodal_stage.latency_mean_ms > 0.0) {
             double const speedup =
@@ -1034,11 +880,68 @@ int run_benchmark(
 
 int main(int argc, char **argv) try {
     benchmark_cli_options options{};
-    parse_cli_result const parse_result = parse_cli(argc, argv, options);
-    if (parse_result == parse_cli_result::k_help)
-        return 0;
-    if (parse_result != parse_cli_result::k_ok)
+    std::string model_path;
+    std::string model_dir;
+    std::string csv_path{options.csv_path.string()};
+    std::string builder{"hploc"};
+    int stream_sync_per_iter = options.stream_sync_per_iter ? 1 : 0;
+
+    CLI::App app{"Benchmark smallgwn build, refit, and query stages"};
+    CLI::Option *const model_option =
+        app.add_option("--model", model_path, "One PLY model")->check(CLI::ExistingFile);
+    CLI::Option *const model_dir_option =
+        app.add_option("--model-dir", model_dir, "Directory of PLY models")
+            ->check(CLI::ExistingDirectory);
+    model_option->excludes(model_dir_option);
+    model_dir_option->excludes(model_option);
+    app.add_option("--queries", options.query_count, "Query count")
+        ->check(CLI::PositiveNumber)
+        ->capture_default_str();
+    app.add_option("--warmup", options.warmup_iters, "Warmup iterations")
+        ->check(CLI::NonNegativeNumber)
+        ->capture_default_str();
+    app.add_option("--iters", options.measure_iters, "Measured iterations")
+        ->check(CLI::PositiveNumber)
+        ->capture_default_str();
+    app.add_option("--accuracy-scale", options.accuracy_scale, "Taylor accuracy scale")
+        ->check(CLI::PositiveNumber)
+        ->capture_default_str();
+    app.add_option("--stack-capacity", options.stack_capacity, "Traversal stack capacity")
+        ->check(CLI::IsMember(std::vector<int>{16, 24, 32, 48, 64, 96}))
+        ->capture_default_str();
+    app.add_option("--stream-sync-per-iter", stream_sync_per_iter, "Synchronize each iteration")
+        ->check(CLI::IsMember(std::vector<int>{0, 1}))
+        ->capture_default_str();
+    app.add_option("--builder", builder, "BVH builder")
+        ->check(CLI::IsMember({"lbvh", "hploc"}))
+        ->capture_default_str();
+    app.add_option("--csv", csv_path, "CSV output path")->capture_default_str();
+    app.add_option("--seed", options.seed, "RNG seed")
+        ->check(CLI::PositiveNumber)
+        ->capture_default_str();
+    app.add_flag("--skip-exact", options.skip_exact, "Skip the exact winding stage");
+    app.add_flag(
+        "--winding-query-only", options.winding_query_only,
+        "Measure only order-1 Taylor and complete Antipodal query stages"
+    );
+
+    try {
+        app.parse(argc, argv);
+    } catch (CLI::ParseError const &error) { return app.exit(error); }
+
+    if (model_path.empty() == model_dir.empty()) {
+        std::cerr << "Exactly one of --model or --model-dir must be provided.\n";
         return 1;
+    }
+
+    if (!model_path.empty())
+        options.model_path = std::filesystem::path(model_path);
+    else
+        options.model_dir = std::filesystem::path(model_dir);
+    options.csv_path = std::filesystem::path(csv_path);
+    options.builder =
+        builder == "lbvh" ? benchmark_bvh_builder::k_lbvh : benchmark_bvh_builder::k_hploc;
+    options.stream_sync_per_iter = stream_sync_per_iter != 0;
 
     std::vector<std::filesystem::path> const models = collect_models(options);
     if (models.empty())
@@ -1051,12 +954,7 @@ int main(int argc, char **argv) try {
     case 48: return run_benchmark<48>(options, models);
     case 64: return run_benchmark<64>(options, models);
     case 96: return run_benchmark<96>(options, models);
-    case 128: return run_benchmark<128>(options, models);
-    case 192: return run_benchmark<192>(options, models);
-    case 256: return run_benchmark<256>(options, models);
-    default:
-        std::cerr << "Unsupported --stack-capacity. Supported: 16,24,32,48,64,96,128,192,256.\n";
-        return 1;
+    default: return 1;
     }
 } catch (std::exception const &e) {
     std::cerr << "Unhandled std::exception: " << e.what() << "\n";

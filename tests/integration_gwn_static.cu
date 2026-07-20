@@ -268,7 +268,7 @@ TEST(gwn_static_workflow, ray_first_hit_matches_cpu_reference) {
     std::size_t tested_model_count = 0;
     for (std::filesystem::path const &model_path : model_paths) {
         SCOPED_TRACE(model_path.string());
-        std::optional<HostMesh> const maybe_mesh = gwn::tests::load_obj_mesh(model_path);
+        std::optional<HostMesh> const maybe_mesh = gwn::tests::load_ply_mesh(model_path);
         if (!maybe_mesh.has_value()) {
             std::cerr << "smallgwn input skip: failed to parse " << model_path << '\n';
             continue;

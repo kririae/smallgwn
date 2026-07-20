@@ -21,15 +21,17 @@ The core API is declared by:
 - CUDA Toolkit 12 or newer
 - A host compiler with C++20 support
 - CMake 3.24 or newer
-- Eigen3 and Intel TBB when using the Eigen bridge
-- libigl when using the mesh-loading code in the example
+
+Optional source dependencies are fetched at fixed versions. A parent project can provide the
+corresponding standard CMake targets before adding smallgwn to prevent any download.
 
 ## Use from CMake
 
 ```cmake
 include(FetchContent)
-set(SMALLGWN_BUILD_EIGEN_BRIDGE ON CACHE BOOL "")
-find_package(LIBIGL REQUIRED)
+set(SMALLGWN_BUILD_EIGEN_BRIDGE ON)
+set(SMALLGWN_BUILD_TESTS OFF)
+set(SMALLGWN_BUILD_BENCHMARKS OFF)
 FetchContent_Declare(
     smallgwn
     GIT_REPOSITORY https://github.com/kririae/smallgwn.git
@@ -37,7 +39,6 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(smallgwn)
 target_link_libraries(my_cuda_target PRIVATE gwn::smallgwn_eigen_bridge)
-target_link_libraries(my_cuda_target PRIVATE igl::core)
 ```
 
 ## Usage
@@ -53,7 +54,6 @@ winding-number query.
 
 #include <cstdint>
 #include <Eigen/Core>
-#include <igl/read_triangle_mesh.h>
 #include <stdexcept>
 #include <vector>
 
@@ -67,10 +67,9 @@ auto check = [](gwn::gwn_status const &status) {
 
 cudaStream_t const stream = gwn::gwn_default_stream();
 
-Eigen::MatrixXd V;
-Eigen::MatrixXi F;
-if (!igl::read_triangle_mesh(/* filename */ "mesh.obj", V, F))
-    throw std::runtime_error("Could not read mesh.");
+// These functions stand for application-owned mesh loading.
+Eigen::MatrixXd V = load_vertex_matrix();
+Eigen::MatrixXi F = load_triangle_matrix();
 
 gwn::gwn_geometry_object<Real, Index> geometry;
 check(gwn::gwn_upload_geometry_from_eigen(geometry, V, F, stream));
@@ -86,7 +85,7 @@ gwn::gwn_bvh_build_options const build_options{
 check(gwn::gwn_build_bvh(geometry, bvh, build_options, stream));
 check(gwn::gwn_refit_bvh_moment</* Taylor order */ 1>(bvh, moments, stream));
 
-/* Bind these spans to non-empty, application-owned device storage. */
+// Bind these spans to non-empty, application-owned device storage.
 gwn::gwn_device_span<Real const> d_qx{device_qx, query_count};
 gwn::gwn_device_span<Real const> d_qy{device_qy, query_count};
 gwn::gwn_device_span<Real const> d_qz{device_qz, query_count};
@@ -106,10 +105,10 @@ check(gwn::gwn_compute_winding_number_taylor_batch</* Taylor order */ 1>(
 For dynamic vertex positions, update geometry and refit the BVH and moments:
 
 ```cpp
-/* x/y/z are application-owned host spans with geometry.vertex_count() elements. */
-gwn::gwn_host_span<Real const> x = /* updated host x */;
-gwn::gwn_host_span<Real const> y = /* updated host y */;
-gwn::gwn_host_span<Real const> z = /* updated host z */;
+// Updated host arrays contain geometry.vertex_count() elements.
+gwn::gwn_host_span<Real const> x{updated_host_x, geometry.vertex_count()};
+gwn::gwn_host_span<Real const> y{updated_host_y, geometry.vertex_count()};
+gwn::gwn_host_span<Real const> z{updated_host_z, geometry.vertex_count()};
 check(gwn::gwn_update_geometry(geometry, x, y, z, stream));
 // Host x/y/z must stay alive until this stream reaches the update.
 check(gwn::gwn_refit_bvh(geometry, bvh, stream));
@@ -134,6 +133,28 @@ check(gwn::gwn_compute_winding_number_antipodal_batch(
 
 `gwn_compute_winding_gradient_antipodal_batch` uses the same geometry and boundary chain and does
 not require the BVH.
+
+## Tests and benchmarks
+
+Dataset runners consume directories of indexed PLY triangle meshes. Mesh I/O belongs to the test
+and benchmark tooling and uses libigl; it is not part of the header-only library interface.
+
+```bash
+cmake -S . -B build -DSMALLGWN_BUILD_TESTS=ON -DSMALLGWN_BUILD_BENCHMARKS=ON
+cmake --build build -j
+ctest --test-dir build --output-on-failure
+build/tests/smallgwn_e2e --mesh-dir /path/to/ply-directory
+build/tests/smallgwn_benchmark --model-dir /path/to/ply-directory --skip-exact
+```
+
+Benchmark CSV rows contain raw mesh and run facts, including vertex, triangle, boundary-edge, and
+query counts. Backend selection and feature fitting belong to the calling application rather than
+the smallgwn library. Use `--winding-query-only` to record only order-1 Taylor and complete
+Antipodal query rows for an external comparison.
+
+For heterogeneous datasets whose BVHs exceed the default traversal stack bound, select a supported
+capacity explicitly, up to `--stack-capacity 96`. Host validation rejects an insufficient
+capacity before launching a traversal query.
 
 ## References
 

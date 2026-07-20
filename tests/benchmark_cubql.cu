@@ -12,11 +12,12 @@
 #include <iostream>
 #include <limits>
 #include <optional>
-#include <sstream>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
+
+#include <CLI/CLI.hpp>
 
 // clang-format off
 #include <cuBQL/bvh.h>
@@ -28,7 +29,7 @@
 #include <gwn/detail/gwn_device_array.cuh>
 #include <gwn/gwn.cuh>
 
-#include "benchmark_utils.cuh"
+#include "benchmark_csv.cuh"
 
 namespace {
 
@@ -74,81 +75,6 @@ struct implementation_result {
     std::string error{};
     std::vector<Hit> output{};
 };
-
-void print_usage(char const *const argv0) {
-    std::cout << "Usage: " << argv0 << " --model <mesh.obj> [--model <mesh.obj> ...] [options]\n"
-              << "Options:\n"
-              << "  --rays <N>       Ray count per model (default: " << k_default_ray_count << ")\n"
-              << "  --warmup <N>     Warmup launches (default: " << k_default_warmup << ")\n"
-              << "  --iters <N>      Measured launches (default: " << k_default_iters << ")\n"
-              << "  --seed <N>       Ray generator seed (default: " << k_default_seed << ")\n"
-              << "  --csv <path>     Raw CSV output (default: ray_comparison.csv)\n";
-}
-
-template <class T>
-[[nodiscard]] bool parse_positive_integer(std::string_view const text, T &value) {
-    if (text.empty())
-        return false;
-    std::istringstream input{std::string(text)};
-    T parsed{};
-    input >> parsed;
-    if (!input || !input.eof() || parsed <= 0)
-        return false;
-    value = parsed;
-    return true;
-}
-
-[[nodiscard]] std::optional<benchmark_options> parse_options(int const argc, char **const argv) {
-    benchmark_options options{};
-    for (int i = 1; i < argc; ++i) {
-        std::string_view const argument(argv[i]);
-        if (argument == "--help") {
-            print_usage(argv[0]);
-            return std::nullopt;
-        }
-
-        if (i + 1 >= argc) {
-            std::cerr << "Missing value for " << argument << ".\n";
-            return std::nullopt;
-        }
-        std::string_view const value(argv[++i]);
-
-        if (argument == "--model") {
-            options.models.emplace_back(value);
-        } else if (argument == "--csv") {
-            options.csv_path = std::filesystem::path(value);
-        } else if (argument == "--rays") {
-            if (!parse_positive_integer(value, options.ray_count)) {
-                std::cerr << "Invalid --rays value.\n";
-                return std::nullopt;
-            }
-        } else if (argument == "--warmup") {
-            if (!parse_positive_integer(value, options.warmup_iters)) {
-                std::cerr << "Invalid --warmup value.\n";
-                return std::nullopt;
-            }
-        } else if (argument == "--iters") {
-            if (!parse_positive_integer(value, options.measure_iters)) {
-                std::cerr << "Invalid --iters value.\n";
-                return std::nullopt;
-            }
-        } else if (argument == "--seed") {
-            if (!parse_positive_integer(value, options.seed)) {
-                std::cerr << "Invalid --seed value.\n";
-                return std::nullopt;
-            }
-        } else {
-            std::cerr << "Unknown argument: " << argument << ".\n";
-            return std::nullopt;
-        }
-    }
-
-    if (options.models.empty()) {
-        std::cerr << "At least one --model is required.\n";
-        return std::nullopt;
-    }
-    return options;
-}
 
 [[nodiscard]] gwn::gwn_status synchronize(cudaStream_t const stream) noexcept {
     return gwn::gwn_cuda_to_status(cudaStreamSynchronize(stream));
@@ -411,19 +337,6 @@ template <class LaunchFn>
     return result;
 }
 
-[[nodiscard]] std::string csv_escape(std::string_view const text) {
-    if (text.find_first_of(",\"\n\r") == std::string_view::npos)
-        return std::string(text);
-    std::string escaped{"\""};
-    for (char const c : text) {
-        if (c == '\"')
-            escaped.push_back('\"');
-        escaped.push_back(c);
-    }
-    escaped.push_back('\"');
-    return escaped;
-}
-
 void write_csv_header(std::ofstream &csv) {
     csv << "gpu,model,vertices,triangles,rays,implementation,bvh,builder,"
            "build_mean_ms,build_p50_ms,build_p95_ms,refit_supported,"
@@ -438,10 +351,12 @@ void write_csv_result(
     std::ofstream &csv, std::string_view const gpu, std::filesystem::path const &model,
     HostMesh const &mesh, benchmark_options const &options, implementation_result const &result
 ) {
-    csv << csv_escape(gpu) << ',' << csv_escape(model.filename().string()) << ','
-        << mesh.vertex_x.size() << ',' << mesh.tri_i0.size() << ',' << options.ray_count << ','
-        << csv_escape(result.implementation) << ',' << csv_escape(result.bvh) << ','
-        << csv_escape(result.builder) << ',' << std::fixed << std::setprecision(6)
+    csv << gwn::bench::gwn_escape_csv(gpu) << ','
+        << gwn::bench::gwn_escape_csv(model.filename().string()) << ',' << mesh.vertex_x.size()
+        << ',' << mesh.tri_i0.size() << ',' << options.ray_count << ','
+        << gwn::bench::gwn_escape_csv(result.implementation) << ','
+        << gwn::bench::gwn_escape_csv(result.bvh) << ','
+        << gwn::bench::gwn_escape_csv(result.builder) << ',' << std::fixed << std::setprecision(6)
         << result.build.mean_ms << ',' << result.build.p50_ms << ',' << result.build.p95_ms << ','
         << (result.supports_refit ? 1 : 0) << ',' << result.refit.mean_ms << ','
         << result.refit.p50_ms << ',' << result.refit.p95_ms << ',' << result.trace.mean_ms << ','
@@ -450,7 +365,7 @@ void write_csv_result(
         << result.hit_mismatch_rate << ',' << result.t_mismatch_rate << ','
         << result.primitive_id_disagreement_rate << ',' << result.matched_hit_mean_relative_t_error
         << ',' << result.matched_hit_max_relative_t_error << ',' << (result.success ? 1 : 0) << ','
-        << csv_escape(result.error) << '\n';
+        << gwn::bench::gwn_escape_csv(result.error) << '\n';
 }
 
 void print_result(implementation_result const &result) {
@@ -484,7 +399,7 @@ int run_model(
     benchmark_options const &options, std::filesystem::path const &model_path,
     std::string_view const gpu_name, std::ofstream &csv
 ) {
-    std::optional<HostMesh> const loaded = gwn::tests::load_obj_mesh(model_path);
+    std::optional<HostMesh> const loaded = gwn::tests::load_ply_mesh(model_path);
     if (!loaded.has_value()) {
         std::cerr << "Could not load model: " << model_path << '\n';
         return 1;
@@ -776,10 +691,34 @@ int run_model(
 } // namespace
 
 int main(int argc, char **argv) try {
-    std::optional<benchmark_options> const parsed = parse_options(argc, argv);
-    if (!parsed.has_value())
-        return argc > 1 && std::string_view(argv[1]) == "--help" ? 0 : 1;
-    benchmark_options const &options = *parsed;
+    benchmark_options options{};
+    std::vector<std::string> model_paths;
+    std::string csv_path{options.csv_path.string()};
+
+    CLI::App app{"Compare smallgwn and cuBQL ray-triangle first-hit traversal"};
+    app.add_option("--model", model_paths, "PLY model")->required()->check(CLI::ExistingFile);
+    app.add_option("--rays", options.ray_count, "Ray count per model")
+        ->check(CLI::PositiveNumber)
+        ->capture_default_str();
+    app.add_option("--warmup", options.warmup_iters, "Warmup launches")
+        ->check(CLI::PositiveNumber)
+        ->capture_default_str();
+    app.add_option("--iters", options.measure_iters, "Measured launches")
+        ->check(CLI::PositiveNumber)
+        ->capture_default_str();
+    app.add_option("--seed", options.seed, "Ray generator seed")
+        ->check(CLI::PositiveNumber)
+        ->capture_default_str();
+    app.add_option("--csv", csv_path, "CSV output path")->capture_default_str();
+
+    try {
+        app.parse(argc, argv);
+    } catch (CLI::ParseError const &error) { return app.exit(error); }
+
+    options.csv_path = std::filesystem::path(csv_path);
+    options.models.reserve(model_paths.size());
+    for (std::string const &path : model_paths)
+        options.models.emplace_back(path);
 
     int device = 0;
     cudaDeviceProp properties{};

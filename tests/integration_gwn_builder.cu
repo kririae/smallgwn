@@ -261,7 +261,7 @@ TEST(gwn_builder_workflow, every_builder_reaches_the_complete_triangle_sequence)
     std::size_t tested_model_count = 0;
     for (std::filesystem::path const &mesh_path : gwn::tests::collect_mesh_paths()) {
         SCOPED_TRACE(mesh_path.string());
-        std::optional<HostMesh> const mesh = gwn::tests::load_obj_mesh(mesh_path);
+        std::optional<HostMesh> const mesh = gwn::tests::load_ply_mesh(mesh_path);
         if (!mesh.has_value()) {
             std::cerr << "smallgwn input skip: failed to parse " << mesh_path << '\n';
             continue;
