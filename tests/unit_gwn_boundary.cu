@@ -210,7 +210,7 @@ TEST_F(GwnBoundaryTest, default_boundary_chain_is_not_built) {
     EXPECT_FALSE(boundary.accessor().is_valid());
 }
 
-TEST_F(GwnBoundaryStreamTest, replacement_releases_old_storage_on_its_bound_stream) {
+TEST_F(GwnBoundaryStreamTest, destructive_build_accepts_ordered_stream_transfer) {
     OpenCubeMesh mesh;
     gwn::gwn_geometry_object<Real, Index> geometry;
     ASSERT_TRUE(
@@ -246,24 +246,59 @@ TEST_F(GwnBoundaryStreamTest, replacement_releases_old_storage_on_its_bound_stre
     output.resize(2, stream_a_);
     ASSERT_EQ(cudaSuccess, cudaStreamSynchronize(stream_a_));
 
-    cudaEvent_t release_event = nullptr;
-    ASSERT_EQ(cudaSuccess, cudaEventCreateWithFlags(&release_event, cudaEventDisableTiming));
-    auto const release_event_cleanup =
-        gwn::gwn_make_scope_exit([&]() noexcept { (void)cudaEventDestroy(release_event); });
-    ASSERT_EQ(cudaSuccess, cudaStreamWaitEvent(stream_a_, release_event));
+    cudaEvent_t use_complete = nullptr;
+    ASSERT_EQ(cudaSuccess, cudaEventCreateWithFlags(&use_complete, cudaEventDisableTiming));
+    auto const event_cleanup =
+        gwn::gwn_make_scope_exit([&]() noexcept { (void)cudaEventDestroy(use_complete); });
     auto const old_accessor = boundary.accessor();
     read_boundary_after_wait<<<1, 1, 0, stream_a_>>>(old_accessor, output.data());
     cudaError_t const launch_status = cudaGetLastError();
-    gwn::gwn_status const replacement_status =
+    ASSERT_EQ(cudaSuccess, cudaEventRecord(use_complete, stream_a_));
+    ASSERT_EQ(cudaSuccess, cudaStreamWaitEvent(stream_b_, use_complete));
+    gwn::gwn_status const rebuild_status =
         gwn::gwn_build_boundary_chain(geometry, boundary, stream_b_);
 
     std::array<Index, 2> actual{};
-    cudaError_t const release_status = cudaEventRecord(release_event, stream_b_);
     output.copy_to_host(cuda::std::span<Index>(actual), stream_a_);
     ASSERT_EQ(cudaSuccess, launch_status);
-    ASSERT_TRUE(replacement_status.is_ok());
-    ASSERT_EQ(cudaSuccess, release_status);
+    ASSERT_TRUE(rebuild_status.is_ok());
     ASSERT_EQ(cudaSuccess, cudaStreamSynchronize(stream_a_));
     EXPECT_EQ(actual, expected);
     EXPECT_EQ(boundary.stream(), stream_b_);
+}
+
+TEST_F(GwnBoundaryStreamTest, failed_build_clears_previous_boundary) {
+    OpenCubeMesh mesh;
+    gwn::gwn_geometry_object<Real, Index> geometry;
+    ASSERT_TRUE(
+        gwn::gwn_upload_geometry(
+            geometry, gwn::tests::host_span(cuda::std::span<Real const>(mesh.vx)),
+            gwn::tests::host_span(cuda::std::span<Real const>(mesh.vy)),
+            gwn::tests::host_span(cuda::std::span<Real const>(mesh.vz)),
+            gwn::tests::host_span(cuda::std::span<Index const>(mesh.i0)),
+            gwn::tests::host_span(cuda::std::span<Index const>(mesh.i1)),
+            gwn::tests::host_span(cuda::std::span<Index const>(mesh.i2)), stream_a_
+        )
+            .is_ok()
+    );
+    gwn::gwn_boundary_chain_object<Index> boundary;
+    ASSERT_TRUE(gwn::gwn_build_boundary_chain(geometry, boundary, stream_a_).is_ok());
+    ASSERT_EQ(cudaSuccess, cudaStreamSynchronize(stream_a_));
+
+    Index const invalid_index = static_cast<Index>(geometry.vertex_count());
+    ASSERT_EQ(
+        cudaSuccess, cudaMemcpyAsync(
+                         geometry.accessor().tri_i0.data(), &invalid_index, sizeof(invalid_index),
+                         cudaMemcpyHostToDevice, stream_b_
+                     )
+    );
+    gwn::gwn_status const status = gwn::gwn_build_boundary_chain(geometry, boundary, stream_b_);
+
+    EXPECT_EQ(status.error(), gwn::gwn_error::invalid_argument);
+    EXPECT_FALSE(boundary.has_data());
+    EXPECT_EQ(boundary.stream(), stream_b_);
+    EXPECT_TRUE(boundary.accessor().start_vertex.empty());
+    EXPECT_TRUE(boundary.accessor().end_vertex.empty());
+    EXPECT_TRUE(boundary.accessor().multiplicity.empty());
+    ASSERT_EQ(cudaSuccess, cudaStreamSynchronize(stream_b_));
 }

@@ -286,7 +286,7 @@ TEST_F(GwnBvhTest, refit_replaces_geometry_data_and_preserves_primitive_order) {
     }
 }
 
-TEST_F(GwnBvhStreamTest, object_replacement_preserves_failure_and_stream_contracts) {
+TEST_F(GwnBvhStreamTest, destructive_build_clears_failures_and_rebinds_stream) {
     gwn::tests::SingleTriangleMesh const mesh{};
     gwn::gwn_geometry_object<Real, Index> geometry;
     gwn::gwn_status status = gwn::gwn_upload_geometry(
@@ -304,11 +304,6 @@ TEST_F(GwnBvhStreamTest, object_replacement_preserves_failure_and_stream_contrac
     ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
     ASSERT_TRUE(bvh.has_data());
     ASSERT_EQ(bvh.stream(), stream_a_);
-    auto *const nodes_before = bvh.accessor().nodes.data();
-    auto *const primitives_before = bvh.accessor().primitive_indices.data();
-    auto *const triangles_before = bvh.accessor().triangles.data();
-    auto const root_before = bvh.accessor().root;
-
     status = gwn::gwn_build_bvh(
         geometry, bvh,
         gwn::gwn_bvh_build_options{.method = static_cast<gwn::gwn_bvh_build_method>(0xff)},
@@ -316,13 +311,15 @@ TEST_F(GwnBvhStreamTest, object_replacement_preserves_failure_and_stream_contrac
     );
     EXPECT_FALSE(status.is_ok());
     EXPECT_EQ(status.error(), gwn::gwn_error::invalid_argument);
-    EXPECT_EQ(bvh.stream(), stream_a_);
-    EXPECT_EQ(bvh.accessor().nodes.data(), nodes_before);
-    EXPECT_EQ(bvh.accessor().primitive_indices.data(), primitives_before);
-    EXPECT_EQ(bvh.accessor().triangles.data(), triangles_before);
-    EXPECT_EQ(bvh.accessor().root.reference, root_before.reference);
+    EXPECT_EQ(bvh.stream(), stream_b_);
+    EXPECT_FALSE(bvh.has_data());
+    EXPECT_TRUE(bvh.accessor().nodes.empty());
+    EXPECT_TRUE(bvh.accessor().primitive_indices.empty());
+    EXPECT_TRUE(bvh.accessor().triangles.empty());
 
     for (std::uint32_t const search_radius : {0u, 9u}) {
+        status = gwn::gwn_build_bvh(geometry, bvh, {}, stream_a_);
+        ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
         status = gwn::gwn_build_bvh(
             geometry, bvh,
             gwn::gwn_bvh_build_options{
@@ -333,13 +330,12 @@ TEST_F(GwnBvhStreamTest, object_replacement_preserves_failure_and_stream_contrac
         );
         EXPECT_FALSE(status.is_ok());
         EXPECT_EQ(status.error(), gwn::gwn_error::invalid_argument);
-        EXPECT_EQ(bvh.stream(), stream_a_);
-        EXPECT_EQ(bvh.accessor().nodes.data(), nodes_before);
-        EXPECT_EQ(bvh.accessor().primitive_indices.data(), primitives_before);
-        EXPECT_EQ(bvh.accessor().triangles.data(), triangles_before);
-        EXPECT_EQ(bvh.accessor().root.reference, root_before.reference);
+        EXPECT_EQ(bvh.stream(), stream_b_);
+        EXPECT_FALSE(bvh.has_data());
     }
 
+    status = gwn::gwn_build_bvh(geometry, bvh, {}, stream_a_);
+    ASSERT_TRUE(status.is_ok()) << gwn::tests::status_to_debug_string(status);
     gwn::gwn_bvh4_object<Real, Index> moved(std::move(bvh));
     EXPECT_FALSE(bvh.has_data());
     EXPECT_TRUE(moved.has_data());
@@ -357,7 +353,7 @@ TEST_F(GwnBvhStreamTest, object_replacement_preserves_failure_and_stream_contrac
     EXPECT_EQ(moved.stream(), stream_a_);
 }
 
-TEST_F(GwnBvhStreamTest, hploc_multi_triangle_replacement_rebinds_stream) {
+TEST_F(GwnBvhStreamTest, hploc_multi_triangle_rebuild_rebinds_stream) {
     gwn::tests::SingleTriangleMesh const single_mesh{};
     gwn::gwn_geometry_object<Real, Index> single_geometry;
     gwn::gwn_status status = gwn::gwn_upload_geometry(

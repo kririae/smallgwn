@@ -41,6 +41,7 @@ public:
     void resize(std::size_t const count) { resize(count, stream_); }
 
     /// Resize without preserving contents, using \p stream for allocation and replacement.
+    /// Allocation failure after releasing a different-sized allocation leaves the array empty.
     void resize(std::size_t const count, cudaStream_t const stream) {
         GWN_ASSERT(invariant_holds_(), "gwn_device_array invariant violated before resize.");
 
@@ -57,13 +58,9 @@ public:
                 "gwn_device_array element count exceeds addressable bytes."
             );
 
-        T *const replacement = allocate_(count, stream);
-        // Deallocation failure cannot preserve a trustworthy owning state, so it is fatal rather
-        // than represented as a recoverable third state beside empty and owning.
-        deallocate_(data_, stream);
-        data_ = replacement;
+        clear(stream);
+        data_ = allocate_(count, stream);
         size_ = count;
-        stream_ = stream;
         GWN_ASSERT(invariant_holds_(), "gwn_device_array invariant violated after resize.");
     }
 
@@ -106,6 +103,7 @@ public:
     void copy_from_host(cuda::std::span<T const> const src) { copy_from_host(src, stream_); }
 
     /// Replace contents from host storage on \p stream.
+    /// A copy failure may leave the requested allocation with unspecified contents.
     void copy_from_host(cuda::std::span<T const> const src, cudaStream_t const stream) {
         if (!gwn_span_has_storage(src))
             throw std::invalid_argument("gwn_device_array source span has null storage.");
@@ -129,23 +127,11 @@ public:
         if (src.size() > std::numeric_limits<std::size_t>::max() / sizeof(T))
             throw std::invalid_argument("gwn_device_array source span exceeds addressable bytes.");
 
-        T *replacement = allocate_(src.size(), stream);
-        auto release_replacement =
-            gwn_make_scope_exit([&]() noexcept { deallocate_(replacement, stream); });
+        resize(src.size(), stream);
         gwn_throw_if_cuda_error(
-            cudaMemcpyAsync(
-                replacement, src.data(), src.size_bytes(), cudaMemcpyHostToDevice, stream
-            ),
+            cudaMemcpyAsync(data_, src.data(), src.size_bytes(), cudaMemcpyHostToDevice, stream),
             "cudaMemcpyAsync"
         );
-
-        // Size-changing copy is a replacement operation: the old state remains intact until both
-        // allocation and copy enqueue have succeeded.
-        deallocate_(data_, stream);
-        data_ = replacement;
-        size_ = src.size();
-        stream_ = stream;
-        release_replacement.release();
     }
 
     /// Copy contents to host storage on the currently bound stream.

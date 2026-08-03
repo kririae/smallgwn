@@ -53,7 +53,7 @@ template <gwn_real_type Real, gwn_index_type Index> class gwn_geometry_object;
 namespace detail {
 
 template <gwn_real_type Real, gwn_index_type Index>
-void gwn_release_accessor(
+void gwn_release_geometry_accessor(
     gwn_geometry_accessor<Real, Index> &accessor, cudaStream_t stream
 ) noexcept;
 
@@ -61,8 +61,10 @@ void gwn_release_accessor(
 
 /// \brief Upload host geometry to device buffers and validate triangle indices.
 ///
-/// On success, \p object is atomically replaced with a fully initialized
-/// geometry accessor bound to \p stream.
+/// The operation clears \p object on \p stream before validation or allocation. On success,
+/// \p object owns the uploaded geometry. On failure, \p object is empty and remains bound to
+/// \p stream. Callers that need to preserve an existing geometry build into a separate object.
+/// \remark The caller orders every prior use of \p object before \p stream.
 template <gwn_real_type Real, gwn_index_type Index>
 [[nodiscard]] gwn_status gwn_upload_geometry(
     gwn_geometry_object<Real, Index> &object, gwn_host_span<Real const> const x,
@@ -92,8 +94,8 @@ template <gwn_real_type Real, gwn_index_type Index>
 /// \brief Owning host-side RAII wrapper for geometry accessor storage.
 ///
 /// \remark `clear()` and destructor release memory on the currently bound stream.
-/// \remark The bound stream is updated after successful `gwn_upload_geometry(..., stream)` and
-///         `gwn_update_geometry(..., stream)`.
+/// \remark Upload binds the object to its operation stream before clearing existing storage.
+///         Update binds it after input validation and before the first copy.
 /// \remark `has_data()` reports whether the object owns any geometry span.
 template <gwn_real_type Real = float, gwn_index_type Index = std::uint32_t>
 class gwn_geometry_object final : public gwn_noncopyable, public gwn_stream_mixin {
@@ -118,7 +120,7 @@ public:
     ~gwn_geometry_object() { clear(); }
 
     /// \brief Release owned device storage on the currently bound stream.
-    void clear() noexcept { detail::gwn_release_accessor(accessor_, stream()); }
+    void clear() noexcept { detail::gwn_release_geometry_accessor(accessor_, stream()); }
 
     /// \brief Return the mutable device accessor.
     [[nodiscard]] accessor_type &accessor() noexcept { return accessor_; }

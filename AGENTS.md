@@ -42,8 +42,8 @@ device accessors: objects manage lifetime, accessors are the device-facing view.
 entrypoints that can fail are `noexcept` and return `gwn_status`; detail host execution code throws
 and is translated at the seam. (3) No lifetime operation or stream-binding transfer synchronizes
 implicitly; allocation, use, and release remain stream-ordered. (4) Prefer exact contracts over
-conservative ones (topology-exact stack bounds, closed-interval slab tests, staging-then-swap
-replacement) so validity is checkable instead of assumed. When a situation is not covered by a
+conservative ones (topology-exact stack bounds, closed-interval slab tests, destructive rebuilds)
+so validity is checkable instead of assumed. When a situation is not covered by a
 rule below, derive the answer from these four decisions.
 
 ### Public / Detail Split
@@ -73,11 +73,11 @@ rule below, derive the answer from these four decisions.
   during wide collapse. Host batch query launchers reject `StackCapacity` below the internal bound;
   packed ray traversal is selected only when the packed bound also fits.
 - Taylor moment supports `Order=0/1/2`.
-  Each `gwn_refit_bvh_moment<Order,...>` call does a full replace of the moment accessor.
+  Each `gwn_refit_bvh_moment<Order,...>` call destructively rebuilds the moment accessor.
 - A successful BVH refit advances its revision and makes existing moment objects stale. Refit each
   required moment order explicitly before its next query.
-- Accessors are trivially copyable snapshots of an object's device state. Any successful build,
-  refit, clear, or destruction invalidates previously copied accessors. `revision` is the
+- Accessors are trivially copyable snapshots of an object's device state. Any rebuild attempt,
+  successful refit, clear, or destruction invalidates previously copied accessors. `revision` is the
   alignment identity: zero means no published queryable BVH state, and moment validity requires
   `bvh_revision == bvh.revision` in addition to structural checks.
 - `accessor()` is mutable by design: it is the expert escape hatch for assembling custom
@@ -118,9 +118,10 @@ rule below, derive the answer from these four decisions.
   synchronization and matches the CCCL `cuda::buffer` model. Call `clear()` before `set_stream()`
   to release on the current binding, or establish cross-stream ordering before rebinding an
   allocation that remains owned.
-- Replacement operations preserve the invariant through staging and swap: the displaced
-  allocation keeps its old stream binding and is destroyed there, while the replacement adopts the
-  operation's stream. New replacement-style operations must follow this pattern.
+- Rebuild operations adopt the operation stream and release their old allocations there before
+  allocating the new result. The caller orders every prior use of the target before the rebuild.
+  On failure the target is empty and remains bound to the operation stream. Callers that need to
+  preserve an old result build into a separate object and move it after success.
 - Batch queries enqueue on the supplied stream and never synchronize with an object's bound stream.
   The caller orders producing work before the query and orders the query before any later mutation
   or release, or transfers the lifetime binding after establishing that dependency.
@@ -134,9 +135,11 @@ rule below, derive the answer from these four decisions.
 - `detail::gwn_device_array<T>` is an exception-based implementation buffer. It owns uninitialized
   typed device storage, remembers the lifetime stream, and releases through the stream allocator.
   Same-size `resize()` is a no-op that preserves the stream binding. Its stream-parameterized
-  operations (`clear(stream)`, `resize(count, stream)`) release or replace on the supplied stream;
-  the caller establishes ordering before supplying a different stream. Deallocation and lifetime
-  operations are `noexcept`; allocation, copy, and memset operations report failure by exception.
+  operations (`clear(stream)`, `resize(count, stream)`) release on the supplied stream before a new
+  exact-size allocation; the caller establishes ordering before supplying a different stream.
+  Resize does not preserve contents, and allocation failure after release leaves an empty array
+  bound to the supplied stream. Deallocation and lifetime operations are `noexcept`; allocation,
+  copy, and memset operations report failure by exception.
 - Public interfaces accept non-owning spans and never expose `detail::gwn_device_array`.
 
 ### Span Rules
@@ -199,7 +202,7 @@ boundaries, and local lambdas over deeply nested control flow.
 Do not reinvent project-provided mechanisms. Use `gwn_noncopyable`, `gwn_stream_mixin`,
 `gwn_status`, `GWN_RETURN_ON_ERROR`, `detail::gwn_device_array`, `gwn_scope_exit`, and `gwn_assert`
 where applicable. If a pattern already exists in the codebase (factory function, accessor/object
-split, copy-and-swap), follow it.
+split, move-and-swap), follow it.
 
 ### KISS
 Prefer the simplest design that works. Do not add abstractions, virtual dispatch, or type erasure
@@ -234,11 +237,11 @@ may omit doxygen for trivial forwarding wrappers.
   function implementation may use status-returning primitives, but its `noexcept` seam must catch
   and translate every exception. Use `gwn_assert` for invariant violations (fatal, debug-only).
   Use `gwn_status` for recoverable or user-facing errors.
-- State guarantees: operations that replace whole objects (upload, build, moment refit, boundary
-  build) give the strong guarantee via staging and swap; failure preserves the previous object,
-  its data, and its stream binding. In-place mutations document their weaker contract explicitly
-  (`gwn_update_geometry` may leave some position components updated; a mid-refit failure leaves
-  the BVH unqueryable but releasable). New operations must state which guarantee they give.
+- State guarantees: operations that rebuild whole objects (upload, build, moment refit, boundary
+  build) clear the target on the operation stream before validation or allocation; failure leaves
+  the target empty on that stream. In-place mutations document their weaker contract explicitly
+  (`gwn_update_geometry` may leave some position components updated; a mid-refit failure leaves the
+  BVH unqueryable but releasable). New operations must state which guarantee they give.
 - `gwn_status` factories allocate their message strings inside `noexcept` functions: host allocation
   failure during error reporting terminates by design and is not a recoverable state.
 - `gwn_status` accessors and factories are `noexcept`; `gwn_throw_if_error` is the explicit

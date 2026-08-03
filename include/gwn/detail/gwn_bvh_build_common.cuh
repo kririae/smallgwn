@@ -378,6 +378,7 @@ void gwn_bvh_build_preprocess(
         geometry, scene, preprocess.sorted_primitive_indices, preprocess.sorted_morton_codes,
         preprocess.primitive_aabbs, preprocess.sorted_primitive_aabbs, stream
     );
+    preprocess.primitive_aabbs.clear(stream);
 }
 
 } // namespace detail

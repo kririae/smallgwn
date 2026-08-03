@@ -1,5 +1,6 @@
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -94,7 +95,7 @@ TYPED_TEST(GwnGeometryIndexTest, upload_and_position_update_preserve_geometry_co
     expect_upload_and_update_contract<TypeParam>();
 }
 
-TEST_F(GwnGeometryTest, failed_upload_preserves_previous_geometry) {
+TEST_F(GwnGeometryTest, failed_upload_clears_previous_geometry) {
     using Index = std::uint32_t;
     std::array<Real, 3> const x{0, 1, 0};
     std::array<Real, 3> const y{0, 0, 1};
@@ -127,8 +128,9 @@ TEST_F(GwnGeometryTest, failed_upload_preserves_previous_geometry) {
     );
     EXPECT_EQ(status.error(), gwn::gwn_error::invalid_argument);
     EXPECT_TRUE(geometry.accessor().is_valid());
-    EXPECT_EQ(geometry.vertex_count(), 3u);
-    EXPECT_EQ(copy_to_host(geometry.accessor().tri_i2), (std::vector<Index>{2}));
+    EXPECT_FALSE(geometry.has_data());
+    EXPECT_EQ(geometry.vertex_count(), 0u);
+    EXPECT_EQ(geometry.triangle_count(), 0u);
 }
 
 TEST_F(GwnGeometryTest, upload_and_update_reject_mismatched_spans) {
@@ -199,7 +201,7 @@ TEST_F(GwnGeometryTest, move_transfers_storage_and_clear_releases_it) {
     EXPECT_TRUE(destination.accessor().is_valid());
 }
 
-TEST_F(GwnGeometryStreamTest, replacement_releases_old_storage_on_its_bound_stream) {
+TEST_F(GwnGeometryStreamTest, destructive_upload_accepts_ordered_stream_transfer) {
     using Index = std::uint32_t;
     std::array<Real, 3> const x{Real(1), Real(2), Real(3)};
     std::array<Real, 3> const y{Real(4), Real(5), Real(6)};
@@ -225,18 +227,19 @@ TEST_F(GwnGeometryStreamTest, replacement_releases_old_storage_on_its_bound_stre
     output.resize(3, stream_a_);
     ASSERT_EQ(cudaSuccess, cudaStreamSynchronize(stream_a_));
 
-    cudaEvent_t release_event = nullptr;
-    ASSERT_EQ(cudaSuccess, cudaEventCreateWithFlags(&release_event, cudaEventDisableTiming));
-    auto const release_event_cleanup =
-        gwn::gwn_make_scope_exit([&]() noexcept { (void)cudaEventDestroy(release_event); });
-    ASSERT_EQ(cudaSuccess, cudaStreamWaitEvent(stream_a_, release_event));
+    cudaEvent_t use_complete = nullptr;
+    ASSERT_EQ(cudaSuccess, cudaEventCreateWithFlags(&use_complete, cudaEventDisableTiming));
+    auto const event_cleanup =
+        gwn::gwn_make_scope_exit([&]() noexcept { (void)cudaEventDestroy(use_complete); });
     auto const old_accessor = geometry.accessor();
     read_geometry_after_wait<<<1, 1, 0, stream_a_>>>(old_accessor, output.data());
     cudaError_t const launch_status = cudaGetLastError();
+    ASSERT_EQ(cudaSuccess, cudaEventRecord(use_complete, stream_a_));
+    ASSERT_EQ(cudaSuccess, cudaStreamWaitEvent(stream_b_, use_complete));
 
-    std::array<Real, 3> const replacement_x{Real(10), Real(11), Real(12)};
-    gwn::gwn_status const replacement_status = gwn::gwn_upload_geometry(
-        geometry, gwn::tests::host_span(cuda::std::span<Real const>(replacement_x)),
+    std::array<Real, 3> const rebuilt_x{Real(10), Real(11), Real(12)};
+    gwn::gwn_status const rebuild_status = gwn::gwn_upload_geometry(
+        geometry, gwn::tests::host_span(cuda::std::span<Real const>(rebuilt_x)),
         gwn::tests::host_span(cuda::std::span<Real const>(y)),
         gwn::tests::host_span(cuda::std::span<Real const>(z)),
         gwn::tests::host_span(cuda::std::span<Index const>(i0)),
@@ -245,14 +248,47 @@ TEST_F(GwnGeometryStreamTest, replacement_releases_old_storage_on_its_bound_stre
     );
 
     std::array<Real, 3> actual{};
-    cudaError_t const release_status = cudaEventRecord(release_event, stream_b_);
     output.copy_to_host(cuda::std::span<Real>(actual), stream_a_);
     ASSERT_EQ(cudaSuccess, launch_status);
-    ASSERT_TRUE(replacement_status.is_ok());
-    ASSERT_EQ(cudaSuccess, release_status);
+    ASSERT_TRUE(rebuild_status.is_ok());
     ASSERT_EQ(cudaSuccess, cudaStreamSynchronize(stream_a_));
     EXPECT_EQ(actual, (std::array<Real, 3>{x[0], y[0], z[0]}));
     EXPECT_EQ(geometry.stream(), stream_b_);
+}
+
+TEST_F(GwnGeometryStreamTest, allocation_failure_clears_previous_geometry) {
+    using Index = std::uint64_t;
+    gwn::tests::SingleTriangleMesh mesh;
+    gwn::gwn_geometry_object<Real, Index> geometry;
+    std::array<Index, 1> const i0{0};
+    std::array<Index, 1> const i1{1};
+    std::array<Index, 1> const i2{2};
+    ASSERT_TRUE(
+        gwn::gwn_upload_geometry(
+            geometry, gwn::tests::host_span(cuda::std::span<Real const>(mesh.vx)),
+            gwn::tests::host_span(cuda::std::span<Real const>(mesh.vy)),
+            gwn::tests::host_span(cuda::std::span<Real const>(mesh.vz)),
+            gwn::tests::host_span(cuda::std::span<Index const>(i0)),
+            gwn::tests::host_span(cuda::std::span<Index const>(i1)),
+            gwn::tests::host_span(cuda::std::span<Index const>(i2)), stream_a_
+        )
+            .is_ok()
+    );
+    ASSERT_EQ(cudaSuccess, cudaStreamSynchronize(stream_a_));
+
+    Real value = 0;
+    std::size_t constexpr impossible_count = std::numeric_limits<std::size_t>::max() / sizeof(Real);
+    gwn::gwn_host_span<Real const> const impossible_vertices(&value, impossible_count);
+    gwn::gwn_host_span<Index const> const empty_triangles{};
+    gwn::gwn_status const status = gwn::gwn_upload_geometry(
+        geometry, impossible_vertices, impossible_vertices, impossible_vertices, empty_triangles,
+        empty_triangles, empty_triangles, stream_b_
+    );
+
+    EXPECT_EQ(status.error(), gwn::gwn_error::cuda_runtime_error);
+    EXPECT_FALSE(geometry.has_data());
+    EXPECT_EQ(geometry.stream(), stream_b_);
+    (void)cudaGetLastError();
 }
 
 } // namespace

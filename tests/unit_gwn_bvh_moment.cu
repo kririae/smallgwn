@@ -122,7 +122,7 @@ TEST_F(GwnBvhMomentTest, moment_from_replaced_bvh_is_rejected) {
     gwn::gwn_bvh4_moment_object<1, Real, Index> moment{};
     ASSERT_TRUE(gwn::gwn_refit_bvh_moment<1>(bvh, moment).is_ok());
 
-    // Strong replacement allocates a new triangle sequence even when counts are unchanged.
+    // Every build publishes a new revision even when the geometry is unchanged.
     ASSERT_TRUE(gwn::gwn_build_bvh(geometry, bvh).is_ok());
     EXPECT_FALSE(moment.accessor().is_valid_for(bvh.accessor()));
 
@@ -223,7 +223,7 @@ TEST_F(GwnBvhMomentStreamTest, clear_resets_state_before_explicit_rebind) {
     EXPECT_EQ(moment.stream(), stream_b_);
 }
 
-TEST_F(GwnBvhMomentStreamTest, moment_replacement_preserves_old_stream_ordering) {
+TEST_F(GwnBvhMomentStreamTest, destructive_refit_accepts_ordered_stream_transfer) {
     gwn::gwn_geometry_object<Real, Index> geometry{};
     ASSERT_TRUE(upload_octahedron(geometry, stream_a_).is_ok());
     gwn::gwn_bvh4_object<Real, Index> bvh{};
@@ -251,8 +251,6 @@ TEST_F(GwnBvhMomentStreamTest, moment_replacement_preserves_old_stream_ordering)
         cudaSuccess, cudaMemsetAsync(query_z.data(), 0, query_z.size() * sizeof(Real), stream_a_)
     );
 
-    // Keep readers of the old coefficients queued on A while replacement is built on B. The old
-    // allocation must be released behind those readers on A, not on the replacement stream.
     ASSERT_TRUE((gwn::gwn_compute_winding_number_taylor_batch<0>(
                      bvh, moment, gwn::tests::device_span(query_x.span()),
                      gwn::tests::device_span(query_y.span()),
@@ -260,9 +258,33 @@ TEST_F(GwnBvhMomentStreamTest, moment_replacement_preserves_old_stream_ordering)
                      gwn::tests::device_span(output.span()), Real(2), stream_a_
     )
                      .is_ok()));
+    cudaEvent_t use_complete = nullptr;
+    ASSERT_EQ(cudaSuccess, cudaEventCreateWithFlags(&use_complete, cudaEventDisableTiming));
+    auto const event_cleanup =
+        gwn::gwn_make_scope_exit([&]() noexcept { (void)cudaEventDestroy(use_complete); });
+    ASSERT_EQ(cudaSuccess, cudaEventRecord(use_complete, stream_a_));
+    ASSERT_EQ(cudaSuccess, cudaStreamWaitEvent(stream_b_, use_complete));
     ASSERT_TRUE(gwn::gwn_refit_bvh_moment<0>(bvh, moment, stream_b_).is_ok());
     EXPECT_EQ(moment.stream(), stream_b_);
     EXPECT_TRUE(moment.accessor().is_valid_for(bvh.accessor()));
     EXPECT_EQ(cudaSuccess, cudaStreamSynchronize(stream_b_));
     EXPECT_EQ(cudaSuccess, cudaStreamSynchronize(stream_a_));
+}
+
+TEST_F(GwnBvhMomentStreamTest, failed_refit_clears_previous_moment) {
+    gwn::gwn_geometry_object<Real, Index> geometry{};
+    ASSERT_TRUE(upload_octahedron(geometry, stream_a_).is_ok());
+    gwn::gwn_bvh4_object<Real, Index> bvh{};
+    ASSERT_TRUE(gwn::gwn_build_bvh(geometry, bvh, {}, stream_a_).is_ok());
+    gwn::gwn_bvh4_moment_object<0, Real, Index> moment{};
+    ASSERT_TRUE(gwn::gwn_refit_bvh_moment<0>(bvh, moment, stream_a_).is_ok());
+    ASSERT_EQ(cudaSuccess, cudaStreamSynchronize(stream_a_));
+
+    gwn::gwn_bvh4_object<Real, Index> invalid_bvh{};
+    gwn::gwn_status const status = gwn::gwn_refit_bvh_moment<0>(invalid_bvh, moment, stream_b_);
+
+    EXPECT_EQ(status.error(), gwn::gwn_error::invalid_argument);
+    EXPECT_FALSE(moment.has_data());
+    EXPECT_TRUE(moment.accessor().nodes.empty());
+    EXPECT_EQ(moment.stream(), stream_b_);
 }

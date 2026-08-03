@@ -196,7 +196,7 @@ template <gwn_index_type Index>
 void gwn_build_boundary_chain_device_impl(
     std::size_t const mesh_vertex_count, cuda::std::span<Index const> const i0,
     cuda::std::span<Index const> const i1, cuda::std::span<Index const> const i2,
-    gwn_boundary_chain_accessor<Index> &staging, cudaStream_t const stream
+    gwn_boundary_chain_accessor<Index> &output, cudaStream_t const stream
 ) {
     std::size_t const triangle_count = i0.size();
     if (i1.size() != triangle_count || i2.size() != triangle_count)
@@ -209,11 +209,12 @@ void gwn_build_boundary_chain_device_impl(
 
     gwn_validate_triangle_indices_device_impl<Index>(i0, i1, i2, mesh_vertex_count, stream);
 
-    staging.mesh_vertex_count = mesh_vertex_count;
-    staging.mesh_triangle_count = triangle_count;
-    staging.is_built = true;
-    if (triangle_count == 0)
+    if (triangle_count == 0) {
+        output.mesh_vertex_count = mesh_vertex_count;
+        output.mesh_triangle_count = triangle_count;
+        output.is_built = true;
         return;
+    }
 
     if (triangle_count > (std::numeric_limits<std::size_t>::max() / 3))
         throw std::invalid_argument("Boundary chain triangle count is too large.");
@@ -244,14 +245,6 @@ void gwn_build_boundary_chain_device_impl(
     key_hi_out.resize(edge_count, stream);
     payload_hi_in.resize(edge_count, stream);
     payload_hi_out.resize(edge_count, stream);
-    key_lo_in.resize(edge_count, stream);
-    key_lo_out.resize(edge_count, stream);
-    payload_lo_in.resize(edge_count, stream);
-    payload_lo_out.resize(edge_count, stream);
-    boundary_head_markers.resize(edge_count, stream);
-    boundary_offsets.resize(edge_count, stream);
-    boundary_count_device.resize(1, stream);
-    boundary_head_markers.zero(stream);
 
     // Build one oriented row per triangle edge.
     gwn_throw_status_error(
@@ -274,6 +267,8 @@ void gwn_build_boundary_chain_device_impl(
         edge_count, stream
     );
 
+    key_lo_in.resize(edge_count, stream);
+    payload_lo_in.resize(edge_count, stream);
     gwn_throw_status_error(
         gwn_launch_linear_kernel<k_gwn_default_block_size>(
             edge_count,
@@ -286,12 +281,22 @@ void gwn_build_boundary_chain_device_impl(
             stream
         )
     );
+    key_hi_in.clear(stream);
+    key_hi_out.clear(stream);
+    payload_hi_in.clear(stream);
+    payload_hi_out.clear(stream);
 
+    key_lo_out.resize(edge_count, stream);
+    payload_lo_out.resize(edge_count, stream);
     gwn_boundary_chain_sort_pairs_impl(
         key_lo_in.data(), key_lo_out.data(), payload_lo_in.data(), payload_lo_out.data(),
         edge_count, stream
     );
+    key_lo_in.clear(stream);
+    payload_lo_in.clear(stream);
 
+    boundary_head_markers.resize(edge_count, stream);
+    boundary_head_markers.zero(stream);
     // Mark one head row for each edge with nonzero algebraic orientation.
     gwn_throw_status_error(
         gwn_launch_linear_kernel<k_gwn_default_block_size>(
@@ -307,6 +312,7 @@ void gwn_build_boundary_chain_device_impl(
     );
 
     std::size_t temp_bytes = 0;
+    boundary_count_device.resize(1, stream);
     gwn_throw_status_error(gwn_cuda_to_status(
         cub::DeviceReduce::Sum(
             nullptr, temp_bytes, boundary_head_markers.data(), boundary_count_device.data(),
@@ -325,18 +331,24 @@ void gwn_build_boundary_chain_device_impl(
     std::uint64_t boundary_count = 0;
     boundary_count_device.copy_to_host(cuda::std::span<std::uint64_t>(&boundary_count, 1), stream);
     gwn_throw_status_error(gwn_cuda_to_status(cudaStreamSynchronize(stream)));
+    reduce_temp.clear(stream);
+    boundary_count_device.clear(stream);
     if (boundary_count > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()))
         throw std::runtime_error("Boundary chain edge count overflow.");
 
     // Allocate the compact chain before scan maps heads to output rows.
     std::size_t const output_count = static_cast<std::size_t>(boundary_count);
-    gwn_allocate_span(staging.start_vertex, output_count, stream);
-    gwn_allocate_span(staging.end_vertex, output_count, stream);
-    gwn_allocate_span(staging.multiplicity, output_count, stream);
+    gwn_allocate_span(output.start_vertex, output_count, stream);
+    gwn_allocate_span(output.end_vertex, output_count, stream);
+    gwn_allocate_span(output.multiplicity, output_count, stream);
+    output.mesh_vertex_count = mesh_vertex_count;
+    output.mesh_triangle_count = triangle_count;
+    output.is_built = true;
     if (output_count == 0)
         return;
 
     temp_bytes = 0;
+    boundary_offsets.resize(edge_count, stream);
     gwn_throw_status_error(gwn_cuda_to_status(
         cub::DeviceScan::ExclusiveSum(
             nullptr, temp_bytes, boundary_head_markers.data(), boundary_offsets.data(),
@@ -362,29 +374,13 @@ void gwn_build_boundary_chain_device_impl(
                 edge_count,
                 boundary_head_markers.span(),
                 boundary_offsets.span(),
-                staging.start_vertex,
-                staging.end_vertex,
-                staging.multiplicity,
+                output.start_vertex,
+                output.end_vertex,
+                output.multiplicity,
             },
             stream
         )
     );
-}
-
-/// \brief Replace a boundary-chain accessor only after staging has built successfully.
-template <gwn_index_type Index>
-void gwn_replace_boundary_chain_accessor(
-    gwn_boundary_chain_accessor<Index> &target, std::size_t const mesh_vertex_count,
-    cuda::std::span<Index const> const i0, cuda::std::span<Index const> const i1,
-    cuda::std::span<Index const> const i2, cudaStream_t const stream
-) {
-    auto release = [](gwn_boundary_chain_accessor<Index> &accessor, cudaStream_t const s) noexcept {
-        gwn_release_boundary_chain_accessor(accessor, s);
-    };
-    auto build = [&](gwn_boundary_chain_accessor<Index> &staging) {
-        gwn_build_boundary_chain_device_impl(mesh_vertex_count, i0, i1, i2, staging, stream);
-    };
-    gwn_replace_accessor_with_staging(target, release, build, stream);
 }
 
 } // namespace detail
@@ -394,20 +390,22 @@ template <gwn_real_type Real, gwn_index_type Index>
     gwn_geometry_object<Real, Index> const &geometry, gwn_boundary_chain_object<Index> &out,
     cudaStream_t const stream
 ) noexcept {
+    out.set_stream(stream);
+    out.clear();
     return detail::gwn_try_translate_status("gwn_build_boundary_chain", [&]() -> gwn_status {
         auto const &accessor = geometry.accessor();
         if (!accessor.is_valid())
             return gwn_status::invalid_argument("Geometry object contains no queryable data.");
-        gwn_boundary_chain_object<Index> staging;
-        detail::gwn_replace_boundary_chain_accessor(
-            staging.accessor(), accessor.vertex_count(),
+        gwn_boundary_chain_object<Index> candidate;
+        candidate.set_stream(stream);
+        detail::gwn_build_boundary_chain_device_impl(
+            accessor.vertex_count(),
             cuda::std::span<Index const>(accessor.tri_i0.data(), accessor.tri_i0.size()),
             cuda::std::span<Index const>(accessor.tri_i1.data(), accessor.tri_i1.size()),
-            cuda::std::span<Index const>(accessor.tri_i2.data(), accessor.tri_i2.size()), stream
+            cuda::std::span<Index const>(accessor.tri_i2.data(), accessor.tri_i2.size()),
+            candidate.accessor(), stream
         );
-        staging.set_stream(stream);
-        swap(out, staging);
-        // The replaced chain stays bound to its old stream until staging destroys it.
+        swap(out, candidate);
         return gwn_status::ok();
     });
 }

@@ -23,6 +23,11 @@
 
 namespace gwn {
 
+/// \brief Upload Eigen vertex and triangle matrices into a geometry object.
+///
+/// The operation clears \p object on \p stream before validating or converting the matrices.
+/// On failure, \p object is empty and remains bound to \p stream.
+/// \remark The caller orders every prior use of \p object before \p stream.
 template <
     gwn_real_type Real = float, gwn_index_type Index = std::uint32_t, class DerivedV,
     class DerivedF>
@@ -30,6 +35,8 @@ template <
     gwn_geometry_object<Real, Index> &object, Eigen::MatrixBase<DerivedV> const &vertices,
     Eigen::MatrixBase<DerivedF> const &triangles, cudaStream_t const stream = gwn_default_stream()
 ) noexcept try {
+    object.set_stream(stream);
+    object.clear();
     if (vertices.cols() != 3 || triangles.cols() != 3)
         return gwn_status::invalid_argument("Eigen inputs must be Nx3 vertices and Mx3 triangles.");
 

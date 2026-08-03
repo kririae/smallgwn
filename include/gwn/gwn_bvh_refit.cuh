@@ -32,22 +32,25 @@ template <int Width, gwn_real_type Real, gwn_index_type Index>
 ///
 /// Triangle records provide the additive leaf moments and child-local bounds provide the
 /// far-field radius. The selected \p moment is fully replaced; other moment objects are not
-/// modified. On success \p moment is rebound to \p stream.
+/// modified. The operation clears \p moment on \p stream before validation or allocation. On
+/// failure, \p moment is empty and remains bound to \p stream.
+/// \remark The caller orders every prior use of \p moment before \p stream.
 template <int Order, int Width, gwn_real_type Real, gwn_index_type Index>
 [[nodiscard]] gwn_status gwn_refit_bvh_moment(
     gwn_bvh_object<Width, Real, Index> const &bvh,
     gwn_bvh_moment_object<Width, Order, Real, Index> &moment,
     cudaStream_t const stream = gwn_default_stream()
 ) noexcept {
-    gwn_bvh_moment_object<Width, Order, Real, Index> staging;
-    staging.set_stream(stream);
-    GWN_RETURN_ON_ERROR((detail::gwn_refit_bvh_moment_impl<Order, Width, Real, Index>(
-        bvh.accessor(), staging.accessor(), stream
-    )));
-    swap(moment, staging);
-    // staging owns the replaced moment and retains its original stream. Its destructor therefore
-    // releases old coefficients only after work already ordered on that stream.
-    return gwn_status::ok();
+    moment.set_stream(stream);
+    moment.clear();
+    return detail::gwn_try_translate_status("gwn_refit_bvh_moment", [&]() {
+        gwn_bvh_moment_object<Width, Order, Real, Index> candidate;
+        candidate.set_stream(stream);
+        detail::gwn_refit_bvh_moment_impl<Order, Width, Real, Index>(
+            bvh.accessor(), candidate.accessor(), stream
+        );
+        swap(moment, candidate);
+    });
 }
 
 } // namespace gwn

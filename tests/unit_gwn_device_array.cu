@@ -172,6 +172,20 @@ TEST(gwn_device_array, oversized_resize_throws_before_changing_empty_state) {
     EXPECT_EQ(array.stream(), gwn::gwn_default_stream());
 }
 
+TEST_F(GwnDeviceArrayTest, failed_size_changing_resize_leaves_empty_state) {
+    gwn::detail::gwn_device_array<float> array;
+    array.resize(1, stream_a_);
+    ASSERT_EQ(cudaSuccess, cudaStreamSynchronize(stream_a_));
+
+    std::size_t constexpr impossible_count =
+        std::numeric_limits<std::size_t>::max() / sizeof(float);
+    EXPECT_THROW(array.resize(impossible_count, stream_b_), gwn::detail::gwn_cuda_exception);
+    EXPECT_TRUE(array.empty());
+    EXPECT_EQ(array.data(), nullptr);
+    EXPECT_EQ(array.stream(), stream_b_);
+    (void)cudaGetLastError();
+}
+
 TEST(gwn_memory_copy, null_nonempty_storage_is_rejected) {
     float mutable_value = 0;
     float const const_value = 1;

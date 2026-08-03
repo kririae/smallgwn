@@ -80,7 +80,7 @@ public:
     /// \brief Move-construct by swapping with \p other.
     gwn_boundary_chain_object(gwn_boundary_chain_object &&other) noexcept { swap(*this, other); }
 
-    /// \brief Move-assign with copy-and-swap semantics.
+    /// \brief Move-assign storage and stream binding from \p other.
     gwn_boundary_chain_object &operator=(gwn_boundary_chain_object other) noexcept {
         swap(*this, other);
         return *this;
@@ -116,6 +116,10 @@ private:
 ///
 /// The output records the geometry vertex and triangle counts.  Use the chain
 /// with the geometry that produced it.
+///
+/// The operation clears \p out on \p stream before validation or allocation. On failure, \p out
+/// is empty and remains bound to \p stream.
+/// \remark The caller orders every prior use of \p out before \p stream.
 ///
 /// \return \c ok on success, or \c invalid_argument when \p geometry is invalid.
 template <gwn_real_type Real, gwn_index_type Index>

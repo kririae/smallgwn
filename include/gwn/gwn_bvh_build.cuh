@@ -30,7 +30,9 @@ struct gwn_bvh_build_options {
 ///
 /// The selected binary builder feeds a native child-AoS wide collapse. On success \p bvh owns
 /// bounds, packed hierarchy references, primitive order, and leaf-ordered triangle records, and
-/// is rebound to \p stream. Previous data is preserved when construction fails.
+/// is rebound to \p stream. The operation clears \p bvh on \p stream before validation or
+/// allocation. On failure, \p bvh is empty and remains bound to \p stream.
+/// \remark The caller orders every prior use of \p bvh before \p stream.
 template <
     int Width, gwn_real_type Real, gwn_index_type Index, gwn_index_type MortonCode = std::uint64_t>
 [[nodiscard]] gwn_status gwn_build_bvh(

@@ -119,6 +119,11 @@ Changing triangle indices or triangle count requires `gwn_build_bvh`. A build or
 previously copied BVH accessors. A BVH refit also leaves existing moment objects stale until they
 are refit.
 
+Upload, BVH build, boundary build, and moment refit are destructive rebuilds. They release the
+target's old allocations on the supplied stream before allocating the new result, and leave the
+target empty if they return an error. Order every prior use of the target before that stream. To
+preserve an old result across failure, build into a separate object and move it after success.
+
 ### Antipodal winding
 
 Antipodal winding also requires a boundary chain built from the same geometry:

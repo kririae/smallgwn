@@ -14,7 +14,7 @@ namespace gwn {
 namespace detail {
 
 template <gwn_real_type Real, gwn_index_type Index>
-void gwn_release_accessor(
+void gwn_release_geometry_accessor(
     gwn_geometry_accessor<Real, Index> &accessor, cudaStream_t const stream
 ) noexcept {
     gwn_free_span(accessor.tri_i2, stream);
@@ -98,54 +98,46 @@ void gwn_validate_triangle_indices_device_impl(
         throw std::invalid_argument("Triangle indices must be in [0, vertex_count).");
 }
 
-/// \brief Upload into staging storage and replace an accessor only after index validation.
+/// \brief Upload geometry into an empty accessor and validate its triangle indices.
 template <gwn_real_type Real, gwn_index_type Index>
-void gwn_upload_accessor(
+void gwn_upload_geometry_impl(
     gwn_geometry_accessor<Real, Index> &accessor, cuda::std::span<Real const> const x,
     cuda::std::span<Real const> const y, cuda::std::span<Real const> const z,
     cuda::std::span<Index const> const i0, cuda::std::span<Index const> const i1,
     cuda::std::span<Index const> const i2, cudaStream_t const stream
 ) {
-    auto const release = [&](gwn_geometry_accessor<Real, Index> &target, cudaStream_t s) noexcept {
-        gwn_release_accessor(target, s);
-    };
+    if (x.size() != y.size() || x.size() != z.size())
+        throw std::invalid_argument("Vertex SoA spans must have identical lengths.");
+    if (i0.size() != i1.size() || i0.size() != i2.size())
+        throw std::invalid_argument("Triangle SoA spans must have identical lengths.");
+    if (x.size() > static_cast<std::size_t>(std::numeric_limits<Index>::max()))
+        throw std::invalid_argument("Vertex count exceeds index type capacity.");
+    if (i0.size() > static_cast<std::size_t>(std::numeric_limits<Index>::max()))
+        throw std::invalid_argument("Triangle count exceeds index type capacity.");
+    if (!gwn_span_has_storage(x) || !gwn_span_has_storage(y) || !gwn_span_has_storage(z) ||
+        !gwn_span_has_storage(i0) || !gwn_span_has_storage(i1) || !gwn_span_has_storage(i2)) {
+        throw std::invalid_argument("Geometry spans must use non-null storage when non-empty.");
+    }
 
-    auto const build = [&](gwn_geometry_accessor<Real, Index> &staging) {
-        if (x.size() != y.size() || x.size() != z.size())
-            throw std::invalid_argument("Vertex SoA spans must have identical lengths.");
-        if (i0.size() != i1.size() || i0.size() != i2.size())
-            throw std::invalid_argument("Triangle SoA spans must have identical lengths.");
-        if (x.size() > static_cast<std::size_t>(std::numeric_limits<Index>::max()))
-            throw std::invalid_argument("Vertex count exceeds index type capacity.");
-        if (i0.size() > static_cast<std::size_t>(std::numeric_limits<Index>::max()))
-            throw std::invalid_argument("Triangle count exceeds index type capacity.");
-        if (!gwn_span_has_storage(x) || !gwn_span_has_storage(y) || !gwn_span_has_storage(z) ||
-            !gwn_span_has_storage(i0) || !gwn_span_has_storage(i1) || !gwn_span_has_storage(i2)) {
-            throw std::invalid_argument("Geometry spans must use non-null storage when non-empty.");
-        }
+    gwn_allocate_span(accessor.vertex_x, x.size(), stream);
+    gwn_allocate_span(accessor.vertex_y, y.size(), stream);
+    gwn_allocate_span(accessor.vertex_z, z.size(), stream);
+    gwn_allocate_span(accessor.tri_i0, i0.size(), stream);
+    gwn_allocate_span(accessor.tri_i1, i1.size(), stream);
+    gwn_allocate_span(accessor.tri_i2, i2.size(), stream);
 
-        gwn_allocate_span(staging.vertex_x, x.size(), stream);
-        gwn_allocate_span(staging.vertex_y, y.size(), stream);
-        gwn_allocate_span(staging.vertex_z, z.size(), stream);
-        gwn_allocate_span(staging.tri_i0, i0.size(), stream);
-        gwn_allocate_span(staging.tri_i1, i1.size(), stream);
-        gwn_allocate_span(staging.tri_i2, i2.size(), stream);
+    gwn_copy_h2d(accessor.vertex_x, x, stream);
+    gwn_copy_h2d(accessor.vertex_y, y, stream);
+    gwn_copy_h2d(accessor.vertex_z, z, stream);
+    gwn_copy_h2d(accessor.tri_i0, i0, stream);
+    gwn_copy_h2d(accessor.tri_i1, i1, stream);
+    gwn_copy_h2d(accessor.tri_i2, i2, stream);
 
-        gwn_copy_h2d(staging.vertex_x, x, stream);
-        gwn_copy_h2d(staging.vertex_y, y, stream);
-        gwn_copy_h2d(staging.vertex_z, z, stream);
-        gwn_copy_h2d(staging.tri_i0, i0, stream);
-        gwn_copy_h2d(staging.tri_i1, i1, stream);
-        gwn_copy_h2d(staging.tri_i2, i2, stream);
-
-        // Validate the copied indices before staging replaces the old accessor. Failure therefore
-        // preserves the previously queryable geometry and its stream binding.
-        gwn_validate_triangle_indices_device_impl<Index>(
-            staging.tri_i0, staging.tri_i1, staging.tri_i2, x.size(), stream
-        );
-    };
-
-    gwn_replace_accessor_with_staging(accessor, release, build, stream);
+    gwn_validate_triangle_indices_device_impl<Index>(
+        accessor.tri_i0, accessor.tri_i1, accessor.tri_i2, x.size(), stream
+    );
+    if (i0.empty())
+        gwn_throw_status_error(gwn_cuda_to_status(cudaStreamSynchronize(stream)));
 }
 
 /// \brief Enqueue same-size host position updates and bind their owning object for cleanup.
@@ -187,6 +179,8 @@ template <gwn_real_type Real, gwn_index_type Index>
     gwn_host_span<Index const> const i0, gwn_host_span<Index const> const i1,
     gwn_host_span<Index const> const i2, cudaStream_t const stream
 ) noexcept {
+    object.set_stream(stream);
+    object.clear();
     auto const x_span = detail::gwn_cuda_span_view_impl(x);
     auto const y_span = detail::gwn_cuda_span_view_impl(y);
     auto const z_span = detail::gwn_cuda_span_view_impl(z);
@@ -194,14 +188,12 @@ template <gwn_real_type Real, gwn_index_type Index>
     auto const i1_span = detail::gwn_cuda_span_view_impl(i1);
     auto const i2_span = detail::gwn_cuda_span_view_impl(i2);
     return detail::gwn_try_translate_status("gwn_upload_geometry", [&]() {
-        gwn_geometry_object<Real, Index> staging;
-        detail::gwn_upload_accessor(
-            staging.accessor(), x_span, y_span, z_span, i0_span, i1_span, i2_span, stream
+        gwn_geometry_object<Real, Index> candidate;
+        candidate.set_stream(stream);
+        detail::gwn_upload_geometry_impl(
+            candidate.accessor(), x_span, y_span, z_span, i0_span, i1_span, i2_span, stream
         );
-        staging.set_stream(stream);
-        swap(object, staging);
-        // staging now owns the replaced buffers and their original stream binding. Destruction
-        // therefore cannot free them ahead of work already queued on the old stream.
+        swap(object, candidate);
     });
 }
 

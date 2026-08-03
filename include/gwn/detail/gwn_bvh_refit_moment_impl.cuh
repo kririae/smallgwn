@@ -133,149 +133,137 @@ struct gwn_finalize_bvh_moment_refit_functor {
     }
 };
 
-/// \brief Construct one Taylor order in an empty staging accessor aligned to a canonical BVH.
+/// \brief Construct one Taylor order in an empty moment accessor aligned to a canonical BVH.
 template <int Order, int Width, gwn_real_type Real, gwn_index_type Index>
-[[nodiscard]] gwn_status gwn_refit_bvh_moment_impl(
+void gwn_refit_bvh_moment_impl(
     gwn_bvh_accessor<Width, Real, Index> const &bvh,
     gwn_bvh_moment_accessor<Width, Order, Real, Index> &moment,
     cudaStream_t const stream = cudaStreamLegacy
-) noexcept {
-    return gwn_try_translate_status("gwn_refit_bvh_moment_impl", [&]() -> gwn_status {
-        static_assert(
-            Order == 0 || Order == 1 || Order == 2,
-            "gwn_refit_bvh_moment supports Order 0, 1, and 2."
-        );
+) {
+    static_assert(
+        Order == 0 || Order == 1 || Order == 2, "gwn_refit_bvh_moment supports Order 0, 1, and 2."
+    );
 
-        if (!bvh.is_valid())
+    if (!bvh.is_valid())
+        gwn_bvh_invalid_argument(
+            k_gwn_bvh_phase_refit_moment, "BVH accessor is invalid for moment refit."
+        );
+    if (!moment.empty()) {
+        gwn_bvh_invalid_argument(
+            k_gwn_bvh_phase_refit_moment, "Moment refit output accessor must be empty."
+        );
+    }
+
+    auto const build_moment = [&](gwn_bvh_moment_accessor<Width, Order, Real, Index> &output) {
+        // The revision identifies this exact built or refit BVH state. It remains unique when
+        // cudaMallocAsync reuses storage, so stale coefficients cannot become valid again.
+        output.bvh_revision = bvh.revision;
+        if (bvh.has_leaf_root())
+            return;
+
+        std::size_t const node_count = bvh.nodes.size();
+        if (node_count >
+            std::numeric_limits<std::size_t>::max() / static_cast<std::size_t>(Width)) {
             gwn_bvh_invalid_argument(
-                k_gwn_bvh_phase_refit_moment, "BVH accessor is invalid for moment refit."
-            );
-        if (!moment.empty()) {
-            gwn_bvh_invalid_argument(
-                k_gwn_bvh_phase_refit_moment, "Moment refit output accessor must be empty."
+                k_gwn_bvh_phase_refit_moment, "BVH child count exceeds the addressable range."
             );
         }
-
-        auto const build_moment = [&](gwn_bvh_moment_accessor<Width, Order, Real, Index> &staging) {
-            // The revision identifies this exact built or refit BVH state. It remains unique when
-            // cudaMallocAsync reuses storage, so stale coefficients cannot become valid again.
-            staging.bvh_revision = bvh.revision;
-            if (bvh.has_leaf_root())
-                return;
-
-            std::size_t const node_count = bvh.nodes.size();
-            if (node_count >
-                std::numeric_limits<std::size_t>::max() / static_cast<std::size_t>(Width)) {
+        if constexpr (sizeof(Index) < sizeof(std::size_t)) {
+            if (node_count > static_cast<std::size_t>(std::numeric_limits<Index>::max())) {
                 gwn_bvh_invalid_argument(
-                    k_gwn_bvh_phase_refit_moment, "BVH child count exceeds the addressable range."
+                    k_gwn_bvh_phase_refit_moment,
+                    "BVH node count exceeds the moment refit's index range."
                 );
             }
-            if constexpr (sizeof(Index) < sizeof(std::size_t)) {
-                if (node_count > static_cast<std::size_t>(std::numeric_limits<Index>::max())) {
-                    gwn_bvh_invalid_argument(
-                        k_gwn_bvh_phase_refit_moment,
-                        "BVH node count exceeds the moment refit's index range."
-                    );
-                }
-            }
+        }
 
-            using traits = gwn_bvh_moment_refit_traits<Order, Width, Real, Index>;
-            using node_type = typename traits::output_node_type;
-            using payload_type = typename traits::payload_type;
-            std::size_t const child_count = node_count * static_cast<std::size_t>(Width);
+        using traits = gwn_bvh_moment_refit_traits<Order, Width, Real, Index>;
+        using node_type = typename traits::output_node_type;
+        using payload_type = typename traits::payload_type;
+        std::size_t const child_count = node_count * static_cast<std::size_t>(Width);
 
-            cuda::std::span<node_type> staging_nodes{};
-            gwn_allocate_span(staging_nodes, node_count, stream);
-            auto release_staging =
-                gwn_make_scope_exit([&]() noexcept { gwn_free_span(staging_nodes, stream); });
-            gwn_throw_status_error(gwn_cuda_to_status(cudaMemsetAsync(
-                staging_nodes.data(), 0, staging_nodes.size() * sizeof(node_type), stream
-            )));
+        cuda::std::span<node_type> staging_nodes{};
+        gwn_allocate_span(staging_nodes, node_count, stream);
+        auto release_staging =
+            gwn_make_scope_exit([&]() noexcept { gwn_free_span(staging_nodes, stream); });
+        gwn_throw_status_error(gwn_cuda_to_status(cudaMemsetAsync(
+            staging_nodes.data(), 0, staging_nodes.size() * sizeof(node_type), stream
+        )));
 
-            gwn_device_array<Index> parent{};
-            gwn_device_array<std::uint32_t> parent_slot{};
-            gwn_device_array<std::uint32_t> arity{};
-            gwn_device_array<unsigned int> arrivals{};
-            gwn_device_array<payload_type> pending{};
-            gwn_device_array<unsigned int> error_flag{};
-            parent.resize(node_count, stream);
-            parent_slot.resize(node_count, stream);
-            arity.resize(node_count, stream);
-            arrivals.resize(node_count, stream);
-            pending.resize(child_count, stream);
-            error_flag.resize(1, stream);
-            gwn_throw_status_error(gwn_cuda_to_status(
-                cudaMemsetAsync(parent.data(), 0xff, parent.size() * sizeof(Index), stream)
-            ));
-            gwn_throw_status_error(gwn_cuda_to_status(cudaMemsetAsync(
-                parent_slot.data(), 0xff, parent_slot.size() * sizeof(std::uint32_t), stream
-            )));
-            arity.zero(stream);
-            arrivals.zero(stream);
-            pending.zero(stream);
-            error_flag.zero(stream);
+        gwn_device_array<Index> parent{};
+        gwn_device_array<std::uint32_t> parent_slot{};
+        gwn_device_array<std::uint32_t> arity{};
+        gwn_device_array<unsigned int> arrivals{};
+        gwn_device_array<payload_type> pending{};
+        gwn_device_array<unsigned int> error_flag{};
+        parent.resize(node_count, stream);
+        parent_slot.resize(node_count, stream);
+        arity.resize(node_count, stream);
+        arrivals.resize(node_count, stream);
+        pending.resize(child_count, stream);
+        error_flag.resize(1, stream);
+        gwn_throw_status_error(gwn_cuda_to_status(
+            cudaMemsetAsync(parent.data(), 0xff, parent.size() * sizeof(Index), stream)
+        ));
+        gwn_throw_status_error(gwn_cuda_to_status(cudaMemsetAsync(
+            parent_slot.data(), 0xff, parent_slot.size() * sizeof(std::uint32_t), stream
+        )));
+        arity.zero(stream);
+        arrivals.zero(stream);
+        pending.zero(stream);
+        error_flag.zero(stream);
 
-            gwn_bvh_refit_state<Index> const state{
-                parent.span(), parent_slot.span(), arity.span(), arrivals.span()
-            };
-            constexpr int k_block_size = k_gwn_default_block_size;
-            // Preparation reconstructs parent links, propagation computes one additive payload per
-            // child slot, and finalization recentres those payloads into the stored coefficients.
-            gwn_throw_status_error(
-                gwn_launch_linear_kernel<k_block_size>(
-                    node_count,
-                    gwn_prepare_bvh_refit_functor<Width, Real, Index>{
-                        bvh, state, error_flag.data()
-                    },
-                    stream
-                )
-            );
-            gwn_throw_status_error(
-                gwn_launch_linear_kernel<k_block_size>(
-                    child_count,
-                    gwn_refit_bvh_moment_from_leaves_functor<Order, Width, Real, Index>{
-                        bvh, state, pending.span(), error_flag.data()
-                    },
-                    stream
-                )
-            );
-            gwn_throw_status_error(
-                gwn_launch_linear_kernel<k_block_size>(
-                    node_count,
-                    gwn_finalize_bvh_moment_refit_functor<Order, Width, Real, Index>{
-                        bvh,
-                        state,
-                        cuda::std::span<payload_type const>(pending.data(), pending.size()),
-                        typename traits::output_context{staging_nodes},
-                        error_flag.data(),
-                    },
-                    stream
-                )
-            );
-
-            unsigned int host_error = 0;
-            gwn_throw_status_error(gwn_cuda_to_status(cudaMemcpyAsync(
-                &host_error, error_flag.data(), sizeof(host_error), cudaMemcpyDeviceToHost, stream
-            )));
-            gwn_throw_status_error(gwn_cuda_to_status(cudaStreamSynchronize(stream)));
-            if (host_error != 0u)
-                gwn_bvh_internal_error(
-                    k_gwn_bvh_phase_refit_moment, "Bottom-up moment refit did not converge."
-                );
-
-            staging.nodes = staging_nodes;
-            release_staging.release();
+        gwn_bvh_refit_state<Index> const state{
+            parent.span(), parent_slot.span(), arity.span(), arrivals.span()
         };
+        constexpr int k_block_size = k_gwn_default_block_size;
+        // Preparation reconstructs parent links, propagation computes one additive payload per
+        // child slot, and finalization recentres those payloads into the stored coefficients.
+        gwn_throw_status_error(
+            gwn_launch_linear_kernel<k_block_size>(
+                node_count,
+                gwn_prepare_bvh_refit_functor<Width, Real, Index>{bvh, state, error_flag.data()},
+                stream
+            )
+        );
+        gwn_throw_status_error(
+            gwn_launch_linear_kernel<k_block_size>(
+                child_count,
+                gwn_refit_bvh_moment_from_leaves_functor<Order, Width, Real, Index>{
+                    bvh, state, pending.span(), error_flag.data()
+                },
+                stream
+            )
+        );
+        gwn_throw_status_error(
+            gwn_launch_linear_kernel<k_block_size>(
+                node_count,
+                gwn_finalize_bvh_moment_refit_functor<Order, Width, Real, Index>{
+                    bvh,
+                    state,
+                    cuda::std::span<payload_type const>(pending.data(), pending.size()),
+                    typename traits::output_context{staging_nodes},
+                    error_flag.data(),
+                },
+                stream
+            )
+        );
 
-        gwn_bvh_moment_accessor<Width, Order, Real, Index> staging{};
-        auto release_staging = gwn_make_scope_exit([&]() noexcept {
-            gwn_release_bvh_moment_accessor(staging, stream);
-        });
-        build_moment(staging);
-        moment = staging;
+        unsigned int host_error = 0;
+        gwn_throw_status_error(gwn_cuda_to_status(cudaMemcpyAsync(
+            &host_error, error_flag.data(), sizeof(host_error), cudaMemcpyDeviceToHost, stream
+        )));
+        gwn_throw_status_error(gwn_cuda_to_status(cudaStreamSynchronize(stream)));
+        if (host_error != 0u)
+            gwn_bvh_internal_error(
+                k_gwn_bvh_phase_refit_moment, "Bottom-up moment refit did not converge."
+            );
+
+        output.nodes = staging_nodes;
         release_staging.release();
-        return gwn_status::ok();
-    });
+    };
+
+    build_moment(moment);
 }
 
 } // namespace detail

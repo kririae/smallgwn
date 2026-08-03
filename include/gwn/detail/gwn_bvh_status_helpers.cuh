@@ -8,7 +8,6 @@
 #include <type_traits>
 #include <utility>
 
-#include "../gwn_bvh.cuh"
 #include "gwn_utils.cuh"
 
 namespace gwn {
@@ -71,22 +70,6 @@ gwn_try_translate_status(char const *const function_name, Function &&function) n
             std::string{"Unhandled unknown exception in "} + function_name + "."
         );
     }
-}
-
-/// \brief Build an accessor off to the side and publish it only after complete success.
-template <class Accessor, class ReleaseFunction, class BuildFunction>
-void gwn_replace_accessor_with_staging(
-    Accessor &target_accessor, ReleaseFunction &&release_function, BuildFunction &&build_function,
-    cudaStream_t const stream
-) {
-    Accessor staging_accessor{};
-    auto cleanup_staging_accessor =
-        gwn_make_scope_exit([&]() noexcept { release_function(staging_accessor, stream); });
-
-    build_function(staging_accessor);
-    release_function(target_accessor, stream);
-    target_accessor = staging_accessor;
-    cleanup_staging_accessor.release();
 }
 
 } // namespace detail
