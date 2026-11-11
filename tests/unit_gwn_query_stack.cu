@@ -187,8 +187,10 @@ gwn::gwn_status setup_query_stack_context(query_stack_context &ctx) {
     for (std::size_t triangle_index = 0; triangle_index < triangles.size(); ++triangle_index) {
         auto &triangle = triangles[triangle_index];
         triangle.v0_z = static_cast<Real>(triangle_index);
-        triangle.e1_x = Real(1);
-        triangle.e2_y = Real(1);
+        triangle.v1_x = Real(1);
+        triangle.v1_z = static_cast<Real>(triangle_index);
+        triangle.v2_y = Real(1);
+        triangle.v2_z = static_cast<Real>(triangle_index);
     }
 
     auto &bvh = ctx.bvh.accessor();

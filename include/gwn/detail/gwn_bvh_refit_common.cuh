@@ -128,12 +128,12 @@ __device__ inline bool gwn_compute_triangle_taylor_raw_moment(
     Real const ax = triangle.v0_x;
     Real const ay = triangle.v0_y;
     Real const az = triangle.v0_z;
-    Real const bx = ax + triangle.e1_x;
-    Real const by = ay + triangle.e1_y;
-    Real const bz = az + triangle.e1_z;
-    Real const cx = ax + triangle.e2_x;
-    Real const cy = ay + triangle.e2_y;
-    Real const cz = az + triangle.e2_z;
+    Real const bx = triangle.v1_x;
+    Real const by = triangle.v1_y;
+    Real const bz = triangle.v1_z;
+    Real const cx = triangle.v2_x;
+    Real const cy = triangle.v2_y;
+    Real const cz = triangle.v2_z;
 
     Real const average_x = (ax + bx + cx) / Real(3);
     Real const average_y = (ay + by + cy) / Real(3);

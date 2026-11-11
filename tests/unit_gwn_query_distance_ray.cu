@@ -640,8 +640,10 @@ TEST_F(GwnQueryDistanceRayTest, exact_stack_bound_accepts_single_internal_child_
     for (std::size_t triangle_index = 0; triangle_index < triangles.size(); ++triangle_index) {
         auto &triangle = triangles[triangle_index];
         triangle.v0_z = static_cast<Real>(triangle_index);
-        triangle.e1_x = Real(1);
-        triangle.e2_y = Real(1);
+        triangle.v1_x = Real(1);
+        triangle.v1_z = static_cast<Real>(triangle_index);
+        triangle.v2_y = Real(1);
+        triangle.v2_z = static_cast<Real>(triangle_index);
     }
 
     gwn::gwn_bvh4_object<Real, Index> bvh;

@@ -63,8 +63,10 @@ rule below, derive the answer from these four decisions.
 
 ### BVH
 - `gwn_bvh_object` owns one canonical query structure: child-AoS bounds and references, primitive
-  order, and leaf-ordered triangle records. Moment objects remain independent field-SoA payloads
-  aligned to one BVH revision.
+  order, and leaf-ordered triangle records. Triangle records store bitwise copies of the three
+  geometry vertex positions, never edge offsets, so every consumer of a shared vertex observes the
+  same coordinates. Moment objects remain independent field-SoA payloads aligned to one BVH
+  revision.
 - Public API split: `gwn_bvh_build.cuh` builds the canonical BVH and `gwn_bvh_refit.cuh` refits
   geometry-derived BVH data or one moment order.
 - `gwn_build_bvh` exposes H-PLOC by default and LBVH through `gwn_bvh_build_options`; H-PLOC's
@@ -94,8 +96,14 @@ rule below, derive the answer from these four decisions.
 - Ray first-hit returns `gwn_ray_first_hit_result`: `t`, original primitive ID, second/third
   barycentric weights, three scalar components of the unnormalized oriented geometric normal, and
   hit/miss/overflow status.
-- Antipodal winding and gradient queries retry coordinate axes when a projected boundary edge is
-  singular.
+- Antipodal winding casts one `+Z` ray and decides every degeneracy under one Z-dominant
+  symbolic perturbation of the query, so a query on the surface returns the perturbed value
+  instead of NaN. Uncertified rounded predicates report `k_fallback_required`; the batch reruns
+  only those outputs in a second kernel, so Antipodal batch outputs must not overlap the query
+  spans.
+- The Antipodal gradient is the Biot-Savart field of the boundary chain. It returns NaN on the
+  boundary curve, while per-triangle sums of the shared edge term give zero there so interior
+  edges cancel.
 - Taylor batch queries reject negative and NaN `accuracy_scale` values. Increasing a valid scale
   descends more children.
 - Query batch launch configuration is the structural NTTP `gwn_query_batch_config`. Its default

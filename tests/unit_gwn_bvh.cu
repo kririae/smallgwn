@@ -130,12 +130,12 @@ TEST_F(GwnBvhTest, default_build_produces_a_complete_leaf_root) {
     EXPECT_EQ(triangles[0].v0_x, Real(0));
     EXPECT_EQ(triangles[0].v0_y, Real(0));
     EXPECT_EQ(triangles[0].v0_z, Real(0));
-    EXPECT_EQ(triangles[0].e1_x, Real(1));
-    EXPECT_EQ(triangles[0].e1_y, Real(0));
-    EXPECT_EQ(triangles[0].e1_z, Real(0));
-    EXPECT_EQ(triangles[0].e2_x, Real(0));
-    EXPECT_EQ(triangles[0].e2_y, Real(1));
-    EXPECT_EQ(triangles[0].e2_z, Real(0));
+    EXPECT_EQ(triangles[0].v1_x, Real(1));
+    EXPECT_EQ(triangles[0].v1_y, Real(0));
+    EXPECT_EQ(triangles[0].v1_z, Real(0));
+    EXPECT_EQ(triangles[0].v2_x, Real(0));
+    EXPECT_EQ(triangles[0].v2_y, Real(1));
+    EXPECT_EQ(triangles[0].v2_z, Real(0));
 }
 
 TEST_F(GwnBvhTest, build_produces_complete_query_records) {
@@ -203,12 +203,12 @@ TEST_F(GwnBvhTest, build_produces_complete_query_records) {
         EXPECT_EQ(triangle.v0_x, v0[0]);
         EXPECT_EQ(triangle.v0_y, v0[1]);
         EXPECT_EQ(triangle.v0_z, v0[2]);
-        EXPECT_EQ(triangle.e1_x, v1[0] - v0[0]);
-        EXPECT_EQ(triangle.e1_y, v1[1] - v0[1]);
-        EXPECT_EQ(triangle.e1_z, v1[2] - v0[2]);
-        EXPECT_EQ(triangle.e2_x, v2[0] - v0[0]);
-        EXPECT_EQ(triangle.e2_y, v2[1] - v0[1]);
-        EXPECT_EQ(triangle.e2_z, v2[2] - v0[2]);
+        EXPECT_EQ(triangle.v1_x, v1[0]);
+        EXPECT_EQ(triangle.v1_y, v1[1]);
+        EXPECT_EQ(triangle.v1_z, v1[2]);
+        EXPECT_EQ(triangle.v2_x, v2[0]);
+        EXPECT_EQ(triangle.v2_y, v2[1]);
+        EXPECT_EQ(triangle.v2_z, v2[2]);
         ++leaf_count;
     }
 
@@ -277,12 +277,12 @@ TEST_F(GwnBvhTest, refit_replaces_geometry_data_and_preserves_primitive_order) {
         EXPECT_EQ(triangle.v0_x, x[v0]);
         EXPECT_EQ(triangle.v0_y, y[v0]);
         EXPECT_EQ(triangle.v0_z, z[v0]);
-        EXPECT_EQ(triangle.e1_x, x[v1] - x[v0]);
-        EXPECT_EQ(triangle.e1_y, y[v1] - y[v0]);
-        EXPECT_EQ(triangle.e1_z, z[v1] - z[v0]);
-        EXPECT_EQ(triangle.e2_x, x[v2] - x[v0]);
-        EXPECT_EQ(triangle.e2_y, y[v2] - y[v0]);
-        EXPECT_EQ(triangle.e2_z, z[v2] - z[v0]);
+        EXPECT_EQ(triangle.v1_x, x[v1]);
+        EXPECT_EQ(triangle.v1_y, y[v1]);
+        EXPECT_EQ(triangle.v1_z, z[v1]);
+        EXPECT_EQ(triangle.v2_x, x[v2]);
+        EXPECT_EQ(triangle.v2_y, y[v2]);
+        EXPECT_EQ(triangle.v2_z, z[v2]);
     }
 }
 
@@ -452,12 +452,12 @@ TEST_F(GwnBvhStreamTest, refit_rejects_topology_change_without_mutating_bvh) {
     EXPECT_EQ(triangle_after.v0_x, triangle_before.v0_x);
     EXPECT_EQ(triangle_after.v0_y, triangle_before.v0_y);
     EXPECT_EQ(triangle_after.v0_z, triangle_before.v0_z);
-    EXPECT_EQ(triangle_after.e1_x, triangle_before.e1_x);
-    EXPECT_EQ(triangle_after.e1_y, triangle_before.e1_y);
-    EXPECT_EQ(triangle_after.e1_z, triangle_before.e1_z);
-    EXPECT_EQ(triangle_after.e2_x, triangle_before.e2_x);
-    EXPECT_EQ(triangle_after.e2_y, triangle_before.e2_y);
-    EXPECT_EQ(triangle_after.e2_z, triangle_before.e2_z);
+    EXPECT_EQ(triangle_after.v1_x, triangle_before.v1_x);
+    EXPECT_EQ(triangle_after.v1_y, triangle_before.v1_y);
+    EXPECT_EQ(triangle_after.v1_z, triangle_before.v1_z);
+    EXPECT_EQ(triangle_after.v2_x, triangle_before.v2_x);
+    EXPECT_EQ(triangle_after.v2_y, triangle_before.v2_y);
+    EXPECT_EQ(triangle_after.v2_z, triangle_before.v2_z);
 }
 
 TEST_F(GwnBvhStreamTest, failed_in_place_refit_retains_clear_and_rebuild_paths) {

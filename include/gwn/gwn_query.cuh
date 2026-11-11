@@ -446,12 +446,25 @@ template <
 
 /// \brief Compute Antipodal winding number for one query point.
 ///
-/// The query evaluates the signed ray-crossing term and the boundary spherical
-/// area term from Martens et al. Retry order is `+Z`, `+X`, `+Y`. When all
-/// three axes are singular, the result is NaN. Traversal overflow invokes
-/// \p overflow_callback and returns NaN when the callback returns. All accessors must be valid;
-/// \p boundary_chain must come from \p geometry's topology, and \p bvh must represent the same
-/// geometry state.
+/// The query evaluates the signed crossing count of a `+Z` ray and the boundary spherical-area
+/// term from Martens et al. Integer decisions use exact predicates on the query-relative
+/// coordinates `vertex - query`, each rounded once to `Real`, under one symbolic perturbation of
+/// the query, dominated by `+Z`, then `+X`, then `+Y`. Rays through shared edges or vertices are
+/// therefore counted once at any distance, and a query on the surface receives the value of the
+/// perturbed query instead of NaN. The floating boundary sum approximates the winding number of
+/// that rounded mesh; coordinate rounding can change the side assigned to queries near the
+/// original surface. Rounded predicates certified by error bounds handle almost every query. An
+/// uncertified predicate, or a query on an open mesh whose coordinates cannot rule out underflow
+/// in the boundary term (an x or y coordinate near zero), reruns the query out of line with exact
+/// fallbacks, which raises the register allocation of the calling kernel.
+///
+/// Exactness assumes round-to-nearest arithmetic with gradual underflow, so `--use_fast_math` and
+/// `-ftz=true` are unsupported. Float coordinates are exact for every finite query-relative
+/// value. Double coordinates are exact while the nonzero query-relative coordinates of each
+/// vertex lie within a factor of 2^300 of each other. A query whose offsets from the BVH bounds
+/// overflow returns NaN. Traversal overflow invokes \p overflow_callback at most once and returns
+/// NaN when the callback returns. All accessors must be valid; \p boundary_chain must come from
+/// \p geometry's topology, and \p bvh must represent the same geometry state.
 ///
 /// Reference: Martens, Trettner, and Bessmeltsev, "The Antipodal Method:
 /// Fast, Accurate, and Robust 3D Generalized Winding Numbers," ACM TOG 45(4),
@@ -485,11 +498,15 @@ template <
 /// \brief Compute Antipodal winding numbers for a batch.
 ///
 /// The query evaluates the signed ray-crossing term and the boundary spherical
-/// area term from Martens et al. Retry order is `+Z`, `+X`, `+Y`. Queries with
-/// three singular axes write NaN. Overflowed queries also write NaN when their
-/// callbacks return. The boundary chain must come from the geometry's topology, and the BVH must
-/// represent the same geometry state; structural counts are validated before launch. \c Config
-/// controls the launch block size and traversal stack capacity.
+/// area term from Martens et al. with the exact predicates, perturbation, and arithmetic
+/// preconditions described in \ref gwn_winding_number_antipodal. A first kernel runs the rounded
+/// pass; a second kernel on the same stream reruns only the queries it could not certify, so the
+/// rounded kernel keeps its register allocation. \p device_output must not overlap the query
+/// spans, because the second kernel rereads them. Overflowed queries write NaN when their
+/// callbacks return, and each query invokes the callback at most once. The boundary chain must
+/// come from the geometry's topology, and the BVH must represent the same geometry state;
+/// structural counts are validated before launch. \c Config controls the launch block size and
+/// traversal stack capacity.
 ///
 /// Reference: Martens, Trettner, and Bessmeltsev, "The Antipodal Method:
 /// Fast, Accurate, and Robust 3D Generalized Winding Numbers," ACM TOG 45(4),
@@ -540,12 +557,29 @@ template <
             "Query/output spans require non-null storage when non-empty."
         );
     }
+    auto const overlaps_output = [&](cuda::std::span<Real const> const query) noexcept {
+        auto const output_begin = reinterpret_cast<std::uintptr_t>(output.data());
+        auto const query_begin = reinterpret_cast<std::uintptr_t>(query.data());
+        return query_begin < output_begin + output.size_bytes() &&
+               output_begin < query_begin + query.size_bytes();
+    };
+    if (overlaps_output(query_x) || overlaps_output(query_y) || overlaps_output(query_z))
+        return gwn_status::invalid_argument("Antipodal output span overlaps a query span.");
     if (output.empty())
         return gwn_status::ok();
 
-    return detail::gwn_launch_linear_kernel<Config.block_size>(
+    GWN_RETURN_ON_ERROR((detail::gwn_launch_linear_kernel<Config.block_size>(
         output.size(),
         detail::gwn_winding_number_antipodal_batch_functor<
+            Width, Real, Index, Config.stack_capacity, OverflowCallback>{
+            geometry_accessor, bvh_accessor, boundary_accessor, query_x, query_y, query_z, output,
+            overflow_callback
+        },
+        stream
+    )));
+    return detail::gwn_launch_linear_kernel<Config.block_size>(
+        output.size(),
+        detail::gwn_winding_number_antipodal_fallback_batch_functor<
             Width, Real, Index, Config.stack_capacity, OverflowCallback>{
             geometry_accessor, bvh_accessor, boundary_accessor, query_x, query_y, query_z, output,
             overflow_callback
@@ -556,10 +590,17 @@ template <
 
 /// \brief Compute Antipodal winding gradient for one query point.
 ///
-/// The query differentiates the boundary spherical-area term from Martens et
-/// al. Retry order is `+Z`, `+X`, `+Y`. When all three axes are singular, the
-/// result is `(NaN, NaN, NaN)`. Both accessors must be valid, and \p boundary_chain must come from
-/// \p geometry's topology.
+/// The crossing count of the Antipodal winding number is locally constant, so the gradient is the
+/// derivative of the boundary spherical-area term from Martens et al. It is evaluated through the
+/// equivalent Biot-Savart field of the boundary chain, `+1/(4 pi)` times the sum over boundary
+/// edges of `multiplicity * (u x v) (1/|a| + 1/|b|) / (1 + u.v)`, where `a` and `b` are the
+/// query-relative edge endpoints with unit directions `u` and `v`. This form needs no ray axis and
+/// stays accurate near the vertical line through a boundary vertex, where the per-edge derivative
+/// of Supp. Alg. 1 cancels. The gradient is unbounded on the boundary curve, so a query on, or
+/// within rounding of, a boundary edge or vertex returns NaN. Edge terms stay accurate at any
+/// scale while the nonzero coordinates of each query-relative boundary vertex lie within a factor
+/// of about 2^49 (float) or 2^483 (double) of each other. Both accessors must be valid, and
+/// \p boundary_chain must come from \p geometry's topology.
 ///
 /// Reference: The Antipodal Method: Fast, Accurate, and Robust 3D Generalized
 /// Winding Numbers. https://doi.org/10.1145/3811323
@@ -585,11 +626,10 @@ template <gwn_real_type Real, gwn_index_type Index>
 
 /// \brief Compute Antipodal winding gradients for a batch.
 ///
-/// The query differentiates the boundary spherical-area term from Martens et
-/// al. Retry order is `+Z`, `+X`, `+Y`. Queries with three singular axes write
-/// `(NaN, NaN, NaN)`. The boundary chain must come from the geometry's topology; structural counts
-/// are validated before launch. \c Config controls the launch block size; its stack capacity is not
-/// applicable.
+/// Each query evaluates the boundary Biot-Savart field described in
+/// \ref gwn_winding_gradient_antipodal. The boundary chain must come from the geometry's topology;
+/// structural counts are validated before launch. \c Config controls the launch block size; its
+/// stack capacity is not applicable.
 ///
 /// Reference: The Antipodal Method: Fast, Accurate, and Robust 3D Generalized
 /// Winding Numbers. https://doi.org/10.1145/3811323
