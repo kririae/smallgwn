@@ -128,18 +128,12 @@ template <int StackCapacity> struct antipodal_crossing_functor {
         gwn::detail::gwn_query_vec3<Real> const query(
             query_x[query_id], query_y[query_id], query_z[query_id]
         );
-        auto const evaluate_axis = [&]<gwn::detail::gwn_antipodal_ray_axis RayAxis>() noexcept {
-            return gwn::detail::gwn_signed_ray_crossing_count_impl<4, Real, Index, StackCapacity>(
-                bvh, query, RayAxis
+        // The stage times the rounded pass; queries it cannot certify write NaN.
+        auto const result =
+            gwn::detail::gwn_signed_ray_crossing_count_impl<false, 4, Real, Index, StackCapacity>(
+                bvh, query
             );
-        };
-
-        auto result = evaluate_axis.template operator()<gwn::detail::gwn_antipodal_ray_axis::k_z>();
-        if (result.status == gwn::detail::gwn_antipodal_axis_result::k_singular)
-            result = evaluate_axis.template operator()<gwn::detail::gwn_antipodal_ray_axis::k_x>();
-        if (result.status == gwn::detail::gwn_antipodal_axis_result::k_singular)
-            result = evaluate_axis.template operator()<gwn::detail::gwn_antipodal_ray_axis::k_y>();
-        output[query_id] = result.status == gwn::detail::gwn_antipodal_axis_result::k_done
+        output[query_id] = result.status == gwn::detail::gwn_antipodal_status::k_done
                                ? result.value
                                : std::numeric_limits<Real>::quiet_NaN();
     }
@@ -187,18 +181,12 @@ struct antipodal_boundary_functor {
         gwn::detail::gwn_query_vec3<Real> const query(
             query_x[query_id], query_y[query_id], query_z[query_id]
         );
-        auto const evaluate_axis = [&]<gwn::detail::gwn_antipodal_ray_axis RayAxis>() noexcept {
-            return gwn::detail::gwn_antipodal_boundary_contribution_impl(
-                geometry, boundary_chain, query, RayAxis
-            );
-        };
-
-        auto result = evaluate_axis.template operator()<gwn::detail::gwn_antipodal_ray_axis::k_z>();
-        if (result.status == gwn::detail::gwn_antipodal_axis_result::k_singular)
-            result = evaluate_axis.template operator()<gwn::detail::gwn_antipodal_ray_axis::k_x>();
-        if (result.status == gwn::detail::gwn_antipodal_axis_result::k_singular)
-            result = evaluate_axis.template operator()<gwn::detail::gwn_antipodal_ray_axis::k_y>();
-        output[query_id] = result.status == gwn::detail::gwn_antipodal_axis_result::k_done
+        // The stage times the rounded boundary loop alone, without the query-level range check
+        // that routes a few queries to the fallback in the full Antipodal query.
+        auto const result = gwn::detail::gwn_antipodal_boundary_contribution_impl<false>(
+            geometry, boundary_chain, query
+        );
+        output[query_id] = result.status == gwn::detail::gwn_antipodal_status::k_done
                                ? result.value
                                : std::numeric_limits<Real>::quiet_NaN();
     }

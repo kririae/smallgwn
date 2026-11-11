@@ -54,8 +54,7 @@ template <gwn_real_type Real, gwn_index_type Index>
     // Derive the query record and its build/refit bounds from the same vertex loads. This keeps the
     // two stored representations consistent without re-reading geometry between computations.
     result.triangle = gwn_bvh_triangle<Real>{
-        v0_x,        v0_y,        v0_z,        v1_x - v0_x, v1_y - v0_y,
-        v1_z - v0_z, v2_x - v0_x, v2_y - v0_y, v2_z - v0_z,
+        v0_x, v0_y, v0_z, v1_x, v1_y, v1_z, v2_x, v2_y, v2_z,
     };
     result.bounds = gwn_aabb<Real>{
         std::min(v0_x, std::min(v1_x, v2_x)), std::min(v0_y, std::min(v1_y, v2_y)),

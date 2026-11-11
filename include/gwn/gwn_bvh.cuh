@@ -33,18 +33,20 @@ template <gwn_real_type Real> struct gwn_aabb {
 
 /// \brief Geometry record used by triangle-consuming BVH queries.
 ///
-/// Records follow BVH primitive order. Edges are stored relative to \c v0 so a query can load the
-/// complete triangle with nine contiguous scalars and without gathering vertex indices.
+/// Records follow BVH primitive order, so a query loads the complete triangle with nine contiguous
+/// scalars and without gathering vertex indices. Each vertex is a bitwise copy of its geometry
+/// position. Triangles that share a vertex therefore observe identical coordinates, which keeps
+/// Antipodal ray crossings watertight and consistent with boundary terms read from geometry.
 template <gwn_real_type Real> struct gwn_bvh_triangle {
     Real v0_x{}; ///< First vertex X coordinate.
     Real v0_y{}; ///< First vertex Y coordinate.
     Real v0_z{}; ///< First vertex Z coordinate.
-    Real e1_x{}; ///< X component of the edge from the first to the second vertex.
-    Real e1_y{}; ///< Y component of the edge from the first to the second vertex.
-    Real e1_z{}; ///< Z component of the edge from the first to the second vertex.
-    Real e2_x{}; ///< X component of the edge from the first to the third vertex.
-    Real e2_y{}; ///< Y component of the edge from the first to the third vertex.
-    Real e2_z{}; ///< Z component of the edge from the first to the third vertex.
+    Real v1_x{}; ///< Second vertex X coordinate.
+    Real v1_y{}; ///< Second vertex Y coordinate.
+    Real v1_z{}; ///< Second vertex Z coordinate.
+    Real v2_x{}; ///< Third vertex X coordinate.
+    Real v2_y{}; ///< Third vertex Y coordinate.
+    Real v2_z{}; ///< Third vertex Z coordinate.
 };
 
 /// \brief Bounds and packed hierarchy reference for one BVH child.

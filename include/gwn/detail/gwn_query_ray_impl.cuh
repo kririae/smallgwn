@@ -410,14 +410,8 @@ template <
             gwn_query_vec3<Real> geometric_normal{};
             auto const &triangle = bvh.triangles[static_cast<std::size_t>(sorted_index)];
             gwn_query_vec3<Real> const v0(triangle.v0_x, triangle.v0_y, triangle.v0_z);
-            gwn_query_vec3<Real> const v1(
-                triangle.v0_x + triangle.e1_x, triangle.v0_y + triangle.e1_y,
-                triangle.v0_z + triangle.e1_z
-            );
-            gwn_query_vec3<Real> const v2(
-                triangle.v0_x + triangle.e2_x, triangle.v0_y + triangle.e2_y,
-                triangle.v0_z + triangle.e2_z
-            );
+            gwn_query_vec3<Real> const v1(triangle.v1_x, triangle.v1_y, triangle.v1_z);
+            gwn_query_vec3<Real> const v2(triangle.v2_x, triangle.v2_y, triangle.v2_z);
             if (!gwn_ray_triangle_intersect_impl(
                     origin, direction, v0, v1, v2, t_min, best.t, t_hit, u_hit, v_hit,
                     geometric_normal

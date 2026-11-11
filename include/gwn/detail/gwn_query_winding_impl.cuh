@@ -15,10 +15,167 @@
 namespace gwn {
 namespace detail {
 
+/// \brief Smallest product magnitude that rounded solid-angle terms accept, `16 * min / epsilon`
+///        (new term: range floor).
+///
+/// Products above it are normal with room for the rounding of later sums, so their underflow
+/// errors stay negligible relative to the result.
+template <gwn_real_type Real>
+[[nodiscard]] __host__ __device__ constexpr Real gwn_query_range_floor_impl() noexcept {
+    return Real(16) * std::numeric_limits<Real>::min() / std::numeric_limits<Real>::epsilon();
+}
+
+/// \brief A vector rescaled by a power of two, together with the exponent removed from it.
+template <gwn_real_type Real> struct gwn_query_rescaled_vec3 {
+    gwn_query_vec3<Real> value{};
+    int exponent{0};
+};
+
+/// \brief Rescale a vector by the power of two that brings its largest magnitude into [1, 2).
+///
+/// Power-of-two scaling keeps every direction and sign, and it is exact unless a component far
+/// smaller than the largest one becomes subnormal. A zero vector is returned unchanged.
+template <gwn_real_type Real>
+[[nodiscard]] __device__ inline gwn_query_rescaled_vec3<Real>
+gwn_query_rescale_impl(gwn_query_vec3<Real> const &value) noexcept {
+    Real const extent = fmax(fmax(fabs(value.x), fabs(value.y)), fabs(value.z));
+    if (extent == Real(0))
+        return {value, 0};
+    int const exponent = ilogb(extent);
+    return {
+        gwn_query_vec3<Real>(
+            scalbn(value.x, -exponent), scalbn(value.y, -exponent), scalbn(value.z, -exponent)
+        ),
+        exponent
+    };
+}
+
+/// \brief Kahan's FMA evaluation of the 2x2 determinant `a_x * b_y - a_y * b_x`.
+///
+/// The second FMA recovers the exact rounding error of the right product, and the first rounds
+/// `a_x * b_y - right` once. Without underflow the relative error is at most twice the unit
+/// roundoff (Jeannerod, Louvet, and Muller 2013), so the rounded sign is exact, a zero means an
+/// exact zero, and the sign is antisymmetric under swapping the two columns. A plain FMA
+/// difference is not even antisymmetric.
+template <gwn_real_type Real>
+[[nodiscard]] __device__ inline Real gwn_query_kahan_determinant_impl(
+    Real const a_x, Real const a_y, Real const b_x, Real const b_y
+) noexcept {
+    Real const right = a_y * b_x;
+    return fma(a_x, b_y, -right) + fma(-a_y, b_x, right);
+}
+
+/// \brief Cross product whose components are Kahan FMA determinants.
+template <gwn_real_type Real>
+[[nodiscard]] __device__ inline gwn_query_vec3<Real>
+gwn_query_kahan_cross_impl(gwn_query_vec3<Real> const &a, gwn_query_vec3<Real> const &b) noexcept {
+    return {
+        gwn_query_kahan_determinant_impl(a.y, a.z, b.y, b.z),
+        gwn_query_kahan_determinant_impl(a.z, a.x, b.z, b.x),
+        gwn_query_kahan_determinant_impl(a.x, a.y, b.x, b.y),
+    };
+}
+
+/// \brief Evaluate one segment's solid-angle gradient from endpoints rescaled to unit magnitude.
+///
+/// The out-of-line path of \ref gwn_gradient_solid_angle_edge_impl for edges whose unscaled
+/// products could underflow or overflow, or that lie within rounding of the query's line. Unit
+/// directions and the cosine are scale free, so they come from the rescaled endpoints. The cross
+/// product's exponent and the two inverse lengths' exponents are restored only after the bounded
+/// angular factors multiply them, so a representable field is never lost to an intermediate that
+/// underflows or overflows. The rescaled products stay exact while the nonzero coordinates of each
+/// endpoint lie within a factor of `sqrt(1 / floor)` of each other (2^49 for float).
+template <bool SingularOnSegment, gwn_real_type Real>
+[[nodiscard]] __device__ __noinline__ gwn_query_vec3<Real>
+gwn_gradient_solid_angle_edge_rescaled_impl(
+    gwn_query_vec3<Real> const &a, gwn_query_vec3<Real> const &b
+) noexcept {
+    Real const nan = std::numeric_limits<Real>::quiet_NaN();
+    gwn_query_vec3<Real> const zero(Real(0), Real(0), Real(0));
+    gwn_query_vec3<Real> const singular =
+        SingularOnSegment ? gwn_query_vec3<Real>(nan, nan, nan) : zero;
+    auto const scaled_a = gwn_query_rescale_impl(a);
+    auto const scaled_b = gwn_query_rescale_impl(b);
+    Real const a_norm2 = gwn_query_dot(scaled_a.value, scaled_a.value);
+    Real const b_norm2 = gwn_query_dot(scaled_b.value, scaled_b.value);
+    if (a_norm2 == Real(0) || b_norm2 == Real(0))
+        return singular;
+
+    Real const inverse_a = rsqrt(a_norm2);
+    Real const inverse_b = rsqrt(b_norm2);
+    Real const inverse_norms = inverse_a * inverse_b;
+    Real const cosine = gwn_query_dot(scaled_a.value, scaled_b.value) * inverse_norms;
+    auto const cross =
+        gwn_query_rescale_impl(gwn_query_kahan_cross_impl(scaled_a.value, scaled_b.value));
+    if (cross.value.x == Real(0) && cross.value.y == Real(0) && cross.value.z == Real(0))
+        return cosine < Real(0) ? singular : zero;
+
+    // u x v is the rescaled cross product times 2^exponent times the inverse norms. For a nearly
+    // antiparallel pair, 1 + u.v cancels and equals |u x v|^2 / (1 - u.v), which leaves the unit
+    // cross direction times 2^-exponent.
+    Real const cross_norm = sqrt(gwn_query_dot(cross.value, cross.value));
+    gwn_query_vec3<Real> angular{};
+    int exponent = 0;
+    if (cosine >= Real(0)) {
+        angular = cross.value * (inverse_norms / (Real(1) + cosine));
+        exponent = cross.exponent;
+    } else {
+        angular = (cross.value / cross_norm) * ((Real(1) - cosine) / (cross_norm * inverse_norms));
+        exponent = -cross.exponent;
+    }
+    auto const restore = [](gwn_query_vec3<Real> const &value, int const shift) noexcept {
+        return gwn_query_vec3<Real>(
+            scalbn(value.x, shift), scalbn(value.y, shift), scalbn(value.z, shift)
+        );
+    };
+    return restore(angular * inverse_a, exponent - scaled_a.exponent) +
+           restore(angular * inverse_b, exponent - scaled_b.exponent);
+}
+
+/// \brief Solid-angle gradient contribution of one oriented segment (Biot-Savart formula).
+///
+/// For query-relative endpoints \p a and \p b with unit directions u and v, the segment
+/// contributes `(u x v) (1/|a| + 1/|b|) / (1 + u.v)` to the gradient of the signed solid angle.
+/// Summed over a closed chain, it is the gradient of the solid angle of any surface the chain
+/// bounds. The field vanishes on the segment's line beyond its endpoints and is unbounded on the
+/// segment itself, where \p SingularOnSegment selects NaN instead of zero. Per-triangle sums use
+/// zero, because the unbounded terms of an interior edge cancel between its two triangles.
+///
+/// The inline path accepts endpoint norms in the range-floor interval and a cross product whose
+/// largest component is above the range floor, with `|u x v|` above its square root. Every
+/// product then stays normal and every result finite. Other edges take the rescaled path.
+template <bool SingularOnSegment, gwn_real_type Real>
+[[nodiscard]] __device__ inline gwn_query_vec3<Real> gwn_gradient_solid_angle_edge_impl(
+    gwn_query_vec3<Real> const &a, gwn_query_vec3<Real> const &b
+) noexcept {
+    Real const lower = gwn_query_range_floor_impl<Real>();
+    Real const a_norm2 = gwn_query_dot(a, a);
+    Real const b_norm2 = gwn_query_dot(b, b);
+    if (fmin(a_norm2, b_norm2) >= lower && fmax(a_norm2, b_norm2) <= Real(1) / lower) {
+        Real const inverse_a = rsqrt(a_norm2);
+        Real const inverse_b = rsqrt(b_norm2);
+        Real const inverse_norms = inverse_a * inverse_b;
+        gwn_query_vec3<Real> const cross = gwn_query_kahan_cross_impl(a, b);
+        Real const cross_extent = fmax(fmax(fabs(cross.x), fabs(cross.y)), fabs(cross.z));
+        if (cross_extent >= lower && cross_extent * inverse_norms >= sqrt(lower)) {
+            gwn_query_vec3<Real> const unit_cross = cross * inverse_norms;
+            Real const cosine = gwn_query_dot(a, b) * inverse_norms;
+            Real const inverse_length_sum = inverse_a + inverse_b;
+            if (cosine >= Real(0))
+                return unit_cross * (inverse_length_sum / (Real(1) + cosine));
+            // 1 + u.v cancels for a nearly antiparallel pair, where it equals
+            // |u x v|^2 / (1 - u.v); |u x v| is bounded below, so its square stays normal.
+            return (unit_cross * ((Real(1) - cosine) / gwn_query_dot(unit_cross, unit_cross))) *
+                   inverse_length_sum;
+        }
+    }
+    return gwn_gradient_solid_angle_edge_rescaled_impl<SingularOnSegment>(a, b);
+}
+
 // Per-triangle gradient of solid angle (Biot-Savart formula).
 
 template <gwn_real_type Real>
-__host__ __device__ inline gwn_query_vec3<Real> gwn_gradient_solid_angle_triangle_impl(
+__device__ inline gwn_query_vec3<Real> gwn_gradient_solid_angle_triangle_impl(
     gwn_query_vec3<Real> const &a, gwn_query_vec3<Real> const &b, gwn_query_vec3<Real> const &c,
     gwn_query_vec3<Real> const &q
 ) noexcept {
@@ -26,35 +183,16 @@ __host__ __device__ inline gwn_query_vec3<Real> gwn_gradient_solid_angle_triangl
     gwn_query_vec3<Real> const gb = b - q;
     gwn_query_vec3<Real> const gc = c - q;
 
-    Real const la = gwn_query_norm(ga);
-    Real const lb = gwn_query_norm(gb);
-    Real const lc = gwn_query_norm(gc);
-
     gwn_query_vec3<Real> const zero(Real(0), Real(0), Real(0));
-    if (la == Real(0) || lb == Real(0) || lc == Real(0))
+    auto const is_zero = [](gwn_query_vec3<Real> const &value) noexcept {
+        return value.x == Real(0) && value.y == Real(0) && value.z == Real(0);
+    };
+    if (is_zero(ga) || is_zero(gb) || is_zero(gc))
         return zero;
 
-    gwn_query_vec3<Real> const ga_hat = ga / la;
-    gwn_query_vec3<Real> const gb_hat = gb / lb;
-    gwn_query_vec3<Real> const gc_hat = gc / lc;
-
-    auto edge_term = [](gwn_query_vec3<Real> const &gi, gwn_query_vec3<Real> const &gj,
-                        gwn_query_vec3<Real> const &gi_hat,
-                        gwn_query_vec3<Real> const &gj_hat) -> gwn_query_vec3<Real> {
-        gwn_query_vec3<Real> const cross = gwn_query_cross(gi, gj);
-        Real const cross_sq = gwn_query_squared_norm(cross);
-        if (cross_sq == Real(0))
-            return gwn_query_vec3<Real>(Real(0), Real(0), Real(0));
-
-        gwn_query_vec3<Real> const diff = gi - gj;
-        gwn_query_vec3<Real> const diff_hat = gi_hat - gj_hat;
-        Real const scalar = gwn_query_dot(diff, diff_hat) / cross_sq;
-        return scalar * cross;
-    };
-
-    gwn_query_vec3<Real> result = edge_term(ga, gb, ga_hat, gb_hat);
-    result += edge_term(gb, gc, gb_hat, gc_hat);
-    result += edge_term(gc, ga, gc_hat, ga_hat);
+    gwn_query_vec3<Real> result = gwn_gradient_solid_angle_edge_impl<false>(ga, gb);
+    result += gwn_gradient_solid_angle_edge_impl<false>(gb, gc);
+    result += gwn_gradient_solid_angle_edge_impl<false>(gc, ga);
 
     return result;
 }
@@ -70,12 +208,8 @@ template <gwn_real_type Real>
     gwn_bvh_triangle<Real> const &triangle, gwn_query_vec3<Real> const &query
 ) noexcept {
     gwn_query_vec3<Real> const a(triangle.v0_x, triangle.v0_y, triangle.v0_z);
-    gwn_query_vec3<Real> const b(
-        triangle.v0_x + triangle.e1_x, triangle.v0_y + triangle.e1_y, triangle.v0_z + triangle.e1_z
-    );
-    gwn_query_vec3<Real> const c(
-        triangle.v0_x + triangle.e2_x, triangle.v0_y + triangle.e2_y, triangle.v0_z + triangle.e2_z
-    );
+    gwn_query_vec3<Real> const b(triangle.v1_x, triangle.v1_y, triangle.v1_z);
+    gwn_query_vec3<Real> const c(triangle.v2_x, triangle.v2_y, triangle.v2_z);
     return gwn_signed_solid_angle_triangle_impl(a, b, c, query);
 }
 
@@ -86,12 +220,8 @@ gwn_bvh_triangle_winding_gradient_impl(
     gwn_bvh_triangle<Real> const &triangle, gwn_query_vec3<Real> const &query
 ) noexcept {
     gwn_query_vec3<Real> const a(triangle.v0_x, triangle.v0_y, triangle.v0_z);
-    gwn_query_vec3<Real> const b(
-        triangle.v0_x + triangle.e1_x, triangle.v0_y + triangle.e1_y, triangle.v0_z + triangle.e1_z
-    );
-    gwn_query_vec3<Real> const c(
-        triangle.v0_x + triangle.e2_x, triangle.v0_y + triangle.e2_y, triangle.v0_z + triangle.e2_z
-    );
+    gwn_query_vec3<Real> const b(triangle.v1_x, triangle.v1_y, triangle.v1_z);
+    gwn_query_vec3<Real> const c(triangle.v2_x, triangle.v2_y, triangle.v2_z);
     return {
         gwn_signed_solid_angle_triangle_impl(a, b, c, query),
         gwn_gradient_solid_angle_triangle_impl(a, b, c, query),

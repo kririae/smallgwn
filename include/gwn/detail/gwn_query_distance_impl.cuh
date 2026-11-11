@@ -21,15 +21,11 @@ template <gwn_real_type Real>
 [[nodiscard]] __device__ inline Real gwn_bvh_triangle_distance_squared_impl(
     gwn_bvh_triangle<Real> const &triangle, gwn_query_vec3<Real> const &query
 ) noexcept {
-    // Reconstruct vertices from the contiguous leaf record before entering the shared numerical
-    // kernel. Distance traversal therefore uses the same triangle definition as ray traversal.
+    // Load vertices from the contiguous leaf record before entering the shared numerical kernel.
+    // Distance traversal therefore uses the same triangle definition as ray traversal.
     gwn_query_vec3<Real> const v0(triangle.v0_x, triangle.v0_y, triangle.v0_z);
-    gwn_query_vec3<Real> const v1(
-        triangle.v0_x + triangle.e1_x, triangle.v0_y + triangle.e1_y, triangle.v0_z + triangle.e1_z
-    );
-    gwn_query_vec3<Real> const v2(
-        triangle.v0_x + triangle.e2_x, triangle.v0_y + triangle.e2_y, triangle.v0_z + triangle.e2_z
-    );
+    gwn_query_vec3<Real> const v1(triangle.v1_x, triangle.v1_y, triangle.v1_z);
+    gwn_query_vec3<Real> const v2(triangle.v2_x, triangle.v2_y, triangle.v2_z);
     return gwn_point_triangle_distance_squared_impl(query, v0, v1, v2);
 }
 
